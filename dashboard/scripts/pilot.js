@@ -6,6 +6,9 @@
 //   npm run pilot -- --project=olas --desk=online   the online desk, through the
 //                                                   CryptoResearch connector
 //   npm run pilot -- --project=olas --dry-run       say what would run, run nothing
+//   npm run pilot -- --pilot-all --desk=online      every pilot project: a zero-token
+//                                                   pre-poll first, then at most
+//                                                   --max-agents (2) claude -p sessions
 //   npm run pilot -- --project=olas --force-prosecution --owner-words="…"
 //                                                   a Prosecutor although the desk's
 //                                                   gate closed on the grade (Eric's
@@ -44,7 +47,7 @@ const MAX_STEPS = 4;
 const FORCE_WORDS = 'Eric (2026-10-25): when Claude\'s @6 grade is 50 or more, or its range reaches 55, the Prosecutor writes the trade plan although the desk\'s gate closed on the grade; the gate still sizes it.';
 
 function parse(argv) {
-  const out = { desk: 'local', dryRun: false, model: null, connector: 'mcp__claude_ai_CryptoResearch', timeoutMin: 60, forceProsecution: false, ownerWords: null };
+  const out = { desk: 'local', dryRun: false, model: null, connector: 'mcp__claude_ai_CryptoResearch', timeoutMin: 60, forceProsecution: false, ownerWords: null, pilotAll: false, maxAgents: 2, deskUrl: null };
   for (const a of argv) {
     const [k, ...rest] = a.replace(/^--/, '').split('=');
     const v = rest.join('=');
@@ -56,6 +59,9 @@ function parse(argv) {
     else if (k === 'model') out.model = v;
     else if (k === 'connector') out.connector = v;
     else if (k === 'timeout-min') out.timeoutMin = Number(v) || out.timeoutMin;
+    else if (k === 'pilot-all') out.pilotAll = true;
+    else if (k === 'max-agents') out.maxAgents = Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10 ? Number(v) : out.maxAgents;
+    else if (k === 'desk-url') out.deskUrl = v || null;
     else if (k === 'help') out.help = true;
   }
   return out;
@@ -129,26 +135,37 @@ const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused
 // A claim not yet bound is let go when the runner stops; a bound one (an
 // agent was dispatched and its outcome is unknown) is left to expire, so the
 // next runner reconciles instead of dispatching it again.
-function runLocal(o, { call = cli } = {}) {
+function runLocal(o, { call = cli, agent = claude } = {}) {
   const h = { token: null, bound: false };
   try {
-    return localSteps(o, call, h);
+    return localSteps(o, call, h, agent);
   } finally {
     if (h.token && !h.bound) call(['tickets', 'release', o.project, '--token', h.token, '--outcome', 'stopped']);
   }
 }
 
-function localSteps(o, cli, h) {
+// o.budget ({ left }), from --pilot-all: the claude -p sessions this run may
+// still start. A step that would start one when none is left is not claimed.
+// Returns { stop, words } when a claim or the budget stopped it.
+function localSteps(o, cli, h, agent = claude) {
+  const run = (prompt, opts) => {
+    if (o.budget) o.budget.left -= 1;
+    return agent(prompt, opts);
+  };
   for (let i = 0; i < MAX_STEPS; i++) {
     const q = cli(['tickets', 'queue', o.project]);
     let s = q.steps[0];
     if (!s) throw new Error(`No project ${o.project} on this desk.`);
     say(`[${i + 1}] ${s.name}: ${s.step} — ${s.why}`);
     let token = null;
+    if (!o.dryRun && o.budget && o.budget.left <= 0 && ['research', 'ticket', 'ticket_failed'].includes(s.step)) {
+      say('    Not dispatched: this run\'s agent cap is reached; the next run takes it.');
+      return { stop: 'cap', words: 'agent cap reached' };
+    }
     if (!o.dryRun && ['research', 'ticket', 'ticket_failed', 'gate_closed'].includes(s.step)) {
       const c = cli(['tickets', 'claim', o.project, '--owner', `pilot ${process.pid}`, ...(s.force ? ['--force-prosecution'] : [])]);
-      if (CLAIM_STOPS.has(c.status)) return say(`    Not dispatched: ${c.words}`);
-      if (c.status !== 'claimed_now') return say(`    Not dispatched: ${c.words || c.status}`);
+      if (CLAIM_STOPS.has(c.status)) { say(`    Not dispatched: ${c.words}`); return { stop: c.status, words: c.words || null }; }
+      if (c.status !== 'claimed_now') { say(`    Not dispatched: ${c.words || c.status}`); return { stop: c.status || 'unknown', words: c.words || null }; }
       token = c.token;
       Object.assign(h, { token, bound: false });
     }
@@ -170,7 +187,7 @@ function localSteps(o, cli, h) {
       bind(['--run', runId]);
       const prompt = cli(['research', 'prompt', o.project, runId], { text: true });
       say(`    Agent 1: claude -p on the frozen research prompt (${prompt.length} characters)…`);
-      const report = claude(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
+      const report = run(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
       const f = scratch('researcher', 'agent1-report.md', report);
       const saved = cli(['import-text', '--provider', 'claude', '--project', o.project, '--text-file', f, '--run', runId]);
       say(`    saved: ${saved.status}${saved.report_id ? ` ${saved.report_id}` : ''}${saved.message ? ` — ${saved.message}` : ''}`);
@@ -194,7 +211,7 @@ function localSteps(o, cli, h) {
       bind(['--ticket', t.ticket_id]);
       const prompt = cli(['tickets', 'prompt', o.project, t.ticket_id], { text: true });
       say(`    Agent 2: claude -p on the frozen Prosecutor prompt ${t.ticket_id} (${prompt.length} characters)…`);
-      const ticket = claude(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
+      const ticket = run(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
       const f = scratch('prosecutor', 'agent2-ticket.md', ticket);
       const saved = cli(['tickets', 'import', o.project, t.ticket_id, '--text-file', f]);
       say(`    saved: ${saved.status} ${saved.receipt_id || ''} — ${saved.message}`);
@@ -275,7 +292,9 @@ function runOnline(o, { run = claude, out = say } = {}) {
     return [];
   }
   const sessions = [];
-  let step = null;
+  // --pilot-all hands in the step its pre-poll read, so the first session is
+  // the role that step needs (no researcher session spent on a ticket step).
+  let step = o.startStep && STEPS.includes(o.startStep) ? o.startStep : null;
   let forced = false;
   for (let i = 0; i < MAX_STEPS; i++) {
     // The pause, as locally: the runner stops before its next session.
@@ -288,10 +307,16 @@ function runOnline(o, { run = claude, out = say } = {}) {
       out(step === 'pm_review' ? 'Done: the ticket waits for your PM review (inspector > PM decision).' : `Nothing for the agents to do (${step}).`);
       return sessions;
     }
+    if (o.budget && o.budget.left <= 0) {
+      out('Not dispatched: this run\'s agent cap is reached; the next run takes it.');
+      sessions.stop = 'cap';
+      return sessions;
+    }
     if (role === 'prosecutor' && o.forceProsecution && ['gate_closed', 'pm_review'].includes(step)) forced = true;
     const prompt = roleInstruction(role, o);
     const tools = roleTools(role, o);
     out(`[${i + 1}] ${role}: a fresh claude -p session through ${o.connector}${step ? ` (step ${step})` : ''}…`);
+    if (o.budget) o.budget.left -= 1;
     const answer = run(prompt, { tools, model: o.model, timeoutMin: o.timeoutMin });
     sessions.push({ role, prompt, tools });
     out(answer);
@@ -304,10 +329,183 @@ function runOnline(o, { run = claude, out = say } = {}) {
   return sessions;
 }
 
+// ---------------------------------------------------------------------------
+// --pilot-all (autonomous paper playbook, Stage 11): every pilot project, one
+// instance at a time. A zero-token pre-poll first (locally tickets queue;
+// online GET /api/pilot/queue with the poll token), then, unless paused, the
+// steps closest to a trade first (ticket, ticket_failed, gate_closed, then
+// research), each through the per-project path above and its claim, at most
+// --max-agents claude -p sessions in the run. A project another runner holds,
+// whose correction is used, or whose earlier dispatch expired with no known
+// outcome spawns nothing; the last is listed for Eric and exits 3, and is
+// never released here. One JSON line per run goes to
+// %USERPROFILE%\.cryptoresearch\pilot-all.jsonl, never into the desk's records.
+// Exit codes: 0 done or nothing to do; 3 needs Eric; 1 an error.
+const ALL_ORDER = Object.freeze(['ticket', 'ticket_failed', 'gate_closed', 'research']);
+const CLAIM_SKIP = new Set(['claimed', 'reconcile', 'correction_limit']);
+const LOCK_STALE_MS = 3 * 3600000;
+const DEFAULT_DESK_URL = 'https://cryptoresearch.onrender.com';
+const RECONCILE_WORDS = 'An earlier dispatch expired with no known outcome (often after the PC slept). Check the desk, then release it: node dashboard/cli.js tickets release <project> --reconciled.';
+const homeDir = () => path.join(os.homedir(), '.cryptoresearch');
+const lockPath = () => path.join(os.tmpdir(), 'cr-pilot', 'pilot-all.lock');
+const pilotLogPath = () => path.join(homeDir(), 'pilot-all.jsonl');
+
+// The run's lock: created exclusively. One older than 3 hours (or unreadable)
+// is reported and taken over; any other is another run in progress.
+function takeLock(file, { now = Date.now(), pid = process.pid } = {}) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const rec = JSON.stringify({ pid, started_at: new Date(now).toISOString() });
+  try {
+    fs.writeFileSync(file, rec, { flag: 'wx' });
+    return { ok: true };
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+  let cur = null;
+  try { cur = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { cur = null; }
+  const at = cur ? Date.parse(cur.started_at) : NaN;
+  if (Number.isFinite(at) && now - at < LOCK_STALE_MS) return { ok: false, held: cur };
+  fs.writeFileSync(file, rec);
+  return { ok: true, took_over: cur || { unreadable: true } };
+}
+function dropLock(file, pid = process.pid) {
+  try {
+    const cur = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (cur && cur.pid === pid) fs.unlinkSync(file);
+  } catch (_) { /* gone already */ }
+}
+
+// The poll token from %USERPROFILE%\.cryptoresearch\secrets.json
+// (pilot_poll_token). Never printed or logged.
+function readPollToken(file = path.join(homeDir(), 'secrets.json')) {
+  let s = null;
+  try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw new Error(`The poll token could not be read from ${file} (${err.code || 'unreadable'}).`); }
+  const t = s && typeof s.pilot_poll_token === 'string' ? s.pilot_poll_token.trim() : '';
+  if (t.length < 16) throw new Error(`${file} holds no pilot_poll_token.`);
+  return t;
+}
+
+function deskUrlOf(o, env = process.env) {
+  const raw = o.deskUrl || env.CR_DESK_URL || DEFAULT_DESK_URL;
+  let u;
+  try { u = new URL(raw); } catch (_) { throw new Error(`"${raw}" is not the desk's address.`); }
+  if (u.protocol !== 'https:' || (u.pathname !== '/' && u.pathname !== '') || u.search) throw new Error('The desk address is its https origin only, for example https://your-desk.onrender.com');
+  return u.origin;
+}
+
+// The pre-poll, zero tokens: { paused, steps: [{ project_id, step, claim }] }.
+async function pollOnline(o, { fetchImpl = globalThis.fetch, token, env = process.env } = {}) {
+  const res = await fetchImpl(`${deskUrlOf(o, env)}/api/pilot/queue`, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
+  if (res.status !== 200) throw new Error(`The online desk's pilot poll answered ${res.status}${res.status === 404 ? ' (CR_PILOT_POLL_TOKEN_SHA256 is not set on the desk)' : res.status === 401 ? ' (the poll token was refused)' : ''}.`);
+  const body = await res.json();
+  if (!body || body.format !== 'cr-pilot-poll@1' || !Array.isArray(body.steps)) throw new Error('The online desk\'s pilot poll did not answer cr-pilot-poll@1.');
+  return { paused: body.paused === true, steps: body.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })) };
+}
+function pollLocal(call) {
+  const q = call(['tickets', 'queue']);
+  const claims = (q && q.claims) || {};
+  return { paused: q.paused === true, steps: (q.steps || []).map((s) => ({ project_id: s.project_id, step: s.step, claim: claims[s.project_id] || null })) };
+}
+
+async function runAll(o, {
+  call = cli, agent = claude, fetchImpl = globalThis.fetch, token = null, env = process.env,
+  lockFile = lockPath(), logFile = pilotLogPath(), out = say, now = () => Date.now(), pid = process.pid,
+  runLocalImpl = runLocal, runOnlineImpl = runOnline,
+} = {}) {
+  const log = { format: 'cr-pilot-all@1', started_at: new Date(now()).toISOString(), desk: o.desk, max_agents: o.maxAgents, dry_run: Boolean(o.dryRun), paused: null, polled: [], dispatches: [], needs_eric: [], error: null, exit: null };
+  const finish = (code) => {
+    log.exit = code;
+    log.finished_at = new Date(now()).toISOString();
+    try {
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      fs.appendFileSync(logFile, `${JSON.stringify(log)}\n`);
+    } catch (err) {
+      out(`The run's log could not be written (${err.code || err.message}).`);
+    }
+    return code;
+  };
+  if (!['local', 'online'].includes(o.desk)) { log.error = '--desk is local or online.'; out(`pilot-all: ${log.error}`); return finish(1); }
+  const lock = takeLock(lockFile, { now: now(), pid });
+  if (!lock.ok) {
+    out(`Another run is in progress (pid ${lock.held.pid}, since ${lock.held.started_at}); nothing is dispatched.`);
+    log.skipped = 'locked';
+    return finish(0);
+  }
+  if (lock.took_over) out(`A lock ${lock.took_over.unreadable ? 'that did not read' : `from pid ${lock.took_over.pid} since ${lock.took_over.started_at}`} was older than 3 hours; taken over.`);
+  try {
+    let tok = null;
+    const poll = async () => {
+      if (o.desk === 'local') return pollLocal(call);
+      if (!tok) tok = token || readPollToken();
+      return pollOnline(o, { fetchImpl, token: tok, env });
+    };
+    const q = await poll();
+    log.paused = q.paused;
+    log.polled = q.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim }));
+    out(`Pre-poll (${o.desk}): ${q.steps.length} pilot project${q.steps.length === 1 ? '' : 's'}${q.steps.length ? `: ${q.steps.map((s) => `${s.project_id} ${s.step}${s.claim ? ` (${s.claim})` : ''}`).join(', ')}` : ''}.`);
+    if (q.paused) {
+      out('Automation is paused on the desk: no agent is dispatched until you resume it.');
+      return finish(0);
+    }
+    for (const s of q.steps) if (s.claim === 'reconcile') log.needs_eric.push({ project_id: s.project_id, step: s.step, words: RECONCILE_WORDS });
+    const todo = q.steps.filter((s) => ALL_ORDER.includes(s.step) && !CLAIM_SKIP.has(s.claim)).sort((a, b) => ALL_ORDER.indexOf(a.step) - ALL_ORDER.indexOf(b.step));
+    if (!todo.length) out('Nothing for the agents to do.');
+    const budget = { left: o.maxAgents };
+    for (const s of todo) {
+      if (o.dryRun) {
+        out(`Would dispatch ${s.project_id}: ${s.step}.`);
+        log.dispatches.push({ project_id: s.project_id, step: s.step, outcome: 'dry_run' });
+        continue;
+      }
+      if (budget.left <= 0 && s.step !== 'gate_closed') {
+        out(`${s.project_id} (${s.step}) waits for the next run: the ${o.maxAgents}-agent cap is reached.`);
+        log.dispatches.push({ project_id: s.project_id, step: s.step, outcome: 'cap' });
+        continue;
+      }
+      out(`== ${s.project_id}: ${s.step}`);
+      const before = budget.left;
+      const row = { project_id: s.project_id, step: s.step, outcome: 'done', agents: 0, stop: null, error: null, next_step: null };
+      try {
+        const po = { ...o, project: s.project_id, budget, startStep: s.step };
+        const r = o.desk === 'online' ? await runOnlineImpl(po, { run: agent, out }) : runLocalImpl(po, { call, agent });
+        if (r && r.stop) row.stop = r.stop;
+      } catch (err) {
+        row.outcome = 'error';
+        row.error = String(err && err.message || err).slice(0, 300);
+        out(`    ${s.project_id}: ${row.error}`);
+      }
+      row.agents = before - budget.left;
+      if (row.stop) row.outcome = row.stop === 'cap' ? 'cap' : 'not_dispatched';
+      if (row.stop === 'reconcile' && !log.needs_eric.some((x) => x.project_id === s.project_id)) log.needs_eric.push({ project_id: s.project_id, step: s.step, words: RECONCILE_WORDS });
+      // That project again, at zero tokens.
+      try {
+        const again = await poll();
+        const mine = again.steps.find((x) => x.project_id === s.project_id);
+        row.next_step = mine ? mine.step : null;
+      } catch (err) {
+        row.next_step = null;
+        row.repoll_error = String(err && err.message || err).slice(0, 200);
+      }
+      log.dispatches.push(row);
+    }
+    for (const n of log.needs_eric) out(`Needs Eric: ${n.project_id} (${n.step}). ${n.words}`);
+    const code = log.dispatches.some((d) => d.outcome === 'error') ? 1 : log.needs_eric.length ? 3 : 0;
+    return finish(code);
+  } catch (err) {
+    log.error = String(err && err.message || err).slice(0, 300);
+    out(`pilot-all: ${log.error}`);
+    return finish(1);
+  } finally {
+    dropLock(lockFile, pid);
+  }
+}
+
 function main() {
   const o = parse(process.argv.slice(2));
+  if (o.pilotAll) return runAll(o).then((code) => { process.exitCode = code; });
   if (o.help || !o.project) {
     say('npm run pilot -- --project=<id> [--desk=local|online] [--dry-run] [--force-prosecution [--owner-words="…"]] [--model=<id>] [--timeout-min=60] [--connector=mcp__claude_ai_CryptoResearch]');
+    say('npm run pilot -- --pilot-all [--desk=local|online] [--max-agents=2] [--dry-run] [--timeout-min=60] [--desk-url=https://…]');
     process.exitCode = o.help ? 0 : 2;
     return;
   }
@@ -317,13 +515,11 @@ function main() {
   else throw new Error('--desk is local or online.');
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, runLocal, ROLE_TOOLS, FORCE_WORDS, PAUSED_WORDS };
+module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, runLocal, runAll, takeLock, readPollToken, deskUrlOf, pollOnline, pollLocal, ROLE_TOOLS, FORCE_WORDS, PAUSED_WORDS, ALL_ORDER, RECONCILE_WORDS };
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (err) {
+  Promise.resolve().then(main).catch((err) => {
     process.stderr.write(`pilot: ${err.message}\n`);
     process.exitCode = 1;
-  }
+  });
 }

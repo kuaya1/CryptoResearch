@@ -144,6 +144,9 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
   const scout = hosted ? require('./core/scout').makeScoutRoute(ws, { env: process.env, log }) : null;
   // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
   const offsite = hosted ? require('./core/offsite').makeOffsiteRoute(ws, { env: process.env, log }) : null;
+  // The pilot runner's zero-token pre-poll (core/pilot-poll.js;
+  // CR_PILOT_POLL_TOKEN_SHA256, read per request; 404 without it).
+  const pilotPoll = require('./core/pilot-poll').makePilotPollRoute(ws, { env: process.env, log });
 
   const listener = async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -170,6 +173,9 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
       const url = new URL(req.url, origin);
       const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
       state.stats.requests[bucket] = (state.stats.requests[bucket] || 0) + 1;
+      // The pilot's pre-poll: its own bearer, before and apart from the
+      // sign-in and the session token. Read-only names and IDs.
+      if (url.pathname === '/api/pilot/queue') return pilotPoll(req, res);
       if (oauth) {
         // The connector has its own sign-in (OAuth) and never uses the
         // dashboard's session cookie.

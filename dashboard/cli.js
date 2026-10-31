@@ -932,7 +932,15 @@ async function run(argv) {
         const wrote = !r.dry_run && (r.counts.opted_in || r.counts.gates_made || r.counts.quoted);
         return wrote ? { ...r, ...(await afterWrite(ws, null)) } : r;
       }
-      if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
+      if (sub === 'queue') {
+        // The pause and each step's claim state ride along for the pilot-all
+        // pre-poll (scripts/pilot.js), as the online poll gives them.
+        const steps = tk.pilotQueue(ws, { project: pid || null });
+        const PC = require('./core/pilot-claims');
+        const claims = {};
+        for (const s of steps) { const c = PC.peek(ws, s.project_id, s); if (c) claims[s.project_id] = c; }
+        return { steps, pending: tk.pendingFor(ws), paused: require('./core/workspace').automationPaused(ws), claims };
+      }
       // The pilot runner's execution claim (cr-pilot-claim@1, stage 5.4).
       if (sub === 'claim') return require('./core/pilot-claims').claim(ws, need(pid, 'tickets claim <project> [--expect KEY] [--owner NAME]'), { owner: one(flags.owner) || actor, expect: one(flags.expect) || null, force: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
       if (sub === 'bind') return require('./core/pilot-claims').bind(ws, need(pid, 'tickets bind <project> --token T [--run R] [--ticket K]'), need(one(flags.token), '--token'), { run_id: one(flags.run) || null, ticket_id: one(flags.ticket) || null });
