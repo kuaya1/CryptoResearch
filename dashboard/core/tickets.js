@@ -2269,14 +2269,23 @@ function summary(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
 // ---------------------------------------------------------------------------
 // The autonomous pilot: Eric's opt-in per project, and the next step of each
 
+// Turning the pilot on also approves the project's primary exit-quote target
+// (forensics.js approvePrimaryExitQuote), after the enrollment is committed:
+// its outcome is `exit_quote`, and a failure there never undoes the enrollment.
 function setPilot(ws, pid, on, { by = null } = {}) {
   require('./projects').getProject(ws, pid);
-  return runOp(ws, { type: 'ticket_pilot', summary: `${on ? 'Start' : 'Stop'} the autonomous pilot on ${pid}` }, (op) => {
+  const out = runOp(ws, { type: 'ticket_pilot', summary: `${on ? 'Start' : 'Stop'} the autonomous pilot on ${pid}` }, (op) => {
     const cur = op.readJson(profileRel(pid), null) || readProfile(ws, pid);
     if (Boolean(cur.pilot) === Boolean(on)) return { noop: true, pilot: Boolean(on) };
     op.writeJson(profileRel(pid), { ...cur, pilot: Boolean(on), pilot_set_at: new Date().toISOString(), pilot_set_by: by || ws.actor || null });
     return { pilot: Boolean(on) };
   });
+  const turnedOn = Boolean(on) && !(out.result && out.result.noop) && !out.noop;
+  if (turnedOn) {
+    try { out.exit_quote = require('./forensics').approvePrimaryExitQuote(ws, pid, { by: 'pilot enrollment' }); }
+    catch (err) { out.exit_quote = { project_id: pid, status: 'failed', reason: String((err && err.message) || err).slice(0, 200) }; }
+  }
+  return out;
 }
 
 // What the chain needs next on one project: Agent 1 (Claude research), then

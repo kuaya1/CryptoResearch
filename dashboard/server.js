@@ -1247,7 +1247,15 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (body && body.dry_run === true) return plan;
     return after(tickets.autoPilotSync(ws, { min }));
   });
-  route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => after(tickets.setPilot(ws, pid(m[1]), body.on === true, { by: 'dashboard' })));
+  // Turning the pilot on approves the project's primary exit-quote target
+  // (tickets.js setPilot); the first quote is asked for right away, in the
+  // background, under the monitor's own lease, gates and budget.
+  const firstQuotesNow = () => setTimeout(() => jobs.runJob(ws, 'forensics', { trigger: 'dashboard', onlyDue: true }).then(() => rebuild(['api'])).catch(() => {}), 300);
+  route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => {
+    const out = tickets.setPilot(ws, pid(m[1]), Boolean(body && body.on === true), { by: 'dashboard' });
+    if (out.exit_quote && out.exit_quote.status === 'approved') firstQuotesNow();
+    return after(out);
+  });
   // Exit quotes on every project in one click (forensics.js
   // approveAllExitQuotes): the plan first (a read), then Eric's approval with
   // the count he saw (`expect`); more to add than shown is a 409. The first
@@ -1263,7 +1271,16 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     const n = forensics.exitQuotePlan(ws).add.length;
     if (n > expect) throw new HttpError(409, `${n} projects would get exit quotes now, not ${expect} as shown. Nothing was approved; look again and approve.`);
     const out = forensics.approveAllExitQuotes(ws, { by: 'dashboard' });
-    if (out.added.length) setTimeout(() => jobs.runJob(ws, 'forensics', { trigger: 'dashboard', onlyDue: true }).then(() => rebuild(['api'])).catch(() => {}), 300);
+    if (out.added.length) firstQuotesNow();
+    return after({ status: out.added.length ? 'saved' : 'unchanged', ...out });
+  });
+  // The standing exit-quote policy at once (forensics.js autoExitQuotes):
+  // pilot projects only, within the monitor's monthly budget, nothing while
+  // paused or while automation.exit_quotes_auto is off. Never the whole plan
+  // (approveAllExitQuotes). The arm-desk console script calls it.
+  route('POST', '/api/forensics/exit-quotes/auto', () => {
+    const out = forensics.autoExitQuotes(ws);
+    if (out.added.length) firstQuotesNow();
     return after({ status: out.added.length ? 'saved' : 'unchanged', ...out });
   });
   // Eric's network probe from the signed-in desk, no shell needed

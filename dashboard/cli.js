@@ -960,7 +960,7 @@ async function run(argv) {
       }
       if (sub === 'pilot') {
         const r = tk.setPilot(ws, need(pid, 'tickets pilot <project> --on|--off'), !flags.off, { by: actor });
-        return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
+        return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(r.exit_quote ? { exit_quote: r.exit_quote } : {}), ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
       throw Object.assign(new Error('tickets view|queue|claim|bind|release|reconcile|exit-matrix|candidates|digest|batch-gate|decide-gates|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
