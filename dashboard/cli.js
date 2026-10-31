@@ -100,9 +100,12 @@ Contract state (read-only chain reads at a finalized block; nothing is read whil
   contracts observe <id> [--dry-run]     observe each contract now; --dry-run prints the planned reads and compute units, sends nothing
   contracts probe [<chain_id>]           what a network answers (finalized tag, block-hash pinning), recorded; none named: every unprobed chain your projects need
   contracts init-defaults [--dry-run]    add the published Uniswap V2/V3 factories, Safe singletons and network-fee ceilings; yours are kept
-  arm-desk [--desk=online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...]
-                                         the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules);
-                                         --desk=online prints what to paste into the signed-in desk's browser console
+  arm-desk [--desk=online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on]
+           [--mandate-days=N | --mandate-off] [--print-schedule]
+                                         the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules,
+                                         the floor for a new entry at 50); --contracts-on needs both caps; --mandate-days=N (1-30) turns the
+                                         paper mandate on; --desk=online prints what to paste into the signed-in desk's browser console;
+                                         --print-schedule prints the Task Scheduler line for npm run pilot -- --pilot-all (never runs it)
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
@@ -1108,18 +1111,31 @@ async function run(argv) {
       const A = require('./core/arm-desk');
       const S = require('./server');
       const desk = one(flags.desk) || 'local';
-      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...]'), { code: 'USAGE' });
+      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on] [--mandate-days=N | --mandate-off] [--print-schedule]'), { code: 'USAGE' });
+      if (flags.print_schedule) return { _text: `${A.scheduleText(path.join(__dirname, '..'))}\n` };
       const whole = (v, name) => {
         if (v === undefined) return undefined;
         if (!/^\d+$/.test(String(v))) throw Object.assign(new Error(`--${name} takes a whole number`), { code: 'USAGE' });
         return Number(v);
       };
       const allow = list(flags.allow).flatMap((s) => String(s).split(',')).map((s) => s.trim()).filter(Boolean);
-      const patch = A.armPatch({ dailyCu: whole(one(flags.daily_cu), 'daily-cu'), monthlyCu: whole(one(flags.monthly_cu), 'monthly-cu'), allow });
+      const life = whole(one(flags.intent_life), 'intent-life');
+      const days = whole(one(flags.mandate_days), 'mandate-days');
+      const patch = A.armPatch({
+        dailyCu: whole(one(flags.daily_cu), 'daily-cu'),
+        monthlyCu: whole(one(flags.monthly_cu), 'monthly-cu'),
+        allow,
+        ...(life !== undefined ? { intentLife: life } : {}),
+        contractsOn: Boolean(flags.contracts_on),
+        mandateDays: days,
+        mandateOff: Boolean(flags.mandate_off),
+        settings: desk === 'local' ? ws.settings : null,
+      });
       const checked = S.validateSettingsPatch(patch, ws);
       if (desk === 'online') {
-        const script = A.onlineScript(patch);
-        return process.argv.includes('--json') ? { desk: 'online', valid: true, patch, script } : { _text: `${script}\n` };
+        const left = A.leftOpen(patch, null);
+        const script = A.onlineScript(patch, { left });
+        return process.argv.includes('--json') ? { desk: 'online', valid: true, patch, script, left_for_you: left } : { _text: `${script}\n` };
       }
       const presets = require('./core/contract-presets').plan(ws.settings);
       const left = A.leftOpen(patch, ws.settings);

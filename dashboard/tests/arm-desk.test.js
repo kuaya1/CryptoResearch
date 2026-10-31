@@ -37,7 +37,9 @@ test('arm-desk --dry-run validates cleanly against validateSettingsPatch and wri
   assert.deepEqual([out.patch.leads.min_market_cap_usd, out.patch.leads.min_volume_24h_usd, out.patch.leads.max_sell_tax_pct, out.patch.leads.eligibility_hours], [5000000, 250000, 5, 48]);
   assert.equal(out.patch.automation.exit_quotes_auto, true);
   assert.deepEqual(out.patch.trader.book, { cash_usd: '25000', fee_rate: '0.001' });
-  assert.deepEqual(out.patch.trader.rules, { stop_min_pct: '0.03', stop_min_atr: '0.5', notional_max_pct: '0.20', max_validity_minutes: 240 });
+  assert.deepEqual(out.patch.trader.rules, { stop_min_pct: '0.03', stop_min_atr: '0.5', notional_max_pct: '0.20', max_validity_minutes: 1440 });
+  assert.deepEqual(out.patch.tickets, { sizing: { min_grade_new_entry: 50 } });
+  assert.equal(out.patch.automation.autonomous_paper_loop, undefined, 'the mandate untouched without a flag');
   assert.equal(out.patch.contracts, undefined, 'contracts untouched without caps');
   assert.ok(out.left_for_you.some((s) => /allowlist is unset/.test(s)));
   assert.ok(out.left_for_you.some((s) => /caps are unset/.test(s)));
@@ -160,4 +162,75 @@ test('POST /api/contracts/init-defaults: dry_run writes nothing, then the defaul
   assert.equal(saved.json.status, 'saved');
   assert.equal(JSON.parse(settingsFile()).contracts.pool_factories.length, 8);
   assert.equal((await ask('/api/contracts/init-defaults', { 'x-cr-token': token }, {})).json.status, 'unchanged');
+});
+
+// --- Autonomous paper playbook, Stage 12.
+
+test('--intent-life sets the life of an intent (1 to 10,080 minutes); --contracts-on needs both caps', async (t) => {
+  const w = temp(t);
+  const before = hashTree(w.root);
+  const life = await run(['arm-desk', '--dry-run', '--intent-life=4320', '--workspace', w.root]);
+  assert.equal(life.patch.trader.rules.max_validity_minutes, 4320);
+  await assert.rejects(run(['arm-desk', '--dry-run', '--intent-life=20000', '--workspace', w.root]), (e) => e.code === 'USAGE');
+  await assert.rejects(run(['arm-desk', '--dry-run', '--intent-life=0', '--workspace', w.root]), (e) => e.code === 'USAGE');
+  await assert.rejects(run(['arm-desk', '--dry-run', '--contracts-on', '--workspace', w.root]), (e) => e.code === 'REFUSED' && /both compute-unit caps/.test(e.message));
+  await assert.rejects(run(['arm-desk', '--dry-run', '--contracts-on', '--daily-cu=5000', '--workspace', w.root]), (e) => e.code === 'REFUSED');
+  const on = await run(['arm-desk', '--dry-run', '--contracts-on', '--daily-cu=5000', '--monthly-cu=100000', '--workspace', w.root]);
+  assert.deepEqual(on.patch.contracts, { daily_cu_cap: 5000, monthly_cu_cap: 100000, enabled: true });
+  assert.ok(on.left_for_you.some((s) => /ALCHEMY_API_KEY in Render > Environment/.test(s)));
+  assert.deepEqual(hashTree(w.root), before, 'nothing written');
+  // Caps already saved locally count.
+  const w2 = temp(t, { contracts: { daily_cu_cap: 5000, monthly_cu_cap: 100000 } });
+  assert.equal((await run(['arm-desk', '--dry-run', '--contracts-on', '--workspace', w2.root])).patch.contracts.enabled, true);
+});
+
+test('--mandate-days turns the paper mandate on for N days (1 to 30); --mandate-off turns it off; not both', async (t) => {
+  const w = temp(t);
+  const t0 = Date.now();
+  const on = await run(['arm-desk', '--dry-run', '--mandate-days=7', '--workspace', w.root]);
+  assert.equal(on.patch.automation.autonomous_paper_loop, true);
+  const ahead = Date.parse(on.patch.automation.mandate.expires_at) - t0;
+  assert.ok(ahead > 6.99 * 86400000 && ahead <= 7 * 86400000 + 60000, String(ahead));
+  assert.ok(on.left_for_you.some((s) => /paper mandate is on until/.test(s)));
+  await assert.rejects(run(['arm-desk', '--dry-run', '--mandate-days=31', '--workspace', w.root]), (e) => e.code === 'USAGE');
+  await assert.rejects(run(['arm-desk', '--dry-run', '--mandate-days=0', '--workspace', w.root]), (e) => e.code === 'USAGE');
+  await assert.rejects(run(['arm-desk', '--dry-run', '--mandate-days=7', '--mandate-off', '--workspace', w.root]), (e) => e.code === 'USAGE');
+  const off = await run(['arm-desk', '--dry-run', '--mandate-off', '--workspace', w.root]);
+  assert.equal(off.patch.automation.autonomous_paper_loop, false);
+  assert.ok(off.left_for_you.some((s) => /paper mandate is off/.test(s)));
+  // Written locally, the mandate reads on.
+  await run(['arm-desk', '--mandate-days=7', '--workspace', w.root]);
+  const T = require('../core/tickets');
+  assert.equal(T.mandateOf(reopen(w)).on, true);
+  assert.equal(reopen(w).settings.tickets.sizing.min_grade_new_entry, 50);
+});
+
+test('--desk=online with the flags: the settings, then the exit-quote targets, then the contract defaults; what is left as comments', async (t) => {
+  const w = temp(t);
+  const before = hashTree(w.root);
+  const out = await run(['arm-desk', '--desk=online', '--allow=NMR/USDC', '--daily-cu=5000', '--monthly-cu=100000', '--contracts-on', '--mandate-days=7', '--intent-life=4320', '--workspace', w.root]);
+  const text = out._text;
+  const body = JSON.parse(text.match(/post\('\/api\/settings', (\{.*\})\)\);/)[1]);
+  validateSettingsPatch(body, w.ws);
+  assert.deepEqual(body.trader.rules.allowlist, ['NMR/USDC']);
+  assert.equal(body.trader.rules.max_validity_minutes, 4320);
+  assert.deepEqual(body.contracts, { daily_cu_cap: 5000, monthly_cu_cap: 100000, enabled: true });
+  assert.equal(body.automation.autonomous_paper_loop, true);
+  assert.deepEqual(body.tickets, { sizing: { min_grade_new_entry: 50 } });
+  const at = (p) => text.indexOf(p);
+  assert.ok(at("post('/api/settings'") < at("post('/api/forensics/exit-quotes/auto', {})") && at("post('/api/forensics/exit-quotes/auto', {})") < at("post('/api/contracts/init-defaults', {})"));
+  assert.match(text, /^\/\/ Left for you: .*CR_PILOT_POLL_TOKEN_SHA256/m);
+  assert.doesNotMatch(text, /DESK_INGEST_KEY|XAI_API_KEY|passphrase|pilot_poll_token":/i);
+  // The online desk's caps are not known here: --contracts-on needs them named.
+  await assert.rejects(run(['arm-desk', '--desk=online', '--contracts-on', '--workspace', w.root]), (e) => e.code === 'REFUSED');
+  assert.deepEqual(hashTree(w.root), before, 'nothing written');
+});
+
+test('--print-schedule prints the schtasks line for pilot-all and runs nothing', async (t) => {
+  const w = temp(t);
+  const before = hashTree(w.root);
+  const out = await run(['arm-desk', '--print-schedule', '--workspace', w.root]);
+  assert.match(out._text, /^schtasks \/Create \/TN "CryptoResearch pilot-all" \/SC MINUTE \/MO 30 \/IT \/TR "cmd\.exe \/c cd \/d .* && npm run pilot -- --pilot-all --desk=online --max-agents=2" \/F$/m);
+  assert.match(out._text, /Nothing was run/);
+  assert.deepEqual(hashTree(w.root), before, 'nothing written');
 });
