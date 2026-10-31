@@ -162,6 +162,10 @@ function validateSettingsPatch(patch, ws = null) {
     out.automation = {};
     if (a.paused !== undefined) out.automation.paused = a.paused === true;
     if (a.exit_quotes_auto !== undefined) out.automation.exit_quotes_auto = a.exit_quotes_auto === true;
+    if (a.pilot_daily_sessions !== undefined) {
+      if (!Number.isInteger(a.pilot_daily_sessions) || a.pilot_daily_sessions < 0 || a.pilot_daily_sessions > 50) throw new OpError('INVALID', 'automation.pilot_daily_sessions must be a whole number from 0 to 50.');
+      out.automation.pilot_daily_sessions = a.pilot_daily_sessions;
+    }
     // The paper mandate (core/tickets.js mandateOf reads it with the same
     // bounds). It always expires: on needs a future expires_at at most
     // MANDATE_MAX_DAYS ahead, this patch's or the one saved.
@@ -492,7 +496,14 @@ function applySettings(ws, body, summary = 'Update dashboard settings') {
   const patch = validateSettingsPatch(body || {}, ws);
   const out = runOp(ws, { type: 'update_settings', summary }, (op) => {
     const cur = op.readJson('config/settings.json', { schema_version: 1 });
-    op.writeJson('config/settings.json', mergeDeep(cur, patch));
+    const merged = mergeDeep(cur, patch);
+    // The paper mandate's authority (core/mandate-authority.js): a write that
+    // arms it records a new generation; one that turns it off or pauses
+    // automation revokes the generation in force. A client never sends it.
+    const au = require('./core/mandate-authority').authorityNext(cur, patch, merged, { now: Date.now(), actor: ws.actor || null });
+    if (au) merged.automation = { ...(merged.automation || {}), mandate: { ...((merged.automation || {}).mandate || {}), authority: au } };
+    op.writeJson('config/settings.json', merged);
+    return { mandate_authority: au };
   });
   ws.reloadSettings();
   return { patch, out };
@@ -1251,6 +1262,22 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // (tickets.js setPilot); the first quote is asked for right away, in the
   // background, under the monitor's own lease, gates and budget.
   const firstQuotesNow = () => setTimeout(() => jobs.runJob(ws, 'forensics', { trigger: 'dashboard', onlyDue: true }).then(() => rebuild(['api'])).catch(() => {}), 300);
+  // Eric's human latch on the paper mandate (mandate-authority.js,
+  // cr.autonomy.v1): stop holds the project's automatic grants and openings
+  // until he rearms it; rearm clears the interventions recorded so far.
+  route('POST', '/api/projects/([^/]+)/autonomy', (m, req, res, body) => {
+    const action = body && typeof body.action === 'string' ? body.action : null;
+    if (!['stop', 'rearm'].includes(action)) throw new HttpError(400, 'action is stop or rearm.');
+    const request_id = body && typeof body.request_id === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(body.request_id) ? body.request_id : null;
+    return after(tickets.setAutonomy(ws, pid(m[1]), { action, note: body && typeof body.note === 'string' ? body.note.slice(0, 500) : null, request_id, by: 'eric' }));
+  });
+  // An expired pilot dispatch Eric checked on this desk, released as
+  // reconciled (pilot-claims.js): the online counterpart of
+  // "tickets release <project> --reconciled".
+  route('POST', '/api/projects/([^/]+)/pilot-claim/release', (m, req, res, body) => {
+    if (!(body && body.reconciled === true)) throw new HttpError(400, 'Release a pilot claim here only as reconciled ({"reconciled":true}), after you checked the desk.');
+    return after(require('./core/pilot-claims').release(ws, pid(m[1]), { reconciled: true }));
+  });
   route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => {
     const out = tickets.setPilot(ws, pid(m[1]), Boolean(body && body.on === true), { by: 'dashboard' });
     if (out.exit_quote && out.exit_quote.status === 'approved') firstQuotesNow();

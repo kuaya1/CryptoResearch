@@ -130,25 +130,37 @@ test('a dispatch that expired with no known outcome (reconcile) spawns nothing a
   assert.equal(await P.runAll({ desk: 'local', maxAgents: 2 }, { ...d3, call: held.call, agent: () => '', out: quiet }), 0);
 });
 
-test('online: the poll token is sent as a bearer, never printed; the first session is the step\'s role', async (t) => {
+test('online: the poll token goes only to the poll, the worker token only to the worker routes; neither is printed or reaches a session', async (t) => {
   const d = dirs(t);
   const TOKEN = 'FICTIONAL-poll-token-0123456789abcdef';
+  const WORKER = 'FICTIONAL-worker-token-0123456789abcd';
   const seen = [];
-  const answers = [{ paused: false, steps: [{ project_id: 'a-fictional', step: 'ticket', claim: null }] }, { paused: false, steps: [{ project_id: 'a-fictional', step: 'pm_review', claim: null }] }];
+  const polls = [{ paused: false, steps: [{ project_id: 'a-fictional', step: 'ticket', claim: null }] }, { paused: false, steps: [{ project_id: 'a-fictional', step: 'pm_review', claim: null }] }];
+  const PROMPT = 'FROZEN PROSECUTOR PROMPT (FICTIONAL)';
+  let claims = 0;
   const fetchImpl = async (url, init) => {
     seen.push({ url, auth: init.headers.authorization });
-    const body = { format: 'cr-pilot-poll@1', ...answers[Math.min(seen.length - 1, 1)] };
-    return { status: 200, json: async () => body };
+    const ok = (b) => ({ status: 200, ok: true, json: async () => b });
+    if (url.endsWith('/api/pilot/queue')) return ok({ format: 'cr-pilot-poll@1', ...polls[Math.min(seen.filter((s) => s.url.endsWith('/queue')).length - 1, 1)] });
+    const op = url.split('/').pop();
+    const w = (b) => ok({ format: 'cr-pilot-worker@1', ...b });
+    if (op === 'claim') return (claims += 1) === 1 ? w({ status: 'claimed_now', step: 'ticket', key: 'ticket:-', token: 'b'.repeat(20), attempt_id: 'pa_1', expires_at: '2099-01-01T00:00:00.000Z' }) : w({ status: 'nothing', step: 'pm_review' });
+    if (op === 'prepare') return w({ status: 'prepared', role: 'prosecutor', attempt_id: 'pa_1', ticket_id: 'tk_FICTIONAL', prompt: PROMPT, prompt_sha256: crypto.createHash('sha256').update(PROMPT).digest('hex') });
+    if (op === 'complete') return w({ status: 'saved', receipt_id: 'tr_FICTIONAL' });
+    return { status: 404, ok: false, json: async () => ({}) };
   };
-  const roles = [];
+  const prompts = [];
   const said = [];
-  const code = await P.runAll({ desk: 'online', maxAgents: 2, connector: 'mcp__fictional', deskUrl: 'https://desk.example.org' }, { ...d, token: TOKEN, fetchImpl, agent: (prompt) => { roles.push(/Agent 2, the Prosecutor/.test(prompt) ? 'prosecutor' : 'researcher'); return 'done\nNEXT_STEP: pm_review'; }, out: (s) => said.push(s) });
+  const code = await P.runAll({ desk: 'online', maxAgents: 2, deskUrl: 'https://desk.example.org' }, { ...d, token: TOKEN, workerToken: WORKER, fetchImpl, agent: (prompt, opts) => { prompts.push({ prompt, tools: opts.tools }); return 'Ticket text (FICTIONAL).'; }, out: (s) => said.push(s) });
   assert.equal(code, 0);
-  assert.deepEqual(roles, ['prosecutor'], 'no researcher session is spent on a ticket step');
+  assert.deepEqual(prompts, [{ prompt: PROMPT, tools: P.WEB_TOOLS }], 'one Prosecutor session on the frozen prompt, web tools only; no researcher session on a ticket step');
   assert.equal(seen[0].url, 'https://desk.example.org/api/pilot/queue');
-  assert.equal(seen[0].auth, `Bearer ${TOKEN}`);
-  assert.ok(!said.join('\n').includes(TOKEN), 'the token is never printed');
-  assert.ok(!fs.readFileSync(d.logFile, 'utf8').includes(TOKEN), 'nor logged');
+  for (const s of seen) assert.equal(s.auth, `Bearer ${s.url.endsWith('/api/pilot/queue') ? TOKEN : WORKER}`, s.url);
+  for (const tok of [TOKEN, WORKER]) {
+    assert.ok(!said.join('\n').includes(tok), 'never printed');
+    assert.ok(!fs.readFileSync(d.logFile, 'utf8').includes(tok), 'nor logged');
+    assert.ok(!prompts.some((p) => p.prompt.includes(tok)), 'nor given to a session');
+  }
   assert.throws(() => P.deskUrlOf({ deskUrl: 'http://desk.example.org' }), /https origin/);
 });
 
@@ -201,13 +213,28 @@ test('the poll route: 404 unset, 401 on a wrong bearer, names and IDs only, and 
   assert.equal(ok.body.steps.length, 1);
   assert.deepEqual(Object.keys(ok.body.steps[0]).sort(), ['claim', 'project_id', 'receipt_id', 'run_id', 'step', 'ticket_id']);
   assert.ok(!/why|prompt|settings|report text/i.test(JSON.stringify(ok.body)), 'no reasons, prompts or settings');
-  // 60 an hour, refused ones counted.
-  for (let i = 3; i < 60; i++) poll(handle, `Bearer ${TOKEN}`);
+  // 60 accepted polls an hour; the two refused above are not among them.
+  for (let i = 1; i < 60; i++) poll(handle, `Bearer ${TOKEN}`);
   const limited = poll(handle, `Bearer ${TOKEN}`);
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers['Retry-After']) > 0);
   t0 += 3600000;
   assert.equal(poll(handle, `Bearer ${TOKEN}`).status, 200, 'an hour later it answers again');
+});
+
+// Corrective PR, §4: a stranger's refused requests are throttled on their own
+// allowance and never use up the runner's. Before the fix, 60 refused bearers
+// left the runner's next poll at 429.
+test('the poll route: refused bearers fill their own allowance, never the runner\'s', (t) => {
+  const w = tempWorkspace('pilot-poll-abuse');
+  t.after(w.cleanup);
+  const t0 = Date.now();
+  const handle = PP.makePilotPollRoute(w.ws, { env: { CR_PILOT_POLL_TOKEN_SHA256: DIGEST }, now: () => t0 });
+  for (let i = 0; i < PP.LIMIT_PER_HOUR; i++) assert.equal(poll(handle, `Bearer FICTIONAL-wrong-token-${String(i).padStart(6, '0')}`).status, 401);
+  const throttled = poll(handle, 'Bearer FICTIONAL-wrong-token-999999');
+  assert.equal(throttled.status, 429, 'the 61st refused bearer in the hour is throttled');
+  assert.equal(poll(handle, null).status, 429);
+  assert.equal(poll(handle, `Bearer ${TOKEN}`).status, 200, 'the runner still polls');
 });
 
 test('through the server: the poll answers with no session token, before it; a POST is refused', async (t) => {

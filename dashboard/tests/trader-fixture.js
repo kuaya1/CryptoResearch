@@ -19,7 +19,7 @@ const BOOK = { cash_usd: '25000', fee_rate: '0.003' };
 // The Prosecutor's answer for a ticket, as a model would write it: an
 // ACCUMULATE between $0.80 and $0.90, stop $0.70, target $1.40 (FICTIONAL).
 const AT = new Date().toISOString();
-function answer(ticket, proposal = {}) {
+function answer(ticket, proposal = {}, prosecution = {}) {
   const b = {
     format: T.FORMAT, ticket_id: ticket.ticket_id, project_id: ticket.project_id, prompt_version: T.PROMPT_VERSION, role: 'prosecutor', model: 'claude', model_version: 'claude-test', as_of: AT,
     researcher_report_id: ticket.basis.researcher.report_id, researcher_report_sha256: ticket.basis.researcher.original.sha256,
@@ -28,6 +28,7 @@ function answer(ticket, proposal = {}) {
       tests: { mercenary_emissions: { result: 'fail', finding: 'Rewards exceed fees (FICTIONAL).', source_ids: ['S1'] }, tax_revenue: { result: 'pass', finding: '' }, exit_slippage: { result: 'unknown', finding: 'No reading.' }, unverified_claims: { result: 'pass', finding: '' } },
       fatal_flaws: [{ test: 'mercenary_emissions', severity: 'fatal', finding: 'Activity is paid for by emissions (FICTIONAL).', source_ids: ['S1'] }],
       strongest_bull_rebuttal: 'Emissions taper next quarter.',
+      ...prosecution,
     },
     proposal: {
       proposal_type: 'ACCUMULATE',

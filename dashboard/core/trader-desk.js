@@ -95,6 +95,9 @@ const GAPS_REL = 'paper/candles/gaps.jsonl';
 const GAP_VERSION = 'cr.trader-gap.v1';
 
 const iso = (ms) => new Date(ms).toISOString();
+// A grant the paper mandate recorded (tickets.js MANDATE_BY): its authority is
+// read again at every opening and before every hour (mandate-authority.js).
+const byMandate = (d) => Boolean(d && typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:'));
 function nowOf(now) {
   const s = now === undefined ? new Date().toISOString() : now;
   const ms = isoMs(s);
@@ -313,7 +316,11 @@ function receiptOf(ws, pid, rid) {
 // (paper/candles/sources.jsonl, create-only): the first line per pair wins,
 // the rule trader-candles.js readSources reads it by. Read here, since that
 // module requires this one. A file that is there but does not read is
-// `unreadable`, and no pair is then taken as unbound.
+// `unreadable`, and no pair is then taken as unbound. So is one with a line
+// that is not a supported binding (not JSON, another version, no pair, no
+// project or no contract): a malformed record might be the binding that
+// refuses a pair, so the history cannot be established and new bindings and
+// exposure wait (corrective PR, 2026-10-31). `problems` names the lines.
 const SOURCES_REL = 'paper/candles/sources.jsonl';
 const SOURCE_VERSION = 'cr.trader-candle-source.v1';
 function sourceBindings(ws) {
@@ -323,11 +330,25 @@ function sourceBindings(ws) {
     if (!err || err.code !== 'ENOENT') out.unreadable = true;
     return out;
   }
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let s;
-    try { s = JSON.parse(line); } catch (_) { continue; }
-    if (s && typeof s.pair === 'string' && s.schema_version === SOURCE_VERSION && !out.has(s.pair)) out.set(s.pair, s);
+  const problems = [];
+  // A pair whose binding comes before every malformed line keeps it: first
+  // line wins, and nothing before it could have been an earlier one.
+  const established = new Set();
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim()) return;
+    let s = null;
+    try { s = JSON.parse(line); } catch (_) { s = null; }
+    const ok = s && typeof s === 'object' && !Array.isArray(s) && s.schema_version === SOURCE_VERSION && typeof s.pair === 'string' && /^[A-Z0-9.]{1,24}\/[A-Z0-9.]{1,24}$/.test(s.pair) && typeof s.project_id === 'string' && s.project_id && typeof s.contract_address === 'string' && s.contract_address && (typeof s.chain_id === 'string' || typeof s.chain_id === 'number');
+    if (!ok) { problems.push(i + 1); return; }
+    if (!out.has(s.pair)) {
+      out.set(s.pair, s);
+      if (!problems.length) established.add(s.pair);
+    }
+  });
+  out.established = established;
+  if (problems.length) {
+    out.unreadable = true;
+    out.problems = problems;
   }
   return out;
 }
@@ -350,7 +371,7 @@ function pairOf(project, projects, { sources = null } = {}) {
   const twin = projects.find((q) => q.project_id !== project.project_id && q.status !== 'archived' && typeof q.symbol === 'string' && q.symbol.trim().toUpperCase() === sym);
   if (twin) return { pair: null, why: `Another project on the desk, ${twin.name || twin.project_id}, also trades as ${sym}, so ${sym}/${QUOTE} would not name one token.` };
   const pair = `${sym}/${QUOTE}`;
-  if (sources && sources.unreadable) return { pair: null, why: `The candle bindings (${SOURCES_REL}) could not be read, so whether ${pair} prices this token is unknown.` };
+  if (sources && sources.unreadable) return { pair: null, why: `The candle bindings (${SOURCES_REL}) could not be read${sources.problems ? ` (line${sources.problems.length === 1 ? '' : 's'} ${sources.problems.slice(0, 5).join(', ')} ${sources.problems.length === 1 ? 'is' : 'are'} not a supported binding)` : ''}, so whether ${pair} prices this token is unknown.` };
   const b = sources ? sources.get(pair) : null;
   if (b && !boundToOwn(project, b)) return { pair: null, why: `${pair}'s hourly candles are bound to ${b.project_id || 'another project'} (${b.contract_address || 'no contract'}) for good, so ${pair} would not price this token.` };
   return { pair, why: null };
@@ -479,24 +500,33 @@ function assess(ws, ctx, g, snap) {
   const out = (phase, words, next = null, more = {}) => ({ ...base, open_intent_id: openId, pair: asked ? asked.pair : more.pair || null, phase, words, next, ...more });
 
   if (!asked) {
-    if (!g.in_force) return out('not_opened', `${g.undo ? 'Undone' : 'Replaced'} before the book was asked: no order was made.`);
+    // final: whether the reason can never pass. A not_opened that may pass
+    // still holds the paper mandate's capacity (mandate-authority.js).
+    if (!g.in_force) return out('not_opened', `${g.undo ? 'Undone' : 'Replaced'} before the book was asked: no order was made.`, null, { final: true });
+    // A mandate grant's authority, read again before anything is asked
+    // (corrective PR, defect C): the same arming, unrevoked and unexpired,
+    // Eric not intervening since, the Prosecutor's ticket consistent.
+    if (byMandate(d)) {
+      const auth = require('./tickets').grantAuthority(ws, d, { now: ctx.t, project: g.project });
+      if (!auth.ok) return out('not_opened', `The paper mandate's grant opens nothing: ${auth.words}`, null, { final: auth.final, authority: { code: auth.code, words: auth.words } });
+    }
     const rc = receiptOf(ws, pid, d.receipt_id);
-    if (rc.why) return out('not_opened', `${rc.why} No order is made from it.`);
+    if (rc.why) return out('not_opened', `${rc.why} No order is made from it.`, null, { final: false });
     const pr = pairOf(g.project, ctx.projects, { sources: snap.sources });
-    if (!pr.pair) return out('not_opened', `${pr.why} No order is made.`);
+    if (!pr.pair) return out('not_opened', `${pr.why} No order is made.`, null, { final: false });
     const plan0 = planOf(rc.receipt, d, null);
-    if (plan0.why) return out('not_opened', plan0.why, null, { pair: pr.pair });
+    if (plan0.why) return out('not_opened', plan0.why, null, { pair: pr.pair, final: true });
     // A grant that waited past its horizon, or a ticket invalidated since,
     // opens nothing: checked before every opening, not only after one.
     const h = horizonOf(ws, pid, rc.receipt);
-    if (h.ms !== null && h.ms <= ctx.t) return out('not_opened', `The research horizon ended on ${h.day} before the book was asked: no order is made from this decision.`, null, { pair: pr.pair });
+    if (h.ms !== null && h.ms <= ctx.t) return out('not_opened', `The research horizon ended on ${h.day} before the book was asked: no order is made from this decision.`, null, { pair: pr.pair, final: true });
     const ticket = { project_id: pid, receipt_id: d.receipt_id, decision_id: d.decision_id };
     const bk = PT.book(ws, pr.pair, { now: ctx.now, venue: ctx.s.venue, ticket });
-    if (bk.exit_why) return out('not_opened', `${bk.exit_why} The order is never made from this decision.`, null, { pair: pr.pair });
-    if (bk.grant_why) return out('not_opened', `${bk.grant_why} No order is made.`, null, { pair: pr.pair });
+    if (bk.exit_why) return out('not_opened', `${bk.exit_why} The order is never made from this decision.`, null, { pair: pr.pair, final: true });
+    if (bk.grant_why) return out('not_opened', `${bk.grant_why} No order is made.`, null, { pair: pr.pair, final: false });
     let inv = null;
     try { inv = require('./tickets').invalidationOf(ws, g.project, rc.receipt, { now: ctx.t }); } catch (_) { inv = null; }
-    if (inv && inv.invalidated) return out('not_opened', `The ticket is invalidated (${inv.words}) before the book was asked: no order is made from this decision.`, null, { pair: pr.pair });
+    if (inv && inv.invalidated) return out('not_opened', `The ticket is invalidated (${inv.words}) before the book was asked: no order is made from this decision.`, null, { pair: pr.pair, final: true });
     const stale = ctx.s.rules.price_stale_minutes;
     // An earlier decision's order or position on the same ticket (an undo's
     // close still in flight): this one waits until the ticket is flat, then
@@ -548,8 +578,8 @@ function assess(ws, ctx, g, snap) {
       } catch (err) {
         return out('waiting', `The contract could not be read again for the paper mandate's grant (${String(err && err.message || err).slice(0, 160)}); the order waits.`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK' } });
       }
-      if (!v || v.tier === 'block') return out('not_opened', `The paper mandate's grant opens nothing: ${v ? `the contract gate now blocks (${v.words})` : 'the contract has no observation the desk can read now'}.`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', tier: v ? v.tier : null } });
-      if (chk && chk.status === 'triggered') return out('not_opened', `The paper mandate's grant opens nothing: ${chk.words}`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', status: chk.status } });
+      if (!v || v.tier === 'block') return out('not_opened', `The paper mandate's grant opens nothing: ${v ? `the contract gate now blocks (${v.words})` : 'the contract has no observation the desk can read now'}.`, null, { pair: pr.pair, final: false, contract: { rule_id: 'MANDATE_RECHECK', tier: v ? v.tier : null } });
+      if (chk && chk.status === 'triggered') return out('not_opened', `The paper mandate's grant opens nothing: ${chk.words}`, null, { pair: pr.pair, final: false, contract: { rule_id: 'MANDATE_RECHECK', status: chk.status } });
       if (v.tier === 'hold') return out('waiting', `The paper mandate's grant waits: the contract gate holds (${v.words}).`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', tier: v.tier } });
     }
     // The contract gate, when Eric enforces it (tickets.js contractOpenGuard):
@@ -557,7 +587,7 @@ function assess(ws, ctx, g, snap) {
     // notional (CG-14), not only at the reference tranche. Openings only.
     let guard = null;
     try { guard = require('./tickets').contractOpenGuard(ws, g.project, rc.receipt, { now: ctx.t, notionalUsd: sz.notional_usd, priceUsd: plan.entry }); } catch (err) { guard = { hold: true, final: false, words: `The contract gate could not be read (${String(err && err.message || err).slice(0, 160)}); the order waits.` }; }
-    if (guard && guard.hold) return out(guard.final ? 'not_opened' : 'waiting', guard.words, null, { pair: pr.pair, contract: { rule_id: guard.rule_id || null, ...(guard.fitted ? { fitted: guard.fitted } : {}) }, exit_as_of: bk.exit ? bk.exit.as_of : null });
+    if (guard && guard.hold) return out(guard.final ? 'not_opened' : 'waiting', guard.words, null, { pair: pr.pair, final: Boolean(guard.final), contract: { rule_id: guard.rule_id || null, ...(guard.fitted ? { fitted: guard.fitted } : {}) }, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
     return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding } });
   }
@@ -577,6 +607,19 @@ function assess(ws, ctx, g, snap) {
     return out('ended', `The buy ended with nothing filled (${stateWords(asked)}); it is never asked again.`, null, more);
   }
 
+  // A mandate grant's buy the mandate no longer covers (revoked, expired,
+  // paused, Eric's intervention): what has not filled is cancelled through
+  // the book's own cancel; what filled stays, managed as before (corrective
+  // PR, defect C). Not over a missing hour, as for a close below.
+  if (byMandate(d) && (asked.state === 'ACKED' || asked.state === 'PARTIAL')) {
+    const auth = require('./tickets').grantAuthority(ws, d, { now: ctx.t, project: g.project });
+    if (!auth.ok) {
+      const gap0 = openGapOf(snap, asked.pair);
+      const authority = { code: auth.code, words: auth.words };
+      if (gap0) return out(pos ? 'open' : 'order', `The paper mandate no longer covers this buy (${auth.words}) Its unfilled part is cancelled once ${asked.pair}'s missing hour ${gap0.missing_hour} is on record, so a fill in it is not lost.`, null, { ...more, authority });
+      return out(pos ? 'open' : 'order', `The paper mandate no longer covers this buy: ${auth.words} Its unfilled part is cancelled; what filled stays and is managed as before.`, { kind: 'cancel', client_order_id: asked.client_order_id }, { ...more, authority });
+    }
+  }
   const reason = closeReasonOf(ws, g, (receiptOf(ws, pid, d.receipt_id).receipt) || {}, ctx.t);
   if (!reason) return out(pos ? 'open' : 'order', pos ? `Open: ${pos.quantity} ${asked.pair} at ${usd(pos.entry_price)}, stop ${usd(pos.stop_loss_price)}, target ${usd(pos.take_profit_price)}${buyLive ? `; the buy is still ${stateWords(asked)}` : ''}.` : `The buy is ${stateWords(asked)}.`, null, more);
   const closing = { ...more, close: { reason: reason.kind, words: reason.words } };
@@ -699,6 +742,16 @@ function wanted(ws, { now } = {}) {
   return [...out.values()];
 }
 
+// Whether a step has something to do now without new hours (the trader job's
+// due check, jobs.js; corrective PR, defect A): an order to recover or
+// reconcile, or a request whose next thing (an opening, a cancel, a close)
+// is ready. Reads only.
+function pending(ws, { now } = {}) {
+  const ctx = contextOf(ws, now, null);
+  if (ctx.snap.orders.some((o) => ['RESERVED', 'SENT', 'UNKNOWN'].includes(o.state))) return true;
+  return ctx.grants.some((g) => Boolean(assess(ws, ctx, g, ctx.snap).next));
+}
+
 // One step: fund the book once from Eric's setting, resolve what is
 // unresolved, then do the next thing for each request (closes and cancels
 // before new orders). Idempotent; each failure is said and never stops the
@@ -771,6 +824,11 @@ function applyHours(ws, bars, { now } = {}) {
   for (const b of Array.isArray(bars) ? bars : []) {
     const pair = b && b.pair;
     if (stoppedPairs.has(pair)) { out.push({ pair, hour: b && b.hour, status: 'skipped', words: 'An earlier hour of this pair was refused.' }); continue; }
+    // A buy the paper mandate no longer covers for this hour is cancelled
+    // before the hour is applied, so the hour cannot fill it; when that
+    // cannot be established, the hour waits (corrective PR, defect C).
+    const held = revokeBefore(ws, pair, b && b.hour, n, out);
+    if (held) { out.push({ pair, hour: b && b.hour, status: 'refused', code: 'AUTHORITY_UNKNOWN', words: held }); stoppedPairs.add(pair); continue; }
     try {
       const r = PT.applyBar(ws, b, { now: n.now });
       out.push({ pair, hour: b.hour, status: r.status, events: r.events });
@@ -780,6 +838,57 @@ function applyHours(ws, bars, { now } = {}) {
       out.push(row);
       if (['GAP', 'INTEGRITY', 'TIME', 'ORDER'].includes(err.code)) stoppedPairs.add(pair);
     }
+  }
+  return out;
+}
+
+// Before an hour of `pair` is applied: each live buy (ACKED or PARTIAL) a
+// paper mandate grant made, whose authority does not cover that hour, is
+// cancelled now through the book's own cancel (recorded at now, never
+// backdated). Expiry covers an hour that ends at or before expires_at; any
+// other revocation covers no hour still to apply, since when it began between
+// hours is not on record. Returns words when the hour must wait: a decision
+// that does not read, or a cancel that fails.
+function revokeBefore(ws, pair, hour, n, out) {
+  const end = Date.parse(hour) + HOUR;
+  if (!Number.isFinite(end)) return null;
+  let list;
+  try { list = PT.intents(ws); } catch (err) { return `The book's orders could not be read to check the paper mandate's authority (${String(err && err.message || err).slice(0, 160)}); the hour waits.`; }
+  const live = list.filter((i) => i && i.pair === pair && i.side === 'OPEN_LONG' && (i.state === 'ACKED' || i.state === 'PARTIAL'));
+  if (!live.length) return null;
+  const T = require('./tickets');
+  // The book's orders name no project or decision, only the intent (made from
+  // the decision, intentIdOf) and the ticket (thesis_id): each live buy is
+  // matched to the mandate grant whose opening it is, across every project's
+  // decisions. Any history that does not read makes it unknown: the hour
+  // waits (corrective PR 2026-10-31; this read the book's orders for fields
+  // they do not carry, so no grant's buy was ever matched).
+  let grantOf;
+  try { grantOf = mandateOpenings(ws, T); } catch (err) {
+    return `The decisions behind ${pair}'s live buys could not be read (${String(err && err.message || err).slice(0, 160)}), so whether the paper mandate covers them is unknown; the hour waits.`;
+  }
+  for (const i of live) {
+    const d = grantOf.get(i.intent_id) || null;
+    if (!d || d.receipt_id !== i.thesis_id) continue;
+    const auth = T.grantAuthority(ws, d, { now: n.t, asOfMs: end });
+    if (auth.ok) continue;
+    try {
+      const r = PT.cancelOrder(ws, i.client_order_id, { now: n.now });
+      out.push({ pair, hour, status: 'cancelled', client_order_id: i.client_order_id, decision_id: d.decision_id, code: auth.code, words: `Before the hour ${hour}: the paper mandate no longer covers ${i.client_order_id} (${auth.words}); its unfilled part is cancelled (${r.status}).` });
+    } catch (err) {
+      return `${i.client_order_id} could not be cancelled after the paper mandate's authority ended (${String(err && err.message || err).slice(0, 160)}); the hour waits so it cannot fill.`;
+    }
+  }
+  return null;
+}
+
+// Each paper mandate grant's opening intent ID (intentIdOf(d, 'open')) to its
+// decision, over every project on the desk, a broken one included (its
+// decisions are read by its folder's ID). Throws when a history does not read.
+function mandateOpenings(ws, T) {
+  const out = new Map();
+  for (const p of require('./projects').listProjects(ws)) {
+    for (const l of T.readDecisionsStrict(ws, p.project_id)) if (byMandate(l) && (l.action === 'approve' || l.action === 'halve')) out.set(intentIdOf(l, 'open'), l);
   }
   return out;
 }
@@ -798,4 +907,4 @@ function gapOf(ws, pair, hour, now) {
   }
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, pending, step, applyHours };

@@ -29,7 +29,7 @@ test('a mandate halve records the mandate\'s provenance and meaning, asks the tr
   assert.equal(d.meaning, T.MANDATE_MEANING);
   assert.match(d.meaning, /not Eric's decision/);
   assert.equal(d.pm_approved_risk_usd, 250);
-  assert.deepEqual({ ...d.mandate, expires_at: typeof d.mandate.expires_at, settings_sha256: d.mandate.settings_sha256.length }, { version: 'cr-paper-mandate@1', tier: 'exploratory_50_54', grade_used: 52, expires_at: 'string', settings_sha256: 64 });
+  assert.deepEqual({ ...d.mandate, expires_at: typeof d.mandate.expires_at, settings_sha256: d.mandate.settings_sha256.length, authority: { ...d.mandate.authority, armed_at: typeof d.mandate.authority.armed_at } }, { version: 'cr-paper-mandate@1', tier: 'exploratory_50_54', grade_used: 52, expires_at: 'string', settings_sha256: 64, authority: { version: 'cr-mandate-authority@1', generation: 1, armed_at: 'string', policy_sha256: d.mandate.settings_sha256 } });
   assert.equal(d.effects.paper, null);
   assert.equal(d.effects.trader, 'open');
   assert.equal(out.result.paper, null);
@@ -68,14 +68,19 @@ test('Eric\'s undo of a mandate grant voids nothing on the PM Cohort book and la
   const v = T.view(s.ws, s.pid);
   assert.equal(v.ticket.decision, null);
   assert.equal(v.ticket.mandate_latched.action, 'halve');
-  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'halve', request_id: `mandate_${r.receipt_id}_2`, mandate: mandateArgs('exploratory_50_54', 52) }), refused('MANDATE_PRIOR_DECISION'));
+  // Eric's Undo suspends autonomy on the project; rearmed, the ticket is still his.
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'halve', request_id: `mandate_${r.receipt_id}_2`, mandate: mandateArgs('exploratory_50_54', 52) }), refused('MANDATE_SUSPENDED'));
+  T.setAutonomy(s.ws, s.pid, { action: 'rearm', request_id: 'req_rearm_decide1', by: 'eric' });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'halve', request_id: `mandate_${r.receipt_id}_3`, mandate: mandateArgs('exploratory_50_54', 52) }), refused('MANDATE_PRIOR_DECISION'));
 });
 
 test('a veto that lands first wins over a later mandate call', (t) => {
   const s = mandateDesk(t, { grade: 60 });
   const r = saveTicket(s.ws, s.pid);
   T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'veto', by: 'eric' });
-  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: `mandate_${r.receipt_id}`, mandate: mandateArgs('standard_55_plus', 60) }), refused('MANDATE_PRIOR_DECISION'));
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: `mandate_${r.receipt_id}`, mandate: mandateArgs('standard_55_plus', 60) }), refused('MANDATE_SUSPENDED'));
+  T.setAutonomy(s.ws, s.pid, { action: 'rearm', request_id: 'req_rearm_decide2', by: 'eric' });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: `mandate_${r.receipt_id}_b`, mandate: mandateArgs('standard_55_plus', 60) }), refused('MANDATE_PRIOR_DECISION'));
   assert.equal(T.view(s.ws, s.pid).ticket.decision.action, 'veto');
 });
 

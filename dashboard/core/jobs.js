@@ -87,10 +87,19 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       // Closed until Eric turns leads on, in a restored copy, while CoinGecko's
       // or GoPlus's gate is closed, and with no asset due.
       return require('./leads').isDue(ws, now);
-    case 'trader':
-      // Closed until the book is funded and a pair is behind, in a restored
-      // copy, and while GeckoTerminal's 429 or a failure backoff runs.
-      return require('./trader-candles').isDue(ws, now);
+    case 'trader': {
+      // Due on the hours a pair needs (closed until the book is funded and a
+      // pair is behind, in a restored copy, and while GeckoTerminal's 429 or
+      // a failure backoff runs), and, apart from GeckoTerminal's gate, on work
+      // that needs no hours: the paper mandate's sweep (a cold desk's first
+      // grant) and a step the book can take now (an opening, a cancel, a
+      // close, an order to recover or reconcile). Read only and bounded
+      // (corrective PR, defect A).
+      if (require('./trader-candles').isDue(ws, now)) return true;
+      if (heldCopy(ws)) return false;
+      if (require('./tickets').mandateDue(ws, now)) return true;
+      return require('./trader-desk').pending(ws, { now: new Date(now).toISOString() });
+    }
     case 'research':
       // Nothing is sent to a provider while Eric has automation paused.
       if (require('./workspace').automationPaused(ws)) return false;
@@ -105,6 +114,12 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
     default:
       return false;
   }
+}
+
+// A restored copy on hold (research.js restoredHold): the trader job writes
+// nothing there. Unreadable is held.
+function heldCopy(ws) {
+  try { return Boolean(require('./research').restoredHold(ws)); } catch (_) { return true; }
 }
 
 function record(ws, name, trigger, started, finished, result) {
@@ -208,8 +223,23 @@ async function runJobBody(ws, name, trigger) {
       const said = m && m.status === 'ok' ? m.message : m && m.status === 'failed' ? `Paper mandate sweep failed: ${m.why}` : m && m.status === 'busy' ? m.message : null;
       // Its own lease, gate, backoff and request budget are inside refresh().
       const r = await require('./trader-candles').refresh(ws, { trigger });
-      const summary = [said, r.message].filter(Boolean).join(' ');
-      return { status: r.status === 'held' ? 'skipped' : r.status, summary, error: r.status === 'failed' ? r.message : null, ...(m ? { mandate: { status: m.status, granted: (m.granted || []).length, reopened: (m.reopened || []).length, skipped: (m.skipped || []).length } } : {}) };
+      // The book's step needs no hours: while GeckoTerminal's gate is closed,
+      // another read holds its lease, or no pair is wanted, the step still
+      // runs (a cancel, a close, an opening on the hours it has), so a candle
+      // backoff never holds decision processing. Never in a restored copy.
+      let st = null;
+      if (['backoff', 'busy', 'noop'].includes(r.status) && !heldCopy(ws)) {
+        try {
+          const s = require('./trader-desk').step(ws, {});
+          st = { done: s.done.length, problems: s.problems.length, words: s.problems.slice(0, 2).map((p) => p.words).join(' ') || null };
+        } catch (err) {
+          st = { done: 0, problems: 1, words: `The book's step failed: ${String(err && err.message || err).slice(0, 200)}` };
+        }
+      }
+      const stepSaid = st && (st.done || st.problems) ? `Book step: ${st.done} done, ${st.problems} problem${st.problems === 1 ? '' : 's'}${st.words ? ` (${st.words})` : ''}.` : null;
+      const summary = [said, r.message, stepSaid].filter(Boolean).join(' ');
+      const status = r.status === 'held' ? 'skipped' : r.status === 'noop' && st && st.done ? 'ok' : r.status;
+      return { status, summary, error: r.status === 'failed' ? r.message : null, ...(st ? { step: st } : {}), ...(m ? { mandate: { status: m.status, granted: (m.granted || []).length, reopened: (m.reopened || []).length, skipped: (m.skipped || []).length } } : {}) };
     }
     case 'leads': {
       // Its own lease and turn; CoinGecko's and GoPlus's gates and budgets are shared.

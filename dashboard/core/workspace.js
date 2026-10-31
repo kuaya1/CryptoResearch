@@ -141,6 +141,9 @@ const DEFAULT_SETTINGS = {
     exit_quotes_auto: false,
     autonomous_paper_loop: false,
     mandate: { expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: ['ethereum', 'base', 'arbitrum', 'optimism', 'solana'] },
+    // The pilot runner's agent sessions a day (pilot-claims.js), reserved
+    // before each starts, failed ones included.
+    pilot_daily_sessions: 6,
   },
   // Eric's own trader rules (trader-rules.js; Preferences > Screening): the
   // minimum stop distance, the notional cap, an intent's longest life and the

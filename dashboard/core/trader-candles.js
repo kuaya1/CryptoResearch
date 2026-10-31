@@ -200,24 +200,24 @@ function pickPool(body, target, cgPrice) {
   return { why: `No pool on GeckoTerminal holds this contract with a reserve, trades in the last 24 hours and a price within ${PRICE_BAND}x of CoinGecko's.` };
 }
 
-// Each pair's frozen pool: the first line for it. A line that does not read
-// is left aside, never a source.
+// Each pair's frozen pool: the first line for it, read by the adapter's own
+// rule (trader-desk.js sourceBindings). A line that is not a supported
+// binding makes the history unknown (`unreadable`, with `problems`): no new
+// pool is chosen, and a pair keeps its hours only when its binding comes
+// before every such line (`established`). Corrective PR, 2026-10-31.
 function readSources(ws) {
-  const out = new Map();
-  for (const line of readText(ws.abs(SOURCES_REL), '').split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let s;
-    try { s = JSON.parse(line); } catch (_) { continue; }
-    if (s && typeof s.pair === 'string' && s.schema_version === 'cr.trader-candle-source.v1' && !out.has(s.pair)) out.set(s.pair, s);
-  }
-  return out;
+  return TD.sourceBindings(ws);
 }
 const sourceOf = (ws, pair) => readSources(ws).get(pair) || null;
+const BINDINGS_HELD = (pair) => `The candle bindings (${SOURCES_REL}) hold a line that is not a supported binding, so ${pair}'s pool cannot be established: no pool is chosen and no hours are read for it until the file is repaired (it is kept as it is).`;
 
-// Create-only: a pair that already has a pool keeps it.
+// Create-only: a pair that already has a pool keeps it. Refused while the
+// bindings' history cannot be established.
 function saveSource(ws, rec) {
   return withLock(ws, 'trader_candle_sources', () => {
-    const have = sourceOf(ws, rec.pair);
+    const all = readSources(ws);
+    if (all.unreadable) throw new Error(BINDINGS_HELD(rec.pair));
+    const have = all.get(rec.pair) || null;
     if (have) return have;
     appendLine(ws.abs(SOURCES_REL), rec);
     return rec;
@@ -304,7 +304,10 @@ let lastSent = 0;
 async function getJson(path, { fetchImpl, sleep }) {
   const url = new URL(`${API}${path}`, ORIGIN);
   if (url.origin !== ORIGIN || url.protocol !== 'https:' || !url.pathname.startsWith(`${API}/networks/`)) throw new Error('Unexpected address');
-  const wait = lastSent + MIN_INTERVAL_MS - Date.now();
+  // At most one interval: a clock stepped back (a time correction, a restored
+  // machine) would otherwise put the next request, and the trader job with
+  // it, to sleep for as long as the step (corrective PR 2026-10-31).
+  const wait = Math.min(MIN_INTERVAL_MS, lastSent + MIN_INTERVAL_MS - Date.now());
   if (wait > 0) await sleep(wait);
   lastSent = Date.now();
   const ctrl = new AbortController();
@@ -420,7 +423,8 @@ function isDue(ws, now = Date.now()) {
   if (!wanted.length) return false;
   const latest = latestSettled(now);
   const sources = readSources(ws);
-  return wanted.some((w) => behind(w, latest) && !askedSince(st, w.pair, latest) && (sources.has(w.pair) || (w.project_id && !poolWaiting(st, w.pair, now))));
+  const usable = (pair) => !sources.unreadable || (sources.established && sources.established.has(pair));
+  return wanted.some((w) => behind(w, latest) && !askedSince(st, w.pair, latest) && usable(w.pair) && (sources.has(w.pair) || (w.project_id && !poolWaiting(st, w.pair, now))));
 }
 
 async function onePair(ws, w, c) {
@@ -429,7 +433,12 @@ async function onePair(ws, w, c) {
   if (!behind(w, latest)) return {};
   const st = readStatus(ws);
   if (askedSince(st, w.pair, latest)) return {};
-  let src = sourceOf(ws, w.pair);
+  const all = readSources(ws);
+  if (all.unreadable && !(all.established && all.established.has(w.pair))) {
+    c.counts.problems.push({ pair: w.pair, words: BINDINGS_HELD(w.pair) });
+    return {};
+  }
+  let src = all.get(w.pair) || null;
   if (src && w.project_id && src.project_id !== w.project_id) {
     c.counts.problems.push({ pair: w.pair, words: `${w.pair}'s hours come from the pool chosen for another project (${src.project_id}); none are read for ${w.project_id}.` });
     return {};
@@ -545,6 +554,7 @@ function statusView(ws, now = Date.now()) {
     last_run_at: st.last_run_at || null,
     last_result: st.last_result || null,
     sources: [...readSources(ws).values()].map((s) => ({ pair: s.pair, project_id: s.project_id, network: s.network, pool_name: s.pool_name, dex: s.dex, chosen_at: s.chosen_at })),
+    sources_unreadable: (() => { const all = readSources(ws); return all.unreadable ? { lines: all.problems || null, established: [...(all.established || [])] } : null; })(),
     pairs: st.pairs || {},
   };
 }

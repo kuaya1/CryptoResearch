@@ -294,7 +294,9 @@ function exitsOf(ws, pid, sizes, now) {
       size_usd: s,
       status: row ? row.status : 'no_reading',
       cost_pct: cost,
-      cost_complete: b ? b.cost_complete !== false : null,
+      // Only a cost known in full is complete: unknown completeness is not
+      // (corrective PR 2026-10-31; it read as complete before).
+      cost_complete: b ? b.cost_complete === true : null,
       missing_costs: b ? b.missing_costs || [] : [],
       method: b ? b.method || null : null,
       route_scope: b ? b.route_scope || null : null,
@@ -302,6 +304,37 @@ function exitsOf(ws, pid, sizes, now) {
       note: row ? row.note || null : `No exit reading at ${usd(s)}: approve exit quotes for this project (Forensics > Exits, or Quote exits for every project).`,
     };
   });
+}
+
+// Whether a reading is evidence a ticket can freeze now: a cost known in full
+// (exitsOf drops stale and future-dated readings), or a current "no route",
+// which is itself the answer. A number with unknown or missing costs is not.
+function exitReady(row) {
+  if (!row) return false;
+  if (row.status === 'no_route') return true;
+  return row.cost_complete === true && isNum(row.cost_pct);
+}
+
+// Why a Prosecutor waits for the exit reading (corrective PR 2026-10-31): the
+// project has an approved exit-quote target, it is not a native L1 (whose exit
+// needs no DEX quote), and the reading at the exit size is not ready. The
+// forensic monitor asks for it on its own schedule, budget and backoff; the
+// ticket is opened once it is, so the Prosecutor's ticket freezes it. Null
+// when there is nothing to wait for. Reads only.
+function exitWaitOf(ws, project, sizing, now) {
+  if (project.identity && project.identity.native_chain === true) return null;
+  let targets = [];
+  try { targets = require('./forensics').readProfile(ws, project.project_id).targets.exit_quotes || []; } catch (_) { targets = []; }
+  if (!targets.length) return null;
+  const [x] = exitsOf(ws, project.project_id, [sizing.exit_size_usd], now);
+  if (exitReady(x)) return null;
+  const what = !x || x.cost_pct === null
+    ? (x && x.note) || `No current exit reading at ${usd(sizing.exit_size_usd)}.`
+    : `The reading at ${usd(sizing.exit_size_usd)} (${x.cost_pct}%) is not complete${x.missing_costs && x.missing_costs.length ? `: ${x.missing_costs.join(', ')} unknown` : ''}.`;
+  return {
+    exit: { size_usd: sizing.exit_size_usd, status: x ? x.status : 'no_reading', cost_pct: x ? x.cost_pct : null, cost_complete: x ? x.cost_complete : null, as_of: x ? x.as_of : null },
+    why: `The Prosecutor waits for the desk's exit reading: ${what} The forensic monitor asks for it on its own schedule, budget and backoff; the ticket is opened once the reading is complete, so it freezes it. Nothing for an agent to do now.`,
+  };
 }
 
 // Which sizes have no current reading, and why, in words, with the address of
@@ -591,6 +624,9 @@ async function prepareExitQuote(ws, pid, opts = {}) {
   if (project.status === 'archived' || !project.identity || project.identity.status !== 'verified') return null;
   const size = sizingOf(ws).exit_size_usd;
   const [row] = exitsOf(ws, pid, [size], now);
+  // A current number, complete or not, is not asked again: a second quote
+  // does not make an unknown cost known. Whether it is ready for a ticket is
+  // exitReady's question (nextStep waits on it).
   if (row.status !== 'unavailable' && row.cost_pct !== null) return null;
   const out = await require('./forensic-monitor').quoteSizeUsd(ws, pid, { size_usd: size, fetchImpl: opts.fetchImpl, cgGetImpl: opts.cgGetImpl, sleep: opts.sleep, now: opts.now });
   return { size_usd: size, status: out.status, reason: out.reason || null, asked_at: iso(Date.now()) };
@@ -1135,6 +1171,9 @@ function normalizeBlock(b) {
     const result = ['pass', 'fail', 'unknown'].includes(x.result) ? x.result : 'unknown';
     return [t, { result, finding: str(x.finding, 1200), source_ids: Array.isArray(x.source_ids) ? x.source_ids.map(String).slice(0, 20) : [] }];
   }));
+  (Array.isArray(p.fatal_flaws) ? p.fatal_flaws : []).slice(0, 20).forEach((f, i) => {
+    if (!['fatal', 'serious', 'minor'].includes(f && f.severity)) errors.push(`prosecution.fatal_flaws[${i}].severity is not fatal, serious or minor; read as serious, and the ticket is not granted automatically.`);
+  });
   const flaws = (Array.isArray(p.fatal_flaws) ? p.fatal_flaws : []).slice(0, 20).map((f) => ({ test: [...TESTS, 'other'].includes(f && f.test) ? f.test : 'other', severity: ['fatal', 'serious', 'minor'].includes(f && f.severity) ? f.severity : 'serious', finding: str(f && f.finding, 1200), source_ids: Array.isArray(f && f.source_ids) ? f.source_ids.map(String).slice(0, 20) : [] })).filter((f) => f.finding);
   const type = PROPOSALS.includes(q.proposal_type) ? q.proposal_type : null;
   if (!type) errors.push(`proposal.proposal_type must be one of ${PROPOSALS.join(', ')}.`);
@@ -1553,7 +1592,20 @@ function mandateOf(ws, now = Date.now()) {
     max_open_grants: null,
     allowed_chains: null,
     settings_sha256: sha256(require('./requests').stableStringify(raw)),
+    // The arming this mandate is under (mandate-authority.js): its generation,
+    // when it was armed, and when it was revoked (loop off or paused).
+    generation: null,
+    armed_at: null,
+    revoked_at: null,
+    expired: false,
+    held: false,
   };
+  const au = raw.authority && typeof raw.authority === 'object' && !Array.isArray(raw.authority) ? raw.authority : null;
+  if (au && Number.isSafeInteger(au.generation) && au.generation >= 1) {
+    out.generation = au.generation;
+    out.armed_at = typeof au.armed_at === 'string' ? au.armed_at : null;
+    out.revoked_at = typeof au.revoked_at === 'string' ? au.revoked_at : null;
+  }
   const problems = [];
   for (const k of ['max_grants_per_day', 'max_open_grants']) {
     const v = raw[k] === undefined ? MANDATE_DEFAULTS[k] : raw[k];
@@ -1566,11 +1618,13 @@ function mandateOf(ws, now = Date.now()) {
   try { held = require('./research').restoredHold(ws); } catch (_) { held = { unreadable: true }; }
   if (a.autonomous_paper_loop !== true) out.why = 'The paper mandate is off (automation.autonomous_paper_loop).';
   else if (a.paused === true) out.why = 'Automation is paused: the paper mandate grants nothing.';
+  else if (!out.generation) out.why = 'The paper mandate is on without an arming the desk recorded (cr-mandate-authority@1), so it grants nothing; arm it again (arm-desk --mandate-days=N, or set the mandate in settings).';
+  else if (out.revoked_at) out.why = `The paper mandate's generation ${out.generation} was revoked at ${out.revoked_at}; arm it again to grant.`;
   else if (problems.length) out.why = `The paper mandate's limits do not read, so it grants nothing: ${problems.join('; ')}.`;
   else if (!Number.isFinite(t)) out.why = 'The paper mandate has no expiry (automation.mandate.expires_at), so it grants nothing.';
-  else if (t <= now) out.why = `The paper mandate expired at ${out.expires_at}.`;
+  else if (t <= now) { out.why = `The paper mandate expired at ${out.expires_at}.`; out.expired = true; }
   else if (t - now > MANDATE_MAX_DAYS * 86400000) out.why = `The paper mandate's expiry is more than ${MANDATE_MAX_DAYS} days ahead; set it again.`;
-  else if (held) out.why = 'This is a restored copy on hold: the paper mandate grants nothing until it is released.';
+  else if (held) { out.why = 'This is a restored copy on hold: the paper mandate grants nothing until it is released.'; out.held = true; }
   else out.on = true;
   return out;
 }
@@ -1823,19 +1877,36 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     // one mandate re-open per Claude report.
     let mandateLine = null;
     if (mandate) {
+      const MA = require('./mandate-authority');
+      // Strict history: a line that does not read is not an empty history.
+      try { MA.parseStrict(cur, rel, 'The decision history'); } catch (err) { throw new OpError('REFUSED', `Not recorded: ${err.message}`, { reason: 'MANDATE_HISTORY_UNREADABLE' }); }
       const m = mandateOf(ws, Date.now());
       if (!m.on) throw new OpError('REFUSED', `Not recorded: ${m.why}`, { reason: 'MANDATE_OFF' });
+      // Eric's latch on the project: any veto, Undo, archive or stop of his
+      // not cleared by his rearm stops every mandate action, re-opens included.
+      const st = MA.autonomyOf(ws, pid, { decisions: lines });
+      if (st.suspended) throw new OpError('REFUSED', `Not recorded: ${st.words}`, { reason: 'MANDATE_SUSPENDED' });
       const g = gateGrade(r.researcher && r.researcher.grade);
       if (action === 'approve' || action === 'halve') {
         if (lines.some((l) => l.receipt_id === rid)) throw new OpError('REFUSED', 'Not recorded: this ticket already has a decision on record. The paper mandate grants only a ticket nobody has decided.', { reason: 'MANDATE_PRIOR_DECISION' });
         const tier = mandateTierOf(g);
         if (!tier || tier.action !== action || tier.name !== mandate.tier) throw new OpError('INVALID', `Not recorded: grade ${g === null ? 'none' : g} gives the paper mandate ${tier ? `${tier.action} (${tier.name})` : 'nothing'}, not ${action} (${mandate.tier || 'no tier'}).`);
+        // A contradictory or malformed prosecution is Eric's to review.
+        const ph = MA.prosecutionHoldOf(ws, r);
+        if (ph) throw new OpError('REFUSED', `Not recorded: ${ph.words}`, { reason: 'MANDATE_PROSECUTION_HOLD', hold: ph.code });
+        // The caps, counted at this write: pending, waiting and open grants
+        // and their exposure hold capacity until they are finished.
+        let cap;
+        try { cap = MA.mandateCapacity(ws, { now: Date.now() }); } catch (err) { throw new OpError('REFUSED', `Not recorded: the paper mandate's caps cannot be counted (${String(err && err.message || err).slice(0, 200)}).`, { reason: 'MANDATE_CAP_UNKNOWN' }); }
+        if (cap.grants_today >= m.max_grants_per_day) throw new OpError('REFUSED', `Not recorded: the paper mandate's ${m.max_grants_per_day} grant${m.max_grants_per_day === 1 ? '' : 's'} for today (New York) are made.`, { reason: 'MANDATE_CAP_DAY' });
+        if (cap.open_grants >= m.max_open_grants) throw new OpError('REFUSED', `Not recorded: the paper mandate holds ${cap.open_grants} grant${cap.open_grants === 1 ? '' : 's'} not yet finished, its limit of ${m.max_open_grants}.`, { reason: 'MANDATE_CAP_OPEN', holding: cap.holding });
       } else {
+        if (lines.some((l) => l.receipt_id === rid && !isMandateLine(l))) throw new OpError('REFUSED', 'Not recorded: Eric decided this ticket; the paper mandate never re-opens a ticket with a decision of his.', { reason: 'MANDATE_HUMAN_LATCH' });
         const reportOf = new Map(listReceipts(ws, pid).filter((x) => !x.broken).map((x) => [x.receipt_id, x.researcher ? x.researcher.report_id : null]));
         const was = r.researcher ? r.researcher.report_id : null;
         if (lines.some((l) => l.action === 'reopen' && isMandateLine(l) && reportOf.get(l.receipt_id) === was)) throw new OpError('REFUSED', `Not recorded: the paper mandate already re-opened a ticket on Claude's report ${was}.`, { reason: 'MANDATE_REOPEN_DONE' });
       }
-      mandateLine = { version: MANDATE_VERSION, tier: action === 'reopen' ? null : mandate.tier, grade_used: g, expires_at: m.expires_at, settings_sha256: m.settings_sha256 };
+      mandateLine = { version: MANDATE_VERSION, tier: action === 'reopen' ? null : mandate.tier, grade_used: g, expires_at: m.expires_at, settings_sha256: m.settings_sha256, authority: { version: MA.AUTHORITY_VERSION, generation: m.generation, armed_at: m.armed_at, policy_sha256: m.settings_sha256 } };
     }
     const at = new Date().toISOString();
     let line;
@@ -2439,6 +2510,8 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
     const cv = enforce && held === false ? contractVerdictNow(ws, project, sizing, now) : null;
     if (cv && cv.tier === 'block') return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [cv.words], reason_kind: 'contract_block', why: `The desk's contract gate is closed on Claude's current report ${r.report_id}: ${cv.words} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
     if (cv && cv.tier === 'hold') return { ...base, step: 'contract_evidence', ticket_id: null, report_id: r.report_id, findings: cv.findings.filter((f) => f.tier === 'hold'), why: `The contract gate holds on ${project.name}: ${cv.words} No Prosecutor runs and no receipt is written until the desk observes the contract with nothing holding it (contracts observe).` };
+    const wait = held === false ? exitWaitOf(ws, project, sizing, now) : null;
+    if (wait) return { ...base, step: 'exit_evidence', ticket_id: null, report_id: r.report_id, exit: wait.exit, why: wait.why };
     return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, why: `No ticket on Claude's current report ${r.report_id}: open one (Agent 2).` };
   }
   if (v.ticket.status === 'pending_pm_review') return { ...base, step: 'pm_review', receipt_id: v.ticket.receipt_id, why: 'The ticket waits for Eric\'s PM review. Nothing for an agent to do.' };
@@ -2456,7 +2529,6 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
 // zero history and the tier again.
 const MANDATE_LEASE = 'paper-mandate';
 const MANDATE_LEASE_MS = 10 * 60000;
-const MANDATE_OPEN_PHASES = Object.freeze(['waiting', 'ready', 'order', 'open', 'closing']);
 
 // R4's contract evidence for a mandate grant (a live Pillar 1 observation):
 // the ticket's packet carried an attestation, the verdict now reads and is
@@ -2487,6 +2559,8 @@ function mandateEligible(ws, project, receipt, ctx) {
   const grade = gateGrade(receipt.researcher && receipt.researcher.grade);
   const tier = mandateTierOf(grade);
   if (!tier) return no('R2', `Agent 1's grade is ${grade === null ? 'withheld or none' : grade}, under the paper mandate's floor of ${MANDATE_MIN_GRADE}.`);
+  const ph = require('./mandate-authority').prosecutionHoldOf(ws, receipt);
+  if (ph) return no('R2', ph.words);
   const inv = invalidationOf(ws, project, receipt, { now: ctx.now });
   if (inv.unread || inv.invalidated) return no('R2', `The ticket is ${inv.invalidated ? 'invalidated' : 'not readable for invalidation'}: ${inv.words || 'no words'}`);
   // R3, zero history.
@@ -2520,23 +2594,24 @@ function mandateSweep(ws, { now = Date.now() } = {}) {
   if (!token) return { ...base, status: 'busy', why: 'Another paper mandate sweep is running.', message: 'Another paper mandate sweep is running.' };
   try {
     const out = { ...base, status: 'ok', mandate: { expires_at: m.expires_at, max_grants_per_day: m.max_grants_per_day, max_open_grants: m.max_open_grants }, grants_today: 0, open_grants: 0, why: null };
-    const { ymdInTz } = require('./dates');
-    const today = ymdInTz(new Date(now));
+    const MA = require('./mandate-authority');
     const projects = require('./projects').listProjects(ws).filter((p) => !p.broken);
-    const linesOf = new Map(projects.map((p) => [p.project_id, readDecisions(ws, p.project_id)]));
-    const mandateGrants = [];
-    for (const lines of linesOf.values()) for (const l of lines) if (isMandateLine(l) && (l.action === 'approve' || l.action === 'halve')) mandateGrants.push(l);
-    out.grants_today = mandateGrants.filter((l) => Number.isFinite(Date.parse(l.decided_at)) && ymdInTz(new Date(l.decided_at)) === today).length;
-    // The open grants: a mandate grant in force the trader has not finished.
-    // A book that does not read grants nothing (fail closed).
+    // Strict history: a project whose decisions do not read is skipped, and
+    // the caps, which read every project, are then unknown (fail closed).
+    const unreadable = new Map();
+    const linesOf = new Map(projects.map((p) => {
+      try { return [p.project_id, MA.readDecisionsStrict(ws, p.project_id)]; } catch (err) { unreadable.set(p.project_id, err.message); return [p.project_id, null]; }
+    }));
+    // The caps: grants today, and every grant not yet finished (waiting,
+    // blocked for a reason that may pass, an order, a position, closing).
     let openKnown = true;
     try {
-      const ids = new Set(mandateGrants.map((l) => l.decision_id));
-      const rq = require('./trader-desk').requests(ws, { now: iso(now) });
-      out.open_grants = rq.requests.filter((r) => ids.has(r.decision_id) && r.in_force && MANDATE_OPEN_PHASES.includes(r.phase)).length;
+      const cap = MA.mandateCapacity(ws, { now, projects });
+      out.grants_today = cap.grants_today;
+      out.open_grants = cap.open_grants;
     } catch (err) {
       openKnown = false;
-      out.why = `The trader's requests could not be read (${String(err && err.message || err).slice(0, 160)}), so the paper mandate grants nothing this time.`;
+      out.why = `The paper mandate's caps could not be counted (${String(err && err.message || err).slice(0, 160)}), so it grants nothing this time.`;
     }
     let sources = null;
     try { sources = require('./trader-desk').sourceBindings(ws); } catch (_) { sources = Object.assign(new Map(), { unreadable: true }); }
@@ -2547,11 +2622,18 @@ function mandateSweep(ws, { now = Date.now() } = {}) {
       const pid = p.project_id;
       const skip = (receiptId, rule, words) => out.skipped.push({ project_id: pid, receipt_id: receiptId, rule, words: String(words || '').slice(0, 300) });
       try {
+        if (unreadable.has(pid)) { skip(null, 'R0', unreadable.get(pid)); continue; }
+        const lines = linesOf.get(pid) || [];
+        // Eric's latch: suspended until he rearms (mandate-authority.js).
+        const st = MA.autonomyOf(ws, pid, { project: p, decisions: lines });
+        if (st.suspended) { skip(null, 'R0', st.words); continue; }
         if (!p.identity || p.identity.status !== 'verified') { skip(null, 'R1', 'The project has no verified token binding.'); continue; }
         const latest = listReceipts(ws, pid).filter((x) => !x.broken).pop();
         if (!latest) { skip(null, 'R2', 'The project has no ticket yet.'); continue; }
-        const lines = linesOf.get(pid) || [];
         const inForce = decisionFor(lines, latest.receipt_id);
+        // A ticket Eric decided (veto, pass, watch, any line of his) is his:
+        // never re-opened, never granted.
+        if (lines.some((l) => l.receipt_id === latest.receipt_id && !isMandateLine(l))) { skip(latest.receipt_id, 'R3', 'Eric decided this ticket; the paper mandate never re-opens or grants it.'); continue; }
         // Phase A: a re-open when an exit reading arrived after the ticket
         // froze none, once per Claude report.
         if (inForce && inForce.action === 'reopen') { skip(latest.receipt_id, 'R3', 'The ticket is re-opened and waits for Agent 2\'s new ticket.'); continue; }
@@ -2597,6 +2679,25 @@ function mandateSweep(ws, { now = Date.now() } = {}) {
   } finally {
     leases.releaseLease(ws, MANDATE_LEASE, token);
   }
+}
+
+// Whether the paper mandate has work a sweep could do: it is on, and a pilot
+// project's latest Prosecutor's ticket has no decision yet (a grant, or a
+// re-open when an exit reading arrives). Read only and bounded (one profile,
+// the receipts' list and the decisions per project); the trader job is due
+// on it, so a cold desk runs its first sweep (corrective PR, defect A).
+function mandateDue(ws, now = Date.now()) {
+  if (!mandateOf(ws, now).on) return false;
+  const MA = require('./mandate-authority');
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived' || !readProfile(ws, p.project_id).pilot) continue;
+    const latest = listReceipts(ws, p.project_id).filter((x) => !x.broken).pop();
+    if (!latest || latest.kind === 'desk_gate') continue;
+    let lines;
+    try { lines = MA.readDecisionsStrict(ws, p.project_id); } catch (_) { continue; }
+    if (!lines.some((l) => l.receipt_id === latest.receipt_id)) return true;
+  }
+  return false;
 }
 
 function pilotQueue(ws, { project = null, now = Date.now() } = {}) {
@@ -3203,7 +3304,16 @@ module.exports = {
   mandateContractEvidence,
   mandateEligible,
   mandateSweep,
+  mandateDue,
   MANDATE_LEASE,
+  VERDICTS,
+  TESTS,
+  // The mandate's authority and Eric's latch (core/mandate-authority.js).
+  grantAuthority: (...a) => require('./mandate-authority').grantAuthority(...a),
+  autonomyOf: (...a) => require('./mandate-authority').autonomyOf(...a),
+  setAutonomy: (...a) => require('./mandate-authority').setAutonomy(...a),
+  prosecutionHoldOf: (...a) => require('./mandate-authority').prosecutionHoldOf(...a),
+  readDecisionsStrict: (...a) => require('./mandate-authority').readDecisionsStrict(...a),
   paperWanted,
   countedExits,
   PREGATE_VERSION,

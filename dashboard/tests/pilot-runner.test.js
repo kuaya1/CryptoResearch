@@ -31,7 +31,7 @@ test('the runner no longer spawns through a shell', () => {
 
 // Eric's override (2026-10-25): a Prosecutor on a closed pre-gate. Pure
 // helpers only; nothing is run.
-const { parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, ROLE_TOOLS, FORCE_WORDS } = require('../scripts/pilot');
+const { parse, forcedTicket, runOnline, WEB_TOOLS } = require('../scripts/pilot');
 
 test('the override flag and owner words parse, an "=" inside the words kept', () => {
   const o = parse(['--project=velodrome-finance', '--desk=online', '--force-prosecution', '--owner-words=grade >= 50 = prosecute']);
@@ -53,90 +53,116 @@ test('the override turns the gate step and an undecided desk gate into a ticket,
   assert.equal(forcedTicket({ step: 'research' }, null, on), false);
 });
 
-test('the Prosecutor\'s online instruction asks for force_prosecution only with the override, in Eric\'s words', () => {
-  const plain = roleInstruction('prosecutor', { project: 'olas', forceProsecution: false });
-  assert.match(plain, /needs no Prosecutor/);
-  assert.doesNotMatch(plain, /force_prosecution/);
-  const forced = roleInstruction('prosecutor', { project: 'olas', forceProsecution: true, ownerWords: null });
-  assert.match(forced, /force_prosecution: true/);
-  assert.ok(forced.includes(JSON.stringify(FORCE_WORDS)));
-  assert.match(forced, /Never on a desk gate Eric already decided/);
-  assert.match(forced, /Never decide a ticket, never choose a dollar amount/);
-  assert.doesNotMatch(roleInstruction('researcher', { project: 'olas', forceProsecution: true }), /force_prosecution|start_ticket|save_ticket/);
-});
 
-// Stage 2.1: online, as locally, the Researcher and the Prosecutor are two
-// sessions with no shared transcript, each with only its own connector tools.
-const O = (over = {}) => ({ project: 'olas', desk: 'online', connector: 'mcp__desk', model: null, timeoutMin: 1, forceProsecution: false, ownerWords: null, ...over });
+// Online (cr-pilot-worker@1, corrective PR 2026-10-31): the runner talks to
+// the desk's worker routes; each session gets the desk's frozen prompt and web
+// tools only. A stand-in desk answers each route; nothing is run.
+const DESK = 'https://desk.fictional.example';
+const WTOKEN = 'FICTIONAL-worker-token-0000000000';
+const O = (over = {}) => ({ project: 'olas', desk: 'online', deskUrl: DESK, model: null, timeoutMin: 1, forceProsecution: false, ownerWords: null, ...over });
+const shaOf = (t) => require('crypto').createHash('sha256').update(t, 'utf8').digest('hex');
 
-test('online: each role\'s tools are its own; neither can call the other\'s', () => {
-  const r = roleTools('researcher', O());
-  const p = roleTools('prosecutor', O());
-  for (const t of ['start_ticket', 'get_ticket', 'save_ticket']) assert.ok(!r.includes(`mcp__desk__${t}`), t);
-  for (const t of ['start_research', 'get_research', 'save_research_draft', 'save_report']) assert.ok(!p.includes(`mcp__desk__${t}`), t);
-  assert.ok(!r.includes('mcp__desk') && !p.includes('mcp__desk'), 'never the whole connector');
-  assert.deepEqual(ROLE_TOOLS.researcher.filter((t) => ROLE_TOOLS.prosecutor.includes(t)), ['autonomous_pilot_queue'], 'only the read-only queue is shared');
-});
-
-test('online: research then a ticket are two separate sessions; nothing of the first reaches the second', () => {
+// steps: what each claim finds, in order. answers[op] overrides per call.
+function workerDesk(steps, { prepare = {}, complete = {}, lose = new Set() } = {}) {
   const calls = [];
-  const answers = ['Saved report rp_FICTIONAL_1 after a long transcript about tokenomics.\nNEXT_STEP: ticket', 'Saved receipt tr_FICTIONAL_1.\nNEXT_STEP: pm_review'];
-  const sessions = runOnline(O(), { run: (prompt, opts) => { calls.push({ prompt, opts }); return answers[calls.length - 1]; }, out: () => {} });
-  assert.deepEqual(sessions.map((s) => s.role), ['researcher', 'prosecutor']);
-  assert.equal(calls.length, 2, 'two claude -p sessions, no third');
-  const [a, b] = calls;
-  assert.match(a.prompt, /Agent 1, the Researcher/);
-  assert.match(b.prompt, /Agent 2, the Prosecutor/);
-  assert.ok(!b.prompt.includes('rp_FICTIONAL_1') && !b.prompt.includes('tokenomics'), 'the second session is given nothing the first said');
-  assert.equal(b.prompt, roleInstruction('prosecutor', O()), 'the Prosecutor\'s prompt is fixed, whatever the Researcher answered');
-  assert.deepEqual(a.opts.tools, roleTools('researcher', O()));
-  assert.deepEqual(b.opts.tools, roleTools('prosecutor', O()));
-});
+  let n = 0;
+  const prompts = { research: 'FROZEN RESEARCH PROMPT (FICTIONAL) cr-research-prompt@6', ticket: 'FROZEN PROSECUTOR PROMPT (FICTIONAL) cr-ticket-prompt@1' };
+  const fetchImpl = async (url, init) => {
+    const op = url.slice(`${DESK}/api/pilot/worker/`.length);
+    const body = JSON.parse(init.body);
+    calls.push({ op, body, auth: init.headers.authorization });
+    if (lose.has(op)) throw Object.assign(new Error('socket hang up'), { name: 'Error' });
+    const json = (o) => ({ status: 200, ok: true, json: async () => ({ format: 'cr-pilot-worker@1', ...o }) });
+    if (op === 'claim') {
+      const step = steps[n] || 'pm_review';
+      n += 1;
+      if (['pm_review', 'done'].includes(step)) return json({ status: 'nothing', step });
+      if (['paused', 'claimed', 'session_ceiling', 'reconcile'].includes(step)) return json({ status: step, step: 'research', words: `FICTIONAL ${step}` });
+      return json({ status: 'claimed_now', step, key: `${step}:-`, token: 'a'.repeat(20), attempt_id: `pa_${n}`, expires_at: '2099-01-01T00:00:00.000Z' });
+    }
+    if (op === 'prepare') {
+      const step = steps[n - 1];
+      if (prepare[step]) return json(prepare[step]);
+      const text = step === 'research' ? prompts.research : prompts.ticket;
+      return json({ status: 'prepared', role: step === 'research' ? 'researcher' : 'prosecutor', attempt_id: `pa_${n}`, run_id: step === 'research' ? 'run_FICTIONAL' : null, ticket_id: step === 'research' ? null : 'tk_FICTIONAL', prompt: text, prompt_sha256: shaOf(text), sessions: { used: n, ceiling: 6 } });
+    }
+    if (op === 'complete') return json(complete[steps[n - 1]] || { status: 'saved', report_id: 'rp_FICTIONAL', receipt_id: 'tr_FICTIONAL' });
+    if (op === 'release') return json({ status: 'released', outcome: body.outcome });
+    return { status: 404, ok: false, json: async () => ({ error: 'Unknown API route' }) };
+  };
+  return { calls, fetchImpl, prompts };
+}
 
-test('online: the steps decide the roles; the override has one Prosecutor; a missing NEXT_STEP stops', () => {
-  assert.equal(roleForStep(null, O()), 'researcher');
-  assert.equal(roleForStep('research', O()), 'researcher');
-  for (const s of ['ticket', 'ticket_failed', 'gate_closed']) assert.equal(roleForStep(s, O()), 'prosecutor', s);
-  for (const s of ['pm_review', 'done', 'blocked', 'unknown']) assert.equal(roleForStep(s, O()), null, s);
-  assert.equal(roleForStep('pm_review', O({ forceProsecution: true })), 'prosecutor');
-  assert.equal(roleForStep('pm_review', O({ forceProsecution: true }), { forced: true }), null);
-  assert.equal(nextStepOf('…\nNEXT_STEP: gate_closed\n'), 'gate_closed');
-  assert.equal(nextStepOf('NEXT_STEP: ticket\nNEXT_STEP: pm_review'), 'pm_review', 'the last line counts');
-  assert.equal(nextStepOf('NEXT_STEP: order_now'), null, 'only the queue\'s own steps');
-  assert.equal(nextStepOf('no step line'), null);
-  // A forced run asks one Prosecutor on the pending desk gate, then stops.
-  const seen = [];
-  runOnline(O({ forceProsecution: true }), { run: (prompt) => { seen.push(prompt); return seen.length === 1 ? 'NEXT_STEP: pm_review' : 'NEXT_STEP: pm_review'; }, out: () => {} });
-  assert.equal(seen.length, 2, 'the researcher reads the queue, one forced Prosecutor, then the runner stops');
-  assert.throws(() => runOnline(O(), { run: () => 'I did some things.', out: () => {} }), /did not end with a NEXT_STEP line/);
-  assert.throws(() => runOnline(O(), { run: () => 'NEXT_STEP: research', out: () => {} }), /research step is still open/);
-});
-
-test('online: a paused desk dispatches no agent after the session that read the queue, and says why', () => {
-  const { PAUSED_WORDS } = require('../scripts/pilot');
-  assert.equal(nextStepOf('The queue is paused.\nNEXT_STEP: paused'), 'paused');
-  for (const role of ['researcher', 'prosecutor']) assert.match(roleInstruction(role, O()), /answers "paused".*call nothing else.*NEXT_STEP: paused/, role);
-  for (const over of [{}, { forceProsecution: true }]) {
-    const lines = [];
-    const prompts = [];
-    const sessions = runOnline(O(over), { run: (prompt) => { prompts.push(prompt); return 'NEXT_STEP: paused'; }, out: (s) => lines.push(s) });
-    assert.equal(prompts.length, 1, 'only the first session, which reads the queue');
-    assert.deepEqual(sessions.map((s) => s.role), ['researcher']);
-    assert.equal(lines[lines.length - 1], PAUSED_WORDS);
+test('online: research then a ticket are two sessions on the desk\'s frozen prompts, web tools only, no desk token', async () => {
+  const d = workerDesk(['research', 'ticket', 'pm_review']);
+  const runs = [];
+  const r = await runOnline(O(), { run: (prompt, opts) => { runs.push({ prompt, opts }); return runs.length === 1 ? 'Report text about tokenomics (FICTIONAL).' : 'Ticket text (FICTIONAL).'; }, out: () => {}, fetchImpl: d.fetchImpl, token: WTOKEN });
+  assert.deepEqual(r.sessions.map((s) => s.role), ['researcher', 'prosecutor']);
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].prompt, d.prompts.research, 'the Researcher gets the run\'s frozen prompt byte for byte');
+  assert.equal(runs[1].prompt, d.prompts.ticket, 'the Prosecutor gets the ticket\'s frozen prompt, nothing the Researcher said');
+  for (const x of runs) {
+    assert.deepEqual(x.opts.tools, WEB_TOOLS, 'web tools only: no connector, no desk tool');
+    assert.ok(!x.prompt.includes(WTOKEN), 'the worker token never reaches a session');
   }
-  // Paused while the chain runs: the session that saw it is the last one.
-  const roles = [];
-  const lines = [];
-  runOnline(O(), { run: (prompt) => { roles.push(/Agent 2/.test(prompt) ? 'prosecutor' : 'researcher'); return roles.length === 1 ? 'Saved.\nNEXT_STEP: ticket' : 'NEXT_STEP: paused'; }, out: (s) => lines.push(s) });
-  assert.deepEqual(roles, ['researcher', 'prosecutor'], 'no session after the pause');
-  assert.equal(lines[lines.length - 1], PAUSED_WORDS);
+  assert.deepEqual(d.calls.map((c) => c.op), ['claim', 'prepare', 'complete', 'claim', 'prepare', 'complete', 'claim']);
+  assert.ok(d.calls.every((c) => c.auth === `Bearer ${WTOKEN}`));
+  const done = d.calls.filter((c) => c.op === 'complete');
+  assert.deepEqual(done.map((c) => c.body.prompt_sha256), [shaOf(d.prompts.research), shaOf(d.prompts.ticket)], 'each answer names the prompt it answered');
 });
 
-test('online --dry-run shows each role\'s session and runs none', () => {
+test('online: a lost answer to complete keeps the claim dispatched and runs nothing again', async () => {
+  const d = workerDesk(['research'], { lose: new Set(['complete']) });
+  let sessions = 0;
   const lines = [];
-  const sessions = runOnline(O({ dryRun: true }), { run: () => assert.fail('nothing runs'), out: (s) => lines.push(s) });
-  assert.deepEqual(sessions, []);
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /researcher/);
-  assert.match(lines[1], /prosecutor/);
+  const r = await runOnline(O(), { run: () => { sessions += 1; return 'Report (FICTIONAL).'; }, out: (s) => lines.push(s), fetchImpl: d.fetchImpl, token: WTOKEN });
+  assert.equal(r.stop, 'reconcile');
+  assert.equal(sessions, 1, 'no second session');
+  assert.ok(!d.calls.some((c) => c.op === 'release'), 'an unknown outcome is never released by the runner');
+  assert.equal(d.calls.filter((c) => c.op === 'complete').length, 1, 'complete is not retried');
+  assert.match(r.words, /online desk.*pilot-claim\/release.*reconciled/);
+  assert.match(r.words, /kept at .*agent1-report\.md/);
+});
+
+test('online: a lost answer to prepare is uncertain too; nothing runs, nothing is released', async () => {
+  const d = workerDesk(['research'], { lose: new Set(['prepare']) });
+  const r = await runOnline(O(), { run: () => assert.fail('no session'), out: () => {}, fetchImpl: d.fetchImpl, token: WTOKEN });
+  assert.equal(r.stop, 'reconcile');
+  assert.ok(!d.calls.some((c) => c.op === 'release'));
+});
+
+test('online: a session that timed out is uncertain; one that failed is released as agent_failed', async () => {
+  const a = workerDesk(['research']);
+  const t1 = await runOnline(O(), { run: () => { throw Object.assign(new Error('claude -p did not finish (ETIMEDOUT) within 1 minutes.'), { uncertain: true }); }, out: () => {}, fetchImpl: a.fetchImpl, token: WTOKEN });
+  assert.equal(t1.stop, 'reconcile');
+  assert.ok(!a.calls.some((c) => c.op === 'release' || c.op === 'complete'));
+  const b = workerDesk(['research']);
+  const t2 = await runOnline(O(), { run: () => { throw new Error('claude -p stopped (exit 1): FICTIONAL'); }, out: () => {}, fetchImpl: b.fetchImpl, token: WTOKEN });
+  assert.equal(t2.stop, 'agent_failed');
+  assert.deepEqual(b.calls.filter((c) => c.op === 'release').map((c) => c.body.outcome), ['agent_failed']);
+  assert.ok(!b.calls.some((c) => c.op === 'complete'));
+});
+
+test('online: a prompt that did not arrive whole runs no session', async () => {
+  const d = workerDesk(['research'], { prepare: { research: { status: 'prepared', role: 'researcher', attempt_id: 'pa_1', run_id: 'run_FICTIONAL', prompt: 'TRUNCATED', prompt_sha256: 'f'.repeat(64) } } });
+  const r = await runOnline(O(), { run: () => assert.fail('no session'), out: () => {}, fetchImpl: d.fetchImpl, token: WTOKEN });
+  assert.equal(r.stop, 'integrity');
+  assert.deepEqual(d.calls.map((c) => c.op), ['claim', 'prepare', 'release']);
+});
+
+test('online: a paused desk, another runner\'s claim or the day\'s ceiling dispatch nothing', async () => {
+  for (const s of ['paused', 'claimed', 'session_ceiling', 'reconcile']) {
+    const d = workerDesk([s]);
+    const r = await runOnline(O(), { run: () => assert.fail('no session'), out: () => {}, fetchImpl: d.fetchImpl, token: WTOKEN });
+    assert.equal(r.stop, s, s);
+    assert.deepEqual(d.calls.map((c) => c.op), ['claim'], s);
+  }
+});
+
+test('online: the override is local only, and --dry-run runs and asks nothing', async () => {
+  await assert.rejects(runOnline(O({ forceProsecution: true }), { run: () => assert.fail('no session'), out: () => {}, fetchImpl: () => assert.fail('no request'), token: WTOKEN }), /local only/);
+  const lines = [];
+  const r = await runOnline(O({ dryRun: true }), { run: () => assert.fail('nothing runs'), out: (s) => lines.push(s), fetchImpl: () => assert.fail('no request') });
+  assert.deepEqual(r.sessions, []);
+  assert.match(lines[0], /web|WebSearch/);
 });

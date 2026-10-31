@@ -147,6 +147,10 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
   // The pilot runner's zero-token pre-poll (core/pilot-poll.js;
   // CR_PILOT_POLL_TOKEN_SHA256, read per request; 404 without it).
   const pilotPoll = require('./core/pilot-poll').makePilotPollRoute(ws, { env: process.env, log });
+  // The pilot runner's worker routes (core/pilot-worker.js;
+  // CR_PILOT_WORKER_TOKEN_SHA256, read per request; 404 without it): claim,
+  // prepare, complete and release one step, nothing else.
+  const pilotWorker = require('./core/pilot-worker').makePilotWorkerRoute(ws, { env: process.env, log, onWrite: () => rebuild(['api']) });
 
   const listener = async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -176,6 +180,7 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
       // The pilot's pre-poll: its own bearer, before and apart from the
       // sign-in and the session token. Read-only names and IDs.
       if (url.pathname === '/api/pilot/queue') return pilotPoll(req, res);
+      if (url.pathname.startsWith('/api/pilot/worker/')) return await pilotWorker(req, res, url);
       if (oauth) {
         // The connector has its own sign-in (OAuth) and never uses the
         // dashboard's session cookie.
