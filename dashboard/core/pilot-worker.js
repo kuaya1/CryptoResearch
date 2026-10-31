@@ -20,7 +20,14 @@
 //             the day's session first) and returns the exact frozen prompt
 //             with its SHA-256. A gate_closed step saves the desk's own gate
 //             receipt and starts no session. A claim already prepared is
-//             never prepared again: its outcome is unknown.
+//             never prepared again: its outcome is unknown. One locked
+//             transition (claimed → preparing, pilot-claims.js
+//             beginPreparation) picks the one request that prepares an
+//             attempt; an overlapping or later one gets already_prepared, no
+//             prompt, and changes nothing. After the exit quote's network
+//             wait, the claim is read again and the bind checks the token,
+//             the state, the expiry, the pause and the day's ceiling at the
+//             time of the bind (the route's clock), not of the request.
 //   complete  the session's answer, for the prompt it answered (SHA-256): the
 //             desk saves it through the same paths a local import uses
 //             (inbox.importContent, tickets.saveTicket), verifies that the
@@ -92,22 +99,43 @@ function letGo(ws, pid, token, outcome, now) {
   try { return claims.release(ws, pid, { token, outcome, now }); } catch (_) { return null; }
 }
 
-async function prepare(ws, pid, token, { now = Date.now(), fetchImpl } = {}) {
-  const tk = require('./tickets');
-  const cur = claims.held(ws, pid, token);
-  if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was prepared.`);
-  if (cur.state === 'dispatched') {
-    return { format: FORMAT, status: 'already_prepared', project_id: pid, ...idsOf(cur), words: `Attempt ${cur.attempt_id} was already prepared (${cur.run_id || cur.ticket_id || 'no record'}). Its session's outcome is unknown, so nothing is handed out twice: complete it, or after it expires Eric reconciles it.` };
+// A prepare that does not authorize a session: the attempt is being, or was,
+// prepared by another request. Nothing is written; no prompt is given.
+function alreadyPrepared(pid, cur) {
+  const words = cur.state === 'preparing'
+    ? `Attempt ${cur.attempt_id} is being prepared by another request (since ${cur.preparing_at}). This request authorizes no session and changed nothing.`
+    : `Attempt ${cur.attempt_id} was already prepared (${cur.run_id || cur.ticket_id || 'no record'}). Its session's outcome is unknown, so nothing is handed out twice: complete it, or after it expires Eric reconciles it.`;
+  return { format: FORMAT, status: 'already_prepared', state: cur.state, project_id: pid, ...idsOf(cur), words };
+}
+
+// The locked bind that authorizes the one session, at the time it happens.
+// A claim another request bound in the meantime is not handed out again.
+function finalize(ws, pid, token, args) {
+  try {
+    return claims.bind(ws, pid, token, { ...args, from: 'preparing' });
+  } catch (err) {
+    if (err && err.code === 'ALREADY_BOUND') return { already: alreadyPrepared(pid, claims.held(ws, pid, token)) };
+    throw err;
   }
-  const step = tk.pilotQueue(ws, { project: pid, now })[0];
-  if (!step || claims.transitionKey(step) !== cur.key) {
-    letGo(ws, pid, token, 'changed', now);
+}
+
+// `clock` gives the time of each step (the route passes its own); a fixed
+// `now` is used for every step when no clock is given.
+async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
+  const tk = require('./tickets');
+  const at = typeof clock === 'function' ? clock : now !== undefined ? () => now : () => Date.now();
+  // One locked transition decides which request prepares this attempt.
+  const begun = claims.beginPreparation(ws, pid, token, { now: at() });
+  if (begun.status === 'already') return alreadyPrepared(pid, begun.claim);
+  const cur = begun.claim;
+  const step = begun.step;
+  if (begun.status === 'changed') {
     return { format: FORMAT, status: 'changed', project_id: pid, ...idsOf(cur), words: `The desk's next step is now ${step ? claims.transitionKey(step) : 'none'}, not ${cur.key}; the claim was let go and nothing was prepared.` };
   }
   const utterance = 'autonomous pilot (online worker)';
   if (step.step === 'gate_closed') {
     const g = tk.createTicket(ws, { project_id: pid, channel: 'pilot worker', assistant: false, mode: 'worker', utterance });
-    letGo(ws, pid, token, g.status === 'gate_closed' ? 'done' : 'not_started', now);
+    letGo(ws, pid, token, g.status === 'gate_closed' ? 'done' : 'not_started', at());
     return { format: FORMAT, status: g.status === 'gate_closed' ? 'gate_closed' : 'not_started', project_id: pid, ...idsOf(cur), receipt_id: g.receipt_id || null, session: false, words: g.message || null };
   }
   if (step.step === 'research') {
@@ -117,40 +145,45 @@ async function prepare(ws, pid, token, { now = Date.now(), fetchImpl } = {}) {
       const r = research.createRun(ws, { project_id: pid, providers: 'claude', channel: 'pilot worker (cowork)', assistant: 'claude', utterance });
       runId = r.run_id || null;
       if (!runId) {
-        letGo(ws, pid, token, 'not_started', now);
+        letGo(ws, pid, token, 'not_started', at());
         return { format: FORMAT, status: 'not_started', project_id: pid, ...idsOf(cur), words: r.message || 'No research run was opened.' };
       }
     }
     const run = research.loadRun(ws, pid, runId);
     if (!run || !run.prompt || !run.prompt.path) {
-      letGo(ws, pid, token, 'not_started', now);
+      letGo(ws, pid, token, 'not_started', at());
       throw new OpError('INTEGRITY', `Research run ${runId} has no frozen prompt on the desk; nothing was prepared.`);
     }
     const text = require('fs').readFileSync(ws.abs(run.prompt.path), 'utf8');
     if (sha256(text) !== run.prompt.sha256) {
-      letGo(ws, pid, token, 'not_started', now);
+      letGo(ws, pid, token, 'not_started', at());
       throw new OpError('INTEGRITY', `Research run ${runId}'s frozen prompt no longer matches its SHA-256; nothing was prepared.`);
     }
-    const b = claims.bind(ws, pid, token, { run_id: runId, now, extra: { role: 'researcher', prompt_sha256: run.prompt.sha256 } });
+    const b = finalize(ws, pid, token, { run_id: runId, now: at(), extra: { role: 'researcher', prompt_sha256: run.prompt.sha256 } });
+    if (b.already) return b.already;
     return { format: FORMAT, status: 'prepared', role: 'researcher', project_id: pid, ...idsOf(b.claim), prompt: text, prompt_sha256: run.prompt.sha256, prompt_version: run.prompt.version || null, sessions: b.sessions };
   }
   if (step.step === 'ticket' || step.step === 'ticket_failed') {
     const exit_quote = await tk.prepareExitQuote(ws, pid, { fetchImpl }).catch(() => null);
+    // The quote took time: the claim is read again, at the time now, before
+    // anything is opened. The bind below is what decides.
+    claims.assertPreparing(ws, pid, token, { now: at() });
     const t = tk.createTicket(ws, { exit_quote, project_id: pid, channel: 'pilot worker', assistant: true, mode: 'worker', utterance, reopen: Boolean(step.refresh) });
     if (!t.ticket_id) {
-      letGo(ws, pid, token, t.status === 'gate_closed' ? 'done' : 'not_started', now);
+      letGo(ws, pid, token, t.status === 'gate_closed' ? 'done' : 'not_started', at());
       return { format: FORMAT, status: t.status === 'gate_closed' ? 'gate_closed' : 'not_started', project_id: pid, ...idsOf(cur), receipt_id: t.receipt_id || null, session: false, words: t.message || null };
     }
     const ticket = tk.loadTicket(ws, pid, t.ticket_id);
     const p = ticket ? tk.promptFor(ws, ticket) : { text: null, error: `No ticket ${t.ticket_id}.` };
     if (!p.text) {
-      letGo(ws, pid, token, 'not_started', now);
+      letGo(ws, pid, token, 'not_started', at());
       throw new OpError('INTEGRITY', `${p.error} Nothing was prepared.`);
     }
-    const b = claims.bind(ws, pid, token, { ticket_id: t.ticket_id, now, extra: { role: 'prosecutor', prompt_sha256: p.sha256 } });
+    const b = finalize(ws, pid, token, { ticket_id: t.ticket_id, now: at(), extra: { role: 'prosecutor', prompt_sha256: p.sha256 } });
+    if (b.already) return b.already;
     return { format: FORMAT, status: 'prepared', role: 'prosecutor', project_id: pid, ...idsOf(b.claim), prompt: p.text, prompt_sha256: p.sha256, prompt_version: p.version || null, sessions: b.sessions };
   }
-  letGo(ws, pid, token, 'nothing', now);
+  letGo(ws, pid, token, 'nothing', at());
   return { format: FORMAT, status: 'nothing', project_id: pid, ...idsOf(cur), words: step.why || 'Nothing for an agent to do.' };
 }
 
@@ -225,7 +258,7 @@ function readBody(req) {
   });
 }
 
-const STATUS_OF_CODE = { NOT_FOUND: 404, BAD_ID: 400, INVALID: 400, REFUSED: 409, CHANGED: 409, PAUSED: 409, SESSION_CEILING: 409, UNREADABLE: 503, INTEGRITY: 409, WORKSPACE_BUSY: 503, WRITES_BLOCKED: 503 };
+const STATUS_OF_CODE = { NOT_FOUND: 404, BAD_ID: 400, INVALID: 400, REFUSED: 409, CHANGED: 409, PAUSED: 409, SESSION_CEILING: 409, ALREADY_BOUND: 409, UNREADABLE: 503, INTEGRITY: 409, WORKSPACE_BUSY: 503, WRITES_BLOCKED: 503 };
 
 function makePilotWorkerRoute(ws, { env = process.env, log = () => {}, now = () => Date.now(), fetchImpl, onWrite = () => {} } = {}) {
   const calls = hourBucket(LIMIT_PER_HOUR);
@@ -257,7 +290,7 @@ function makePilotWorkerRoute(ws, { env = process.env, log = () => {}, now = () 
       else {
         const token = typeof body.token === 'string' && /^[0-9a-f]{20}$/.test(body.token) ? body.token : null;
         if (!token) throw new OpError('INVALID', 'token is the claim\'s token.');
-        if (op === 'prepare') out = await prepare(ws, pid, token, { now: t, fetchImpl });
+        if (op === 'prepare') out = await prepare(ws, pid, token, { clock: now, fetchImpl });
         else if (op === 'complete') out = complete(ws, pid, token, { text: body.text, prompt_sha256: body.prompt_sha256, now: t });
         else out = releaseByWorker(ws, pid, token, { outcome: body.outcome, now: t });
       }

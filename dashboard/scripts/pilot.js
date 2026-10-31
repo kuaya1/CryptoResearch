@@ -32,16 +32,19 @@
 // the day's ceiling before it starts (automation.pilot_daily_sessions), the
 // Researcher's and the Prosecutor's sessions share no transcript and hold no
 // desk credential, and the chain stops at Eric's PM review: it never decides
-// a ticket, places an order or moves money.
+// a ticket, places an order or moves money. What a session can use is set by
+// its launch (cr-pilot-launch@1, below), checked before any claim is taken.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const http = require('http');
+const { spawnSync, spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const CLI = path.join(ROOT, 'dashboard', 'cli.js');
-const WEB_TOOLS = ['WebSearch', 'WebFetch'];
+const AGENT_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
+const WEB_TOOLS = AGENT_TOOLS;
 const MAX_STEPS = 4;
 
 // Eric's override (2026-10-25): a Prosecutor writes the trade plan although the
@@ -65,6 +68,7 @@ function parse(argv) {
     else if (k === 'pilot-all') out.pilotAll = true;
     else if (k === 'max-agents') out.maxAgents = Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10 ? Number(v) : out.maxAgents;
     else if (k === 'desk-url') out.deskUrl = v || null;
+    else if (k === 'check-isolation') out.checkIsolation = true;
     else if (k === 'help') out.help = true;
   }
   return out;
@@ -99,18 +103,280 @@ function resolveClaude({ platform = process.platform, env = process.env, exists 
   throw new Error('claude.exe was not found on PATH or in its usual install folders. Install Claude Code, or add its folder to PATH.');
 }
 
-// One `claude -p` session: the prompt on stdin (a frozen prompt is far longer
-// than a Windows command line), only the tools named, the answer as text.
-function claude(prompt, { tools, model, timeoutMin }) {
-  const args = ['-p', '--output-format', 'text', '--allowedTools', tools.join(',')];
-  if (model) args.push('--model', model);
-  const r = spawnSync(resolveClaude(), args, { cwd: os.tmpdir(), input: prompt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: timeoutMin * 60000 });
-  // A session that timed out or was stopped by a signal may still have been
-  // working: its outcome is uncertain, never retried.
-  if ((r.error && r.error.code === 'ETIMEDOUT') || r.signal) throw Object.assign(new Error(`claude -p did not finish (${r.error ? r.error.code : r.signal}) within ${timeoutMin} minutes.`), { uncertain: true });
-  if (r.error) throw new Error(`claude -p could not run: ${r.error.message}`);
-  if (r.status !== 0) throw new Error(`claude -p stopped (exit ${r.status}): ${(r.stderr || '').trim().slice(0, 600)}`);
-  return r.stdout;
+// ---------------------------------------------------------------------------
+// The agent session's boundary (cr-pilot-launch@1, worker boundary PR
+// 2026-10-31). `--allowedTools` only pre-approves tools; it never limited what
+// a session had (the audit: shell, files, edits, delegation, Chrome and the
+// claude.ai connectors were all there, with Eric's CLAUDE.md). Each session is
+// now launched with Claude Code's documented controls:
+//
+//   --tools WebSearch,WebFetch        the built-in tools the model has: these two
+//   --strict-mcp-config               no MCP server but the --mcp-config one,
+//   --mcp-config {"mcpServers":{}}    which is empty
+//   --disallowedTools mcp__*,…        every MCP tool and the shell, file,
+//                                     delegation and skill tools taken out again
+//   --permission-mode dontAsk         anything not pre-approved is refused
+//   --restricted                      no user, project or local settings file
+//                                     (their permissions, hooks, MCP and model)
+//   --safe-mode                       no CLAUDE.md, skills, plugins, hooks, MCP,
+//                                     custom agents or commands, auto memory
+//   --settings {"disableAllHooks":…,"disableClaudeAiConnectors":true}
+//   --disable-slash-commands, --no-chrome, --no-session-persistence
+//   env ENABLE_CLAUDEAI_MCP_SERVERS=false (the desk's own connector included)
+//
+// Subscription sign-in stays (no --bare, no API key): the session's
+// environment keeps the system variables, the proxy and certificate ones and
+// Claude Code's own sign-in and model variables, and nothing else (no CR_*,
+// no ANTHROPIC_API_KEY, which -p would bill instead of the subscription, no
+// parent-session variables). The model and effort Eric's Claude Code
+// settings choose (model, effortLevel) are passed as --model and --effort,
+// since --restricted no longer reads that file; --model and ANTHROPIC_MODEL
+// still come first. Each session runs in a new empty folder.
+//
+// Fail closed: before any claim, the installed CLI must list every flag above
+// (--help), no managed policy may be installed (it could add hooks or allow
+// rules no flag removes), and a probe must pass: the same command, against a
+// local stand-in for the model endpoint with a placeholder key (nothing is
+// generated or billed), may offer the model WebSearch and WebFetch only, with
+// no MCP tool anywhere in the request. A session is never started on a
+// command line that did not pass in this run. This bounds what the model can
+// call; it is not an operating-system sandbox: the claude process itself
+// runs as Eric, with his files reachable to that process.
+const LAUNCH_FORMAT = 'cr-pilot-launch@1';
+const DENIED_TOOLS = Object.freeze(['mcp__*', 'Bash', 'PowerShell', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep', 'Agent', 'Task', 'Skill', 'ToolSearch', 'Workflow', 'ListAgents', 'SendMessage']);
+const SESSION_SETTINGS = Object.freeze({ disableAllHooks: true, disableClaudeAiConnectors: true });
+const REQUIRED_FLAGS = Object.freeze(['--print', '--output-format', '--tools', '--allowedTools', '--disallowedTools', '--permission-mode', '--strict-mcp-config', '--mcp-config', '--restricted', '--safe-mode', '--settings', '--disable-slash-commands', '--no-chrome', '--no-session-persistence', '--model', '--effort']);
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/;
+// The environment a session keeps (names, any case); everything else is dropped.
+const ENV_KEEP = new Set([
+  'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'COMSPEC', 'PATHEXT', 'PATH', 'TEMP', 'TMP', 'TMPDIR', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'HOME',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'COMMONPROGRAMFILES', 'COMMONPROGRAMFILES(X86)', 'COMMONPROGRAMW6432',
+  'ALLUSERSPROFILE', 'PUBLIC', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'OS', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR',
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'ALL_PROXY', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_GIT_BASH_PATH', 'ANTHROPIC_MODEL',
+]);
+const ENV_KEEP_RE = /^ANTHROPIC_DEFAULT_[A-Z0-9]+_MODEL$/;
+const PROBE_KEY = 'sk-ant-api03-cr-pilot-isolation-probe-not-a-key';
+const PROBE_PROMPT = 'cr-pilot-launch@1 isolation probe: nothing is generated.';
+const PLACEHOLDER = 'DeferredToolPlaceholder';
+
+const isolationError = (words) => Object.assign(new Error(`The agent session's tool boundary could not be established: ${words} No claim was taken and no session was started.`), { code: 'ISOLATION' });
+
+function launchEnv(parent = process.env) {
+  const out = {};
+  for (const k of Object.keys(parent)) {
+    const u = k.toUpperCase();
+    if (ENV_KEEP.has(u) || ENV_KEEP_RE.test(u)) out[k] = parent[k];
+  }
+  out.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
+  return out;
+}
+
+// The model and effort Eric's Claude Code settings choose (model,
+// effortLevel), from %USERPROFILE%\.claude\settings.json or CLAUDE_CONFIG_DIR.
+// Only those two keys are read; a file that does not read chooses nothing,
+// as Claude Code itself ignores it in -p.
+function userModelSettings(env = process.env, { read = (f) => fs.readFileSync(f, 'utf8') } = {}) {
+  const dir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  let s = null;
+  try { s = JSON.parse(read(path.join(dir, 'settings.json'))); } catch (_) { return { model: null, effort: null }; }
+  return { model: s && typeof s.model === 'string' ? s.model : null, effort: s && typeof s.effortLevel === 'string' ? s.effortLevel : null };
+}
+
+// --model, else ANTHROPIC_MODEL (kept in the session's environment), else
+// the settings' model; the settings' effort.
+function sessionChoice(model, env, settings) {
+  const m = model || (env.ANTHROPIC_MODEL ? null : settings.model || null);
+  if (m && !MODEL_RE.test(m)) throw isolationError(`"${String(m).slice(0, 60)}" is not a model name.`);
+  const effort = settings.effort && EFFORTS.has(settings.effort) ? settings.effort : null;
+  return { model: m, effort };
+}
+
+function launchArgs({ model = null, effort = null } = {}) {
+  return [
+    '--print', '--output-format', 'text',
+    '--tools', AGENT_TOOLS.join(','),
+    '--allowedTools', AGENT_TOOLS.join(','),
+    '--disallowedTools', DENIED_TOOLS.join(','),
+    '--permission-mode', 'dontAsk',
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+    '--restricted', '--safe-mode',
+    '--settings', JSON.stringify(SESSION_SETTINGS),
+    '--disable-slash-commands', '--no-chrome', '--no-session-persistence',
+    ...(model ? ['--model', model] : []),
+    ...(effort ? ['--effort', effort] : []),
+  ];
+}
+
+// Each session's own new, empty folder (not a boundary: the model has no file tool).
+function sessionDir() {
+  const base = path.join(os.tmpdir(), 'cr-pilot', 'session');
+  fs.mkdirSync(base, { recursive: true });
+  return fs.mkdtempSync(path.join(base, 's-'));
+}
+
+// Managed (policy) settings can add hooks, allow rules or MCP servers that no
+// launch flag removes, so a machine that has them is refused.
+function managedPolicy({ platform = process.platform, env = process.env, exists = fs.existsSync, reg = null } = {}) {
+  const files = platform === 'win32'
+    ? [...new Set([env.ProgramW6432, env.ProgramFiles, 'C:\\Program Files'].filter(Boolean))].flatMap((d) => ['managed-settings.json', 'managed-mcp.json'].map((n) => path.win32.join(d, 'ClaudeCode', n)))
+    : platform === 'darwin' ? ['/Library/Application Support/ClaudeCode/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-mcp.json']
+      : ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-mcp.json'];
+  const found = files.filter((f) => exists(f));
+  if (platform === 'win32') {
+    const query = reg || ((key) => spawnSync(path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'reg.exe'), ['query', key], { encoding: 'utf8', windowsHide: true, timeout: 15000 }));
+    for (const key of ['HKLM\\SOFTWARE\\Policies\\ClaudeCode', 'HKCU\\SOFTWARE\\Policies\\ClaudeCode']) {
+      const r = query(key);
+      if (!r || r.error || (r.status !== 0 && r.status !== 1)) found.push(`${key} (could not be read)`);
+      else if (r.status === 0) found.push(key);
+    }
+  }
+  return found;
+}
+
+// What the installed CLI says it supports, without generating anything.
+function checkHelp(bin, env, { run = spawnSync } = {}) {
+  const r = run(bin.file, [...bin.args, '--help'], { encoding: 'utf8', env: launchEnv(env), timeout: 60000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+  if (!r || r.error || r.status !== 0) throw isolationError(`claude --help did not run (${r && r.error ? r.error.code || r.error.message : `exit ${r && r.status}`}).`);
+  const text = String(r.stdout || '');
+  const missing = REQUIRED_FLAGS.filter((f) => !new RegExp(`(^|[\\s,])${f.replace(/[-]/g, '\\-')}(?=[\\s,<=]|$)`, 'm').test(text));
+  if (!/"dontAsk"/.test(text)) missing.push('--permission-mode "dontAsk"');
+  if (missing.length) throw isolationError(`the installed Claude Code does not list ${missing.join(', ')} (claude --help).`);
+  const v = run(bin.file, [...bin.args, '--version'], { encoding: 'utf8', env: launchEnv(env), timeout: 30000, windowsHide: true });
+  return v && v.status === 0 ? String(v.stdout || '').trim().slice(0, 80) : null;
+}
+
+// One tool the model is offered, judged: WebSearch or WebFetch; Claude Code's
+// inert deferred-loading placeholder (no input, never callable); nothing else.
+function toolAllowed(t) {
+  if (!t || typeof t !== 'object') return false;
+  if (AGENT_TOOLS.includes(t.name) && (!t.type || t.type === 'custom')) return true;
+  if ((t.name === 'web_search' && /^web_search_\d+$/.test(String(t.type))) || (t.name === 'web_fetch' && /^web_fetch_\d+$/.test(String(t.type)))) return true;
+  const props = t.input_schema && t.input_schema.properties ? Object.keys(t.input_schema.properties) : [];
+  return t.name === PLACEHOLDER && t.defer_loading === true && props.length === 0;
+}
+
+// The probe's verdict on the model requests the CLI sent to the stand-in.
+function judgeProbe(bodies) {
+  if (!bodies.length) return { ok: false, words: 'the probe saw no model request, so what the session would be offered is unknown.' };
+  const seen = new Set();
+  for (const raw of bodies) {
+    let j = null;
+    try { j = JSON.parse(raw); } catch (_) { return { ok: false, words: 'the probe could not read a model request.' }; }
+    const tools = Array.isArray(j && j.tools) ? j.tools : [];
+    const extra = tools.filter((t) => !toolAllowed(t)).map((t) => String((t && t.name) || (t && t.type) || '?'));
+    if (extra.length) return { ok: false, words: `the session would be offered ${[...new Set(extra)].slice(0, 12).join(', ')}, beyond ${AGENT_TOOLS.join(' and ')}.` };
+    if (Array.isArray(j.mcp_servers) && j.mcp_servers.length) return { ok: false, words: 'the session\'s model request names MCP servers.' };
+    if (raw.includes('mcp__')) return { ok: false, words: 'the session\'s model request names an MCP tool.' };
+    for (const t of tools) if (t.name !== PLACEHOLDER) seen.add(t.name);
+  }
+  return { ok: true, tools: [...seen].sort() };
+}
+
+// The CLI, launched exactly as a session would be, against a local stand-in
+// for the model endpoint (127.0.0.1, a placeholder key, every request answered
+// 400): what it would offer the model, with nothing generated or billed.
+// `cwd` (a test's project folder) replaces the new empty folder.
+function probeTools(bin, args, env, { timeoutMs = 60000, spawnImpl = spawn, cwd: inFolder = null } = {}) {
+  return new Promise((resolve) => {
+    const bodies = [];
+    const srv = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        if (req.method === 'POST' && /\/v1\/messages/.test(req.url)) bodies.push(Buffer.concat(chunks).toString('utf8'));
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'cr-pilot-launch@1 isolation probe: nothing is generated.' } }));
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => {
+      const cwd = inFolder || sessionDir();
+      const childEnv = { ...launchEnv(env), ANTHROPIC_API_KEY: PROBE_KEY, ANTHROPIC_BASE_URL: `http://127.0.0.1:${srv.address().port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+      for (const k of Object.keys(childEnv)) if (k.toUpperCase() === 'CLAUDE_CODE_OAUTH_TOKEN') delete childEnv[k];
+      let done = false;
+      const finish = (extra) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        srv.close();
+        if (!inFolder) { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) { /* an empty folder */ } }
+        resolve(extra || judgeProbe(bodies));
+      };
+      let child;
+      try {
+        child = spawnImpl(bin.file, [...bin.args, ...args], { cwd, env: childEnv, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+      } catch (err) {
+        finish({ ok: false, words: `the probe could not start claude (${err.code || err.message}).` });
+        return;
+      }
+      const timer = setTimeout(() => { try { child.kill(); } catch (_) { /* gone */ } finish({ ok: false, words: `the probe did not finish within ${Math.round(timeoutMs / 1000)} s.` }); }, timeoutMs);
+      child.on('error', (err) => finish({ ok: false, words: `the probe could not start claude (${err.code || err.message}).` }));
+      child.on('close', () => finish());
+      child.stdin.on('error', () => {});
+      child.stdin.end(PROBE_PROMPT);
+    });
+  });
+}
+
+// A launcher: the session function the runners call, with its preflight.
+// Tests give it a stand-in executable (bin) and environment; the runner's own
+// is makeLauncher() on the real claude.
+function makeLauncher({ bin = null, env = process.env, settings = null, platform = process.platform, exists = fs.existsSync, reg = null, run = spawnSync, spawnImpl = spawn, probeTimeoutMs = 60000 } = {}) {
+  const passed = new Map();
+  const binOf = () => bin || { file: resolveClaude({ platform, env, exists }), args: [] };
+  const argsFor = (model) => launchArgs(sessionChoice(model, env, settings || userModelSettings(env)));
+  const key = (b, args) => JSON.stringify([b.file, ...b.args, ...args]);
+
+  async function preflight(o = {}) {
+    const b = binOf();
+    const args = argsFor(o.model || null);
+    const k = key(b, args);
+    if (passed.has(k)) return passed.get(k);
+    const policy = managedPolicy({ platform, env, exists, reg });
+    if (policy.length) throw isolationError(`managed Claude Code settings are installed on this machine (${policy.join('; ')}); they can add hooks, allow rules or MCP servers that no launch flag removes.`);
+    const version = checkHelp(b, env, { run });
+    const p = await probeTools(b, args, env, { timeoutMs: probeTimeoutMs, spawnImpl });
+    if (!p.ok) throw isolationError(p.words);
+    const verdict = { format: LAUNCH_FORMAT, ok: true, cli_version: version, tools: p.tools, args };
+    passed.set(k, verdict);
+    return verdict;
+  }
+  const ready = (o = {}) => { try { return passed.has(key(binOf(), argsFor(o.model || null))); } catch (_) { return false; } };
+
+  // One `claude -p` session: the prompt on stdin (a frozen prompt is far
+  // longer than a Windows command line), the answer as text.
+  function session(prompt, { tools, model, timeoutMin }) {
+    if (!Array.isArray(tools) || tools.length !== AGENT_TOOLS.length || !AGENT_TOOLS.every((t) => tools.includes(t))) throw isolationError(`a session is given ${AGENT_TOOLS.join(' and ')} only, not ${JSON.stringify(tools)}.`);
+    const b = binOf();
+    const args = argsFor(model || null);
+    if (!passed.has(key(b, args))) throw isolationError('this command line was not checked in this run.');
+    const cwd = sessionDir();
+    let r;
+    try {
+      r = run(b.file, [...b.args, ...args], { cwd, input: prompt, env: launchEnv(env), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: timeoutMin * 60000, windowsHide: true });
+    } finally {
+      try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) { /* an empty folder */ }
+    }
+    // A session that timed out or was stopped by a signal may still have been
+    // working: its outcome is uncertain, never retried.
+    if ((r.error && r.error.code === 'ETIMEDOUT') || r.signal) throw Object.assign(new Error(`claude -p did not finish (${r.error ? r.error.code : r.signal}) within ${timeoutMin} minutes.`), { uncertain: true });
+    if (r.error) throw new Error(`claude -p could not run: ${r.error.message}`);
+    if (r.status !== 0) throw new Error(`claude -p stopped (exit ${r.status}): ${(r.stderr || '').trim().slice(0, 600)}`);
+    return r.stdout;
+  }
+  session.preflight = preflight;
+  session.ready = ready;
+  return session;
+}
+
+const claude = makeLauncher();
+
+// The runners check the launch before any claim: a launcher with a preflight
+// must pass it (a stand-in agent in a test has none).
+async function preflightOf(agent, o) {
+  if (o.dryRun || !agent || typeof agent.preflight !== 'function') return null;
+  return agent.preflight(o);
 }
 
 // Each role's own scratch (cr-pilot-isolation@1): <temp>/cr-pilot/<role>/, one
@@ -143,6 +409,8 @@ const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused
 // next runner reconciles instead of dispatching it again.
 function runLocal(o, { call = cli, agent = claude } = {}) {
   const h = { token: null, bound: false };
+  // The launch was checked before this (main, runAll); nothing is claimed otherwise.
+  if (!o.dryRun && agent && typeof agent.ready === 'function' && !agent.ready(o)) throw isolationError('it was not checked before this run.');
   try {
     return localSteps(o, call, h, agent);
   } finally {
@@ -287,6 +555,8 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
     out(`Would claim ${o.project}'s next step on ${desk}, have the desk prepare its frozen prompt, run it in a fresh claude -p session with ${WEB_TOOLS.join(', ')} only, and give the answer back to the desk to save and verify.`);
     return result;
   }
+  // The session's tool boundary, before the token is read or a claim taken.
+  await preflightOf(run, o);
   const tok = token || readWorkerToken();
   const post = (op, body, opts) => workerCall(fetchImpl, desk, tok, op, { project_id: o.project, ...body }, opts);
   const stop = (kind, words) => { Object.assign(result, { stop: kind, words }); out(`    Not dispatched: ${words}`); return result; };
@@ -309,6 +579,9 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
       return stop(err.code || 'refused', err.message);
     }
     if (p.status === 'gate_closed') { out(`    desk gate: ${p.receipt_id || ''} — ${p.words || ''}`); continue; }
+    // Another request prepared this attempt (only this runner holds its
+    // token): no session here, and the claim is left exactly as it is.
+    if (p.status === 'already_prepared') return stop('reconcile', `${p.words || `Attempt ${c.attempt_id} was already prepared.`} ${ONLINE_RECONCILE(o.project)}`);
     if (p.status !== 'prepared') return stop(p.status, p.words || p.status);
     const rec = p.run_id || p.ticket_id;
     if (typeof p.prompt !== 'string' || sha256(p.prompt) !== p.prompt_sha256) {
@@ -467,6 +740,12 @@ async function runAll(o, {
     if (noSessions) out(q.sessions.unreadable ? 'The desk\'s session ledger does not read: no agent session is started until it is repaired.' : `Today's ${q.sessions.ceiling} agent sessions are used (${q.sessions.day}): no session is started until tomorrow.`);
     const todo = q.steps.filter((s) => ALL_ORDER.includes(s.step) && !CLAIM_SKIP.has(s.claim)).sort((a, b) => ALL_ORDER.indexOf(a.step) - ALL_ORDER.indexOf(b.step));
     if (!todo.length) out('Nothing for the agents to do.');
+    // The session's tool boundary, checked once before the first claim; when
+    // it cannot be established nothing is claimed or dispatched.
+    if (todo.length) {
+      const v = await preflightOf(agent, o);
+      if (v) log.isolation = { format: v.format, cli_version: v.cli_version, tools: v.tools };
+    }
     const budget = { left: o.maxAgents };
     for (const s of todo) {
       if (o.dryRun) {
@@ -523,22 +802,35 @@ async function runAll(o, {
   }
 }
 
-function main() {
+async function main() {
   const o = parse(process.argv.slice(2));
-  if (o.pilotAll) return runAll(o).then((code) => { process.exitCode = code; });
+  if (o.checkIsolation) {
+    // The launch check alone: nothing is claimed, generated or billed.
+    try {
+      const v = await claude.preflight(o);
+      say(JSON.stringify({ ...v, words: `A session would be offered ${v.tools.join(' and ') || 'no tool'} only.` }, null, 2));
+    } catch (err) {
+      say(JSON.stringify({ format: LAUNCH_FORMAT, ok: false, words: err.message }, null, 2));
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (o.pilotAll) { process.exitCode = await runAll(o); return; }
   if (o.help || !o.project) {
     say('npm run pilot -- --project=<id> [--desk=local|online] [--dry-run] [--force-prosecution [--owner-words="…"]] [--model=<id>] [--timeout-min=60] [--connector=mcp__claude_ai_CryptoResearch]');
     say('npm run pilot -- --pilot-all [--desk=local|online] [--max-agents=2] [--dry-run] [--timeout-min=60] [--desk-url=https://…]');
+    say('npm run pilot -- --check-isolation [--model=<id>]   the session launch check only (no claim, no generation)');
     process.exitCode = o.help ? 0 : 2;
     return;
   }
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(o.project)) throw new Error(`"${o.project}" is not a project ID.`);
-  if (o.desk === 'online') return runOnline(o).then((r) => { if (r && r.stop === 'reconcile') process.exitCode = 3; });
-  if (o.desk === 'local') runLocal(o);
-  else throw new Error('--desk is local or online.');
+  if (o.desk === 'online') { const r = await runOnline(o); if (r && r.stop === 'reconcile') process.exitCode = 3; return; }
+  if (o.desk !== 'local') throw new Error('--desk is local or online.');
+  await preflightOf(claude, o);
+  runLocal(o);
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, runOnline, runLocal, runAll, takeLock, readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, CLAIM_STOPS };
+module.exports = { resolveClaude, parse, forcedTicket, runOnline, runLocal, runAll, takeLock, readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, judgeProbe, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

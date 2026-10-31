@@ -156,11 +156,22 @@ npm run pilot -- --project=olas --desk=online     whole chain on the online desk
 npm run pilot -- --project=olas --dry-run         say what would run
 npm run pilot -- --project=olas --desk=online --force-prosecution [--owner-words="…"]
                                                   a Prosecutor although the gate closed on the grade (Eric's override; the gate still sizes it)
+npm run pilot -- --check-isolation                the session launch check alone: no claim, nothing generated or billed
 ```
 
 - `dashboard/scripts/pilot.js` runs each agent as its own `claude -p` session, with the prompt on stdin.
-- Only web search and fetch are allowed. In online mode the CryptoResearch connector tools (`mcp__claude_ai_CryptoResearch`) are allowed too.
+- A session has `WebSearch` and `WebFetch` and nothing else: no shell, files, edits, code, delegation, skills, MCP tools or connector (the desk's own included), in local and online mode alike (the launch below).
 - Local mode saves through the CLI, so every save is verified. The chain stops at `pm_review`.
+
+**The session launch** (`cr-pilot-launch@1`, worker boundary PR 2026-10-31; `makeLauncher` in `scripts/pilot.js`). `--allowedTools` alone only pre-approved the web tools; it never limited what a session had (shell, files, edits, delegation, Chrome and the claude.ai connectors, with Eric's `CLAUDE.md`). Each session is now started with Claude Code's documented controls:
+
+- **Tools:** `--tools WebSearch,WebFetch` (the built-in set), `--disallowedTools mcp__*,Bash,PowerShell,Read,Write,Edit,NotebookEdit,Glob,Grep,Agent,Task,Skill,ToolSearch,Workflow,ListAgents,SendMessage`, `--allowedTools WebSearch,WebFetch`, `--permission-mode dontAsk`.
+- **MCP:** `--strict-mcp-config --mcp-config {"mcpServers":{}}`, and `ENABLE_CLAUDEAI_MCP_SERVERS=false` with `disableClaudeAiConnectors` for the claude.ai connectors.
+- **Customizations:** `--restricted` (no user, project or local settings file: their permissions, hooks, MCP and model), `--safe-mode` (no `CLAUDE.md`, skills, plugins, hooks, MCP, custom agents or commands), `--settings {"disableAllHooks":true,"disableClaudeAiConnectors":true}`, `--disable-slash-commands`, `--no-chrome`, `--no-session-persistence`.
+- **Sign-in and model:** Eric's Claude subscription, unchanged (never `--bare`, never an API key). The model and effort his Claude Code settings choose (`model`, `effortLevel` in `%USERPROFILE%\.claude\settings.json`) are passed as `--model` and `--effort`; `--model=` on the runner and `ANTHROPIC_MODEL` still come first.
+- **Environment:** the system, proxy and certificate variables and Claude Code's own sign-in and model variables only (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`). No `CR_*`, no keys, no `ANTHROPIC_API_KEY` (`-p` would bill it instead of the subscription), no parent-session variables. Each session runs in a new empty folder under `<temp>/cr-pilot/session/`.
+- **Checked before any claim, fail closed:** the installed CLI must list every flag above (`--help`); no managed Claude Code policy may be installed (`C:\Program Files\ClaudeCode\managed-settings.json` or `managed-mcp.json`, `HKLM`/`HKCU\SOFTWARE\Policies\ClaudeCode`: a policy can add hooks, allow rules or MCP servers no flag removes); and a probe must pass: the same command, run against a local stand-in for the model endpoint (127.0.0.1, a placeholder key, every request answered 400, nothing generated or billed), may offer the model `WebSearch` and `WebFetch` only, with no MCP tool named anywhere in the request (Claude Code's inert `DeferredToolPlaceholder`, no input, is allowed). Otherwise the runner exits 1 with the reason and claims nothing; a session is never started on a command line that was not checked in that run. After a Claude Code update, `npm run pilot -- --check-isolation` shows the result.
+- **What it is not:** this bounds what the model can call. It is not an operating-system sandbox: the `claude` process runs as Eric, and his files are reachable to that process, not to the model. The claude.ai connectors are excluded by four documented controls; the probe, signed in with a placeholder key, cannot fetch them, so their exclusion under the subscription sign-in is documented, not observed.
 
 ## How the OLAS pilot chain runs
 
@@ -250,6 +261,8 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
   - Order: `ticket`, `ticket_failed`, `gate_closed`, then `research`, each through the per-project path and its claim.
   - At most `--max-agents` `claude -p` sessions per run, and never past the desk's daily session ceiling.
   - Online (corrective PR 2026-10-31), through the worker routes below: the desk claims the step, prepares it (opens the run or ticket and freezes its prompt), and the runner gives that exact prompt to one `claude -p` session with `WebSearch` and `WebFetch` only. The session holds no desk credential. The runner posts the answer back with the prompt's SHA-256, and the desk saves and verifies it.
+  - Before the first claim, the session launch is checked (above); when it fails the run claims nothing and exits 1.
+  - A prepare answered `already_prepared` (another request prepared that attempt) starts no session and is listed for Eric like a lost answer.
   - A timeout, a lost answer or an unreadable one leaves the outcome unknown: the claim stays dispatched and nothing is run again.
   - A project held by another runner, or whose one correction is used, is skipped.
   - `exit_evidence` (the desk's own exit reading at the exit size is not complete yet) and `contract_evidence` steps start no session.
@@ -270,6 +283,11 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
 - **Off by default.** 404 unless `CR_PILOT_WORKER_TOKEN_SHA256` is set. The poll token is refused here, and the worker token is refused everywhere else.
 - **What it may do.** `POST /api/pilot/worker/claim`, `prepare`, `complete` and `release` (`stopped` or `agent_failed` only). Nothing else: no PM decision, no mandate arming, no settings, no reconciling, no trade.
 - **One dispatch.** The claim is the desk's own (`cr-pilot-claim@1`, under the workspace lock): of two runners, only one gets a token. Only the claim's holder can prepare or complete, and a completion for another prompt's SHA-256 saves nothing.
+- **One launch per attempt** (worker boundary PR 2026-10-31). A claim goes `claimed` → `preparing` → `dispatched` once:
+  - `prepare` first moves the claim to `preparing` in one locked step (`pilot-claims.js` `beginPreparation`). A second prepare on the same claim, overlapping or later, is answered `already_prepared` with no prompt and writes nothing.
+  - After the exit quote's network wait, the claim is read again; the bind then checks the token, the state, the expiry, the pause and the day's ceiling at the time of the bind (the route's clock), reserves the one session and only then is the prompt handed out. `bind` refuses a claim already dispatched (`ALREADY_BOUND`).
+  - A `preparing` claim never handed out a prompt. While live it holds the project; once expired (a desk restart, a runner that went away) it is not a dispatch to reconcile, and the next claim takes the step as a new attempt. The old preparation can never bind.
+  - A lost `prepared` answer is unchanged: the claim stays `dispatched`, another prepare gets `already_prepared`, and after expiry it waits for Eric's reconcile.
 - **Rate.** 240 requests an hour; refused bearers 60 an hour of their own.
 
 **`contracts init-defaults`** (`core/contract-presets.js`; `POST /api/contracts/init-defaults` on the desk, `{ "dry_run": true }` for the plan) adds:

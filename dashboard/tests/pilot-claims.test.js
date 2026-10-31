@@ -264,6 +264,8 @@ test('the local runner stops before any agent when another runner holds the proj
     if (args[1] === 'claim') return { status: 'claimed', words: 'Another runner holds this project.' };
     throw new Error(`unexpected ${args.join(' ')}`);
   };
-  runLocal({ project: 'example-fictional', dryRun: false }, { call });
+  // A stand-in session (the real launcher refuses before any claim unless
+  // its launch was checked: pilot-launch.test.js).
+  runLocal({ project: 'example-fictional', dryRun: false }, { call, agent: () => assert.fail('no agent') });
   assert.deepEqual(calls, ['tickets queue', 'tickets claim'], 'no research add, no prompt, no agent');
 });
