@@ -13,6 +13,9 @@
 //               CLI or a configuration that broadened the session would
 //   no_request  it never reaches the model endpoint
 //   hang        the probe's run never exits
+//   offer       the exact tool list it sends (instead of --tools and the
+//               placeholder): an empty, partial or server-form inventory
+//   no_tools    its model request carries no tools key at all
 //
 // With ANTHROPIC_BASE_URL set (the launcher's probe) it sends one model request
 // there, with the tools it would offer, and exits 1 on the stand-in's 400, as
@@ -56,12 +59,12 @@ if (argv.includes('--help')) {
     if (cfg.no_request) process.exit(1);
     const i = argv.indexOf('--tools');
     const names = i >= 0 ? String(argv[i + 1]).split(',').filter(Boolean) : [];
-    const tools = [
+    const tools = Array.isArray(cfg.offer) ? cfg.offer : [
       ...names.map((name) => ({ name, description: `${name} (stand-in)`, input_schema: { type: 'object', properties: { q: { type: 'string' } } } })),
       { name: 'DeferredToolPlaceholder', description: 'Reserved placeholder (stand-in).', input_schema: { type: 'object', properties: {} }, defer_loading: true },
       ...(cfg.leak || []),
     ];
-    const body = JSON.stringify({ model: 'stand-in', max_tokens: 1, tools, system: 'stand-in system prompt', messages: [{ role: 'user', content: stdin }] });
+    const body = JSON.stringify({ model: 'stand-in', max_tokens: 1, ...(cfg.no_tools ? {} : { tools }), system: 'stand-in system prompt', messages: [{ role: 'user', content: stdin }] });
     const u = new URL('/v1/messages?beta=true', base);
     const req = http.request({ host: u.hostname, port: u.port, path: `${u.pathname}${u.search}`, method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY || '', 'content-length': Buffer.byteLength(body) } }, (res) => {
       res.resume();

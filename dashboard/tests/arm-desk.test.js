@@ -226,11 +226,27 @@ test('--desk=online with the flags: the settings, then the exit-quote targets, t
   assert.deepEqual(hashTree(w.root), before, 'nothing written');
 });
 
-test('--print-schedule prints the schtasks line for pilot-all and runs nothing', async (t) => {
+test('--print-schedule prints the pilot-task.ps1 registration (disabled, never /F) and runs nothing', async (t) => {
   const w = temp(t);
   const before = hashTree(w.root);
   const out = await run(['arm-desk', '--print-schedule', '--workspace', w.root]);
-  assert.match(out._text, /^schtasks \/Create \/TN "CryptoResearch pilot-all" \/SC MINUTE \/MO 30 \/IT \/TR "cmd\.exe \/c cd \/d .* && npm run pilot -- --pilot-all --desk=online --max-agents=2" \/F$/m);
-  assert.match(out._text, /Nothing was run/);
+  assert.match(out._text, /^powershell -NoProfile -ExecutionPolicy Bypass -File ".*\\dashboard\\scripts\\pilot-task\.ps1" -Register -MaxAgents 1$/m);
+  assert.match(out._text, /disabled until you enable it\. Nothing was run/);
+  assert.doesNotMatch(out._text, /schtasks|\/F\b/, 'no line that replaces a task by name');
   assert.deepEqual(hashTree(w.root), before, 'nothing written');
+});
+
+// The registration script itself, read as text (it is run only by Eric or
+// the operator on Windows): disabled first, never replacing a task it did not
+// make, the verified Node binary and pilot.js, IgnoreNew, a 3-hour limit.
+test('pilot-task.ps1 registers disabled, refuses a task it did not make, and runs the verified node binary with pilot.js', () => {
+  const text = fs.readFileSync(require('path').join(__dirname, '..', 'scripts', 'pilot-task.ps1'), 'utf8');
+  assert.match(text, /New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit \(New-TimeSpan -Hours 3\) -Hidden -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Disable/);
+  assert.match(text, /-RepetitionInterval \(New-TimeSpan -Minutes 30\)/);
+  assert.match(text, /New-ScheduledTaskPrincipal -UserId \$user -LogonType Interactive -RunLevel Limited/);
+  assert.match(text, /if \(\$t -and \$t\.Description -ne \$Mark\) \{ throw/);
+  assert.match(text, /if \(\$t\) \{ Assert-Ours \$t; throw/, '-Register refuses while any task of that name exists');
+  assert.match(text, /--headless "\{0\}" "\{1\}" --pilot-all --desk=online --max-agents=\{2\}/);
+  assert.match(text, /Volta shim/);
+  assert.doesNotMatch(text, /-Force|schtasks|WakeToRun \$true/);
 });

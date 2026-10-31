@@ -101,11 +101,13 @@ Contract state (read-only chain reads at a finalized block; nothing is read whil
   contracts probe [<chain_id>]           what a network answers (finalized tag, block-hash pinning), recorded; none named: every unprobed chain your projects need
   contracts init-defaults [--dry-run]    add the published Uniswap V2/V3 factories, Safe singletons and network-fee ceilings; yours are kept
   arm-desk [--desk=online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on]
-           [--mandate-days=N | --mandate-off] [--print-schedule]
+           [--mandate-days=N | --mandate-off] [--admission-days=N [--admission-daily=N] | --admission-off] [--print-schedule]
                                          the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules,
                                          the floor for a new entry at 50); --contracts-on needs both caps; --mandate-days=N (1-30) turns the
-                                         paper mandate on; --desk=online prints what to paste into the signed-in desk's browser console;
-                                         --print-schedule prints the Task Scheduler line for npm run pilot -- --pilot-all (never runs it)
+                                         paper mandate on; --admission-days=N (1-30) arms automatic admission of ELIGIBLE scout leads
+                                         (--admission-daily 0-3 a day, default 1; the mandate flags never do); --desk=online prints what to
+                                         paste into the signed-in desk's browser console;
+                                         --print-schedule prints the pilot-task.ps1 commands that register pilot-all every 30 minutes (never runs them)
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
@@ -1124,7 +1126,7 @@ async function run(argv) {
       const A = require('./core/arm-desk');
       const S = require('./server');
       const desk = one(flags.desk) || 'local';
-      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on] [--mandate-days=N | --mandate-off] [--print-schedule]'), { code: 'USAGE' });
+      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on] [--mandate-days=N | --mandate-off] [--admission-days=N [--admission-daily=N] | --admission-off] [--print-schedule]'), { code: 'USAGE' });
       if (flags.print_schedule) return { _text: `${A.scheduleText(path.join(__dirname, '..'))}\n` };
       const whole = (v, name) => {
         if (v === undefined) return undefined;
@@ -1142,6 +1144,9 @@ async function run(argv) {
         contractsOn: Boolean(flags.contracts_on),
         mandateDays: days,
         mandateOff: Boolean(flags.mandate_off),
+        admissionDays: whole(one(flags.admission_days), 'admission-days'),
+        admissionDaily: whole(one(flags.admission_daily), 'admission-daily'),
+        admissionOff: Boolean(flags.admission_off),
         settings: desk === 'local' ? ws.settings : null,
       });
       const checked = S.validateSettingsPatch(patch, ws);
@@ -1170,7 +1175,10 @@ async function run(argv) {
         if (rest[0] === 'status') return L.status(ws, L.SOURCE, need(rest[1], 'scout leads status <delivery_id>'));
         if (rest[0] === 'run') return L.refresh(ws, { trigger: 'cli' });
         if (rest[0] === 'receipt') return L.getReceipt(ws, need(rest[1], 'scout leads receipt <receipt_id>'));
-        throw Object.assign(new Error('scout leads list|status <delivery_id>|run|receipt <receipt_id>'), { code: 'USAGE' });
+        // Automatic admission's authority, today's capacity, what holds it and
+        // its admissions (core/lead-admission.js); read only.
+        if (rest[0] === 'auto') return require('./core/lead-admission').statusView(ws);
+        throw Object.assign(new Error('scout leads list|status <delivery_id>|run|receipt <receipt_id>|auto'), { code: 'USAGE' });
       }
       throw Object.assign(new Error('scout list|status|leads'), { code: 'USAGE' });
     }

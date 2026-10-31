@@ -424,6 +424,9 @@ function isDue(ws, now = Date.now()) {
   if (require('./research').restoredHold(ws)) return false;
   if (listAdmissions(ws).some((a) => pendingOf(a).length)) return true;
   if (!policy.values.enabled) return false;
+  // Automatic admission's work asks no provider (lead-admission.js plan reads
+  // only the records), so a closed provider gate never holds it back.
+  if (require('./lead-admission').plan(ws, { now }).status === 'ready') return true;
   if (!require('./market').rateLimitGate(ws, now).open) return false;
   const screening = require('./screening');
   if (screening.blockedBy(screening.readStatus(ws), now)) return false;
@@ -723,6 +726,14 @@ function commit(ws, opId, outcomes, policy, now) {
   })).result;
 }
 
+// What automatic admission did this turn, in words; null while it is off.
+function autoWords(auto) {
+  if (!auto || auto.status === 'off') return null;
+  if (auto.status === 'reserved' || auto.status === 'exists') return `automatic admission ${auto.admission_id}: ${(auto.admission && auto.admission.words) || (auto.admission && auto.admission.state) || 'reserved'}`;
+  if (auto.status === 'idle') return null;
+  return `automatic admission held (${auto.code}): ${auto.why}`;
+}
+
 // One turn of the `leads` job. Returns { status, message, ... }.
 async function refresh(ws, { trigger = 'manual', fetchImpl = globalThis.fetch, clock = Date.now, turnMs = TURN_MS, maxRequests = TURN_REQUESTS, retryDelayMs = 1000 } = {}) {
   const policy = policyOf(ws);
@@ -735,9 +746,18 @@ async function refresh(ws, { trigger = 'manual', fetchImpl = globalThis.fetch, c
     // pending is finished (or lapses), whether or not leads are on.
     const recovered = completePending(ws, { now: clock() });
     if (!policy.values.enabled) return { status: 'skipped', message: `Scout leads are off; ${recovered.length} confirmed ${recovered.length === 1 ? 'admission' : 'admissions'} finished.`, recovered };
+    // While CoinGecko's or GoPlus's gate is closed no lead is read (the turn
+    // would only meet it); automatic admission, which asks no provider, still
+    // runs (lead-admission.js).
+    const gateShut = !require('./market').rateLimitGate(ws, clock()).open || Boolean(require('./screening').blockedBy(require('./screening').readStatus(ws), clock()));
     const opId = `lt_${compactTs(new Date(clock()))}_${randomId(6)}`;
-    const claimed = stampClaims(ws, opId, policy, clock());
-    if (!claimed.length) return { status: recovered.length ? 'ok' : 'noop', message: recovered.length ? `${recovered.length} confirmed ${recovered.length === 1 ? 'admission' : 'admissions'} finished; no scout lead is due.` : 'No scout lead is due.', results: [], recovered };
+    const claimed = gateShut ? [] : stampClaims(ws, opId, policy, clock());
+    if (!claimed.length) {
+      const auto = require('./lead-admission').sweep(ws, { now: clock() });
+      const admitted = auto.status === 'reserved' || auto.status === 'exists';
+      const said = [recovered.length ? `${recovered.length} ${recovered.length === 1 ? 'admission' : 'admissions'} finished` : null, gateShut ? 'a provider\'s gate is closed, so no lead was read' : 'no scout lead is due', autoWords(auto)].filter(Boolean).join('; ');
+      return { status: recovered.length || admitted ? 'ok' : 'noop', message: `${said.charAt(0).toUpperCase()}${said.slice(1)}.`, results: [], recovered, auto_admission: auto };
+    }
     const turn = makeTurn({ ms: turnMs, requests: maxRequests });
     const outcomes = [];
     try {
@@ -755,8 +775,10 @@ async function refresh(ws, { trigger = 'manual', fetchImpl = globalThis.fetch, c
     }
     const results = commit(ws, opId, outcomes, policy, clock());
     const by = (pred) => results.filter(pred).length;
-    const message = `Scout leads: ${by((r) => r.result === 'receipt')} read (${STATES.map((s) => [s, by((r) => r.state === s)]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'none'}), ${by((r) => r.result === 'released')} left for the next turn, ${turn.sent()} requests.`;
-    return { status: by((r) => r.state === 'RETRY_AT' || r.result === 'released') ? 'partial' : 'ok', message, requests: turn.sent(), results, recovered };
+    // Automatic admission after the network phase, on the records it wrote.
+    const auto = require('./lead-admission').sweep(ws, { now: clock() });
+    const message = `Scout leads: ${by((r) => r.result === 'receipt')} read (${STATES.map((s) => [s, by((r) => r.state === s)]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'none'}), ${by((r) => r.result === 'released')} left for the next turn, ${turn.sent()} requests.${autoWords(auto) ? ` ${autoWords(auto).charAt(0).toUpperCase()}${autoWords(auto).slice(1)}.` : ''}`;
+    return { status: by((r) => r.state === 'RETRY_AT' || r.result === 'released') ? 'partial' : 'ok', message, requests: turn.sent(), results, recovered, auto_admission: auto };
   } finally {
     releaseLease(ws, LEASE, lease);
   }
@@ -818,6 +840,11 @@ const ADMISSION_ID = /^la_[0-9a-f]{14}$/;
 const START_WINDOW_MS = 24 * 3600000;
 const MAX_BATCH = 50;
 const EFFECTS = ['intake', 'project', 'research'];
+// An automatic admission (lead-admission.js) adds the pilot enrollment and
+// the project's exit-quote target.
+const DELEGATED_EFFECTS = ['intake', 'project', 'research', 'pilot'];
+const isDelegated = (a) => Boolean(a && a.kind === 'delegated');
+const effectsOf = (a) => (isDelegated(a) ? DELEGATED_EFFECTS : EFFECTS);
 const PROVIDER_ORDER = ['claude', 'chatgpt', 'gemini'];
 const LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', gemini: 'Gemini' };
 
@@ -855,7 +882,7 @@ function listAdmissions(ws) {
 
 // Effects still to do: pending, or failed and tried again (a replay, Complete
 // or the next turn) until the start deadline.
-const pendingOf = (a) => EFFECTS.filter((e) => a.effects[e] === 'pending' || a.effects[e] === 'failed');
+const pendingOf = (a) => effectsOf(a).filter((e) => a.effects[e] === 'pending' || a.effects[e] === 'failed');
 
 // The listing a receipt matched, as admitListing takes it.
 function listingOf(asset, receipt) {
@@ -1003,7 +1030,48 @@ function confirmLeads(ws, body, { now = Date.now() } = {}) {
   return { status: out.result.replay ? 'unchanged' : 'admitted', batch: { request_id: batch.request_id, created_at: batch.created_at, admission_ids: batch.admission_ids }, admissions, since_shown: sinceShown, verified: out.verified };
 }
 
-const summaryOf = (a) => ({ admission_id: a.admission_id, lead_key: a.lead_key, state: a.state, project_id: a.project_id, project_basis: a.project_basis, run_id: a.run_id, run_basis: a.run_basis, effects: a.effects, errors: a.errors, words: a.words });
+// An automatic admission's record (lead-admission.js reserve, inside its
+// lock): the same shape as a confirmed one, with no request ID and no batch,
+// its actor, the admission settings and authority it was reserved under, the
+// day's reservation and the pilot effect. Its effect keys are frozen as a
+// confirmed admission's are.
+function delegatedAdmission({ id, asset, receipt, listing, policy, lockNow, admission_policy, authority, reservation, envelope: env, capacity }) {
+  return withKeys({
+    schema_version: ADMISSION_SCHEMA,
+    admission_id: id,
+    kind: 'delegated',
+    actor: require('./lead-admission').ACTOR,
+    request_id: null,
+    lead_key: asset.asset_id,
+    identity: asset.identity,
+    identity_revision: asset.identity_revision,
+    eligibility_receipt_id: receipt.receipt_id,
+    eligibility_sha256: receipt.eligibility_sha256,
+    policy: { version: policy.version, sha256: policy.sha256 },
+    admission_policy,
+    authority,
+    reservation,
+    capacity,
+    envelope: env,
+    listing,
+    deliveries: [...new Set(asset.sightings.map((s) => s.delivery_id).filter(Boolean))],
+    batch_size: 1,
+    created_at: isoOf(lockNow),
+    start_deadline: isoOf(lockNow + START_WINDOW_MS),
+    state: 'pending',
+    effects: { intake: 'pending', project: 'pending', research: 'pending', pilot: 'pending' },
+    intake_id: null,
+    project_id: null,
+    project_basis: null,
+    run_id: null,
+    run_basis: null,
+    enrollment: null,
+    errors: [],
+    words: null,
+  });
+}
+
+const summaryOf = (a) => ({ admission_id: a.admission_id, kind: isDelegated(a) ? 'delegated' : 'confirmed', lead_key: a.lead_key, state: a.state, project_id: a.project_id, project_basis: a.project_basis, run_id: a.run_id, run_basis: a.run_basis, effects: a.effects, errors: a.errors, words: a.words, ...(isDelegated(a) ? { actor: a.actor, generation: a.authority && a.authority.generation, reservation: a.reservation, enrollment: a.enrollment || null } : {}) });
 
 // One admission's effects, never thrown: its record as stored, and when this
 // try failed before it could be written down, that failure marked
@@ -1021,8 +1089,13 @@ function attempt(ws, id, now) {
   }
 }
 
-// The words a scout admission writes on its project's evidence.
+// The words a scout admission writes on its project's evidence. An automatic
+// one says what admitted it and that no person reviewed the lead; it never
+// reads as Eric's confirmation.
 function evidenceNote(a) {
+  if (isDelegated(a)) {
+    return `Listed by Grok Scout (delivery ${a.deliveries.join(', ') || 'unknown'}); contract matched on CoinGecko at ${a.listing.observed_at || 'an unrecorded time'}; eligible under ${ELIGIBILITY_VERSION} (receipt ${a.eligibility_receipt_id}, policy ${a.policy.version} ${a.policy.sha256.slice(0, 12)}); admitted automatically by ${a.actor} under ${a.admission_policy.version} generation ${a.authority.generation} (settings ${a.admission_policy.sha256.slice(0, 12)}, reservation ${a.reservation.reservation_id} for ${a.reservation.day}); no person reviewed this lead; research requested from ${namesOf(a.envelope.models)} through the pilot worker.`;
+  }
   return `Listed by Grok Scout (delivery ${a.deliveries.join(', ') || 'unknown'}); contract matched on CoinGecko at ${a.listing.observed_at || 'an unrecorded time'}; eligible under ${ELIGIBILITY_VERSION} (receipt ${a.eligibility_receipt_id}, policy ${a.policy.version} ${a.policy.sha256.slice(0, 12)}); confirmed by Eric in a batch of ${a.batch_size} (request ${a.request_id}); research requested from ${namesOf(a.envelope.models)}.`;
 }
 
@@ -1039,8 +1112,11 @@ function effectKeysOf(a) {
     intake_sha256: sha256(stableStringify(intakeDocOf(a))),
     project_sha256: sha256(stableStringify({ admission_id: a.admission_id, listing: a.listing, note: evidenceNote(a) })),
     research_base_sha256: sha256(stableStringify({ admission_id: a.admission_id, providers: a.envelope.models, routes: a.envelope.routes, budget_scope: a.envelope.budget_scope, horizon: null })),
+    // An automatic admission's enrollment, by its actor and generation.
+    ...(isDelegated(a) ? { pilot_sha256: sha256(stableStringify({ admission_id: a.admission_id, by: pilotByOf(a) })) } : {}),
   };
 }
+const pilotByOf = (a) => `${a.actor} g${a.authority.generation}`;
 const withKeys = (a) => ({ ...a, effect_keys: effectKeysOf(a) });
 
 // The effects' keys: from the frozen hashes, or for an admission written
@@ -1070,6 +1146,23 @@ function intakeDocOf(a) {
   const h = sha256(a.admission_id);
   const tail = Array.from({ length: 5 }, (_, i) => alphabet[parseInt(h.slice(i * 2, i * 2 + 2), 16) % alphabet.length]).join('');
   const id = `in_${compactTs(new Date(a.created_at))}_${tail}`;
+  if (isDelegated(a)) {
+    return {
+      schema_version: 'cr.intake.v1',
+      intake_id: id,
+      created_at: a.created_at,
+      updated_at: a.created_at,
+      via: 'scout-leads',
+      fingerprint: sha256(stableStringify(['scout-lead', a.admission_id])),
+      input: { link: a.listing.coingecko_url, parsed: null, link_problem: null, screenshot: null, instructions: null },
+      status: 'admitting',
+      identity: null,
+      confirmed: null,
+      scout_admission: { admission_id: a.admission_id, lead_key: a.lead_key, eligibility_receipt_id: a.eligibility_receipt_id, request_id: null, kind: 'delegated', actor: a.actor, generation: a.authority.generation, reservation_id: a.reservation.reservation_id },
+      events: [{ at: a.created_at, what: `Scout lead admitted automatically (${a.actor}, generation ${a.authority.generation}); no person reviewed it. Adding the project.` }],
+      note: `Research request from a scout lead admitted automatically under ${a.admission_policy.version} (reservation ${a.reservation.reservation_id} for ${a.reservation.day}). No person reviewed this lead. The scout's words stay on the lead; they are never instructions.`,
+    };
+  }
   return {
     schema_version: 'cr.intake.v1',
     intake_id: id,
@@ -1100,11 +1193,89 @@ function updateAdmission(ws, id, summary, fn) {
 }
 
 function stateOf(a) {
-  if (EFFECTS.every((e) => a.effects[e] === 'done')) return 'complete';
-  if (EFFECTS.some((e) => a.effects[e] === 'lapsed')) return 'lapsed';
-  if (EFFECTS.some((e) => a.effects[e] === 'needs_consent')) return 'needs_consent';
-  if (EFFECTS.some((e) => a.effects[e] === 'failed')) return 'failed';
+  const list = effectsOf(a);
+  if (list.every((e) => a.effects[e] === 'done')) return 'complete';
+  if (list.some((e) => a.effects[e] === 'stopped')) return 'stopped';
+  if (list.some((e) => a.effects[e] === 'lapsed')) return 'lapsed';
+  if (list.some((e) => a.effects[e] === 'needs_consent')) return 'needs_consent';
+  if (list.some((e) => a.effects[e] === 'failed')) return 'failed';
   return 'pending';
+}
+
+// An automatic admission's authority before each further effect: the arming
+// it was reserved under still in force (not paused, expired, revoked or
+// re-armed with other settings), and its project, once there, not archived,
+// not suspended by Eric's intervention and not taken off the pilot. Null when
+// it holds, else the words. Reads only.
+function delegatedGate(ws, a, now) {
+  const LA = require('./lead-admission');
+  const auth = LA.authorityOf(ws, now);
+  if (!auth.on) return `automatic admission no longer holds: ${auth.why}`;
+  const au = a.authority || {};
+  if (auth.generation !== au.generation || auth.policy_sha256 !== au.policy_sha256) return `it was admitted under generation ${au.generation}; generation ${auth.generation} is in force now, and a new arming never resumes an earlier admission`;
+  if (!a.project_id) return null;
+  try {
+    const p = require('./projects').getProject(ws, a.project_id);
+    if (p.status === 'archived') return `project ${a.project_id} was archived`;
+    const st = require('./mandate-authority').autonomyOf(ws, a.project_id, { project: p });
+    if (st.suspended) return st.words || `autonomy on ${a.project_id} is suspended`;
+    const prof = require('./tickets').readTicketProfile(ws, a.project_id);
+    if (prof.pilot_set_at && prof.pilot !== true) return `${a.project_id} was taken off the pilot (${prof.pilot_set_by || 'unknown'} at ${prof.pilot_set_at})`;
+  } catch (err) {
+    return `project ${a.project_id} could not be read (${String((err && err.message) || err).slice(0, 160)})`;
+  }
+  return null;
+}
+
+// Before an automatic admission creates its project: none in the records may
+// hold this contract, match it strongly or share its ticker.
+function delegatedDuplicate(ws, a) {
+  const known = knownProject(ws, a.identity);
+  if (known) return `project ${known.project_id} (${known.status}) already holds this contract`;
+  const dup = require('./projects').findDuplicates(ws, { name: a.listing.name, symbol: a.listing.symbol, official_website: a.listing.homepage, coingecko_id: a.listing.coingecko_id, assets: [{ chain: a.identity.chain_id, contract_address: a.identity.address }] });
+  if (dup.strong.length) return `it matches ${dup.strong.map((x) => `${x.project_id} (${x.reasons.join(', ')})`).join('; ')} in the records`;
+  if (dup.possible.length) return `another project trades as ${a.listing.symbol} (${dup.possible.map((x) => x.project_id).join(', ')}); tickers are not unique and Eric decides`;
+  return null;
+}
+
+// Stops an automatic admission: what was done stays done, the effects not
+// done are marked stopped and never start.
+function stopAdmission(ws, a, why, now) {
+  return updateAdmission(ws, a.admission_id, `Admission ${a.admission_id} stopped`, (cur) => {
+    const effects = Object.fromEntries(effectsOf(cur).map((e) => [e, cur.effects[e] === 'done' ? 'done' : 'stopped']));
+    return { ...cur, effects, state: 'stopped', stopped_at: isoOf(now), stopped_because: String(why).slice(0, 400), words: `${doneWords(cur)}; the rest was not started: ${String(why).slice(0, 400)}.` };
+  });
+}
+
+function doneWords(cur) {
+  const project = cur.effects.project !== 'done' ? 'Nothing was added' : cur.project_basis === 'existing' ? 'Linked to the project already in your records' : 'Project added';
+  const research = cur.effects.research === 'done' ? `; research ${cur.run_basis === 'existing_recent' ? 'linked to a run started a few minutes earlier' : `requested from ${namesOf(cur.envelope.models)}${isDelegated(cur) ? ' through the pilot worker' : ''}`}` : '';
+  const pilot = isDelegated(cur) && cur.effects.pilot === 'done' ? `; enrolled in the pilot (exit target ${(cur.enrollment && cur.enrollment.exit_quote && cur.enrollment.exit_quote.status) || 'unknown'})` : '';
+  return `${project}${research}${pilot}`;
+}
+
+// An automatic admission's last effect: the pilot enrollment through
+// tickets.setPilot (idempotent: a no-op when already on) by its actor, then
+// the project's primary exit-quote target (approved or already kept is done;
+// anything else is failed and tried again until the start deadline).
+function pilotEffect(ws, id, a, now) {
+  const by = pilotByOf(a);
+  let enroll;
+  let exit;
+  try {
+    enroll = require('./tickets').setPilot(ws, a.project_id, true, { by });
+    exit = enroll.exit_quote || require('./forensics').approvePrimaryExitQuote(ws, a.project_id, { by: 'pilot enrollment' });
+  } catch (err) {
+    return failStep(ws, id, err, now, ['pilot']);
+  }
+  const ok = Boolean(exit && (exit.status === 'approved' || exit.status === 'kept'));
+  const enrollment = { at: isoOf(now), by, enrolled: true, already: Boolean(enroll.result && enroll.result.noop), exit_quote: { status: exit ? exit.status : 'unknown', chain: (exit && exit.chain) || null, reason: (exit && exit.reason) || null } };
+  return updateAdmission(ws, id, `Enroll ${a.project_id} for admission ${id}`, (cur) => ({
+    ...cur,
+    enrollment: cur.enrollment && cur.enrollment.enrolled && !ok ? { ...cur.enrollment, exit_quote: enrollment.exit_quote, tried_at: enrollment.at } : { ...enrollment, ...(cur.enrollment && cur.enrollment.at ? { at: cur.enrollment.at, already: cur.enrollment.already } : {}) },
+    effects: { ...cur.effects, pilot: ok ? 'done' : 'failed' },
+    errors: ok ? cur.errors : [...cur.errors, { at: isoOf(now), code: 'EXIT_TARGET', words: `Enrolled, but the exit-quote target was not approved (${enrollment.exit_quote.status}): ${enrollment.exit_quote.reason || 'no reason given'}` }].slice(-10),
+  }));
 }
 
 const errorOf = (err, now) => ({ at: isoOf(now), code: err.code || 'FAILED', words: String(err.message).slice(0, 400) });
@@ -1137,9 +1308,15 @@ function completeAdmission(ws, id, { now = Date.now() } = {}) {
   const { intake: intakeKey, project: projectKey, research: researchKey } = keysOf(a);
   const { readApplied } = require('./ops');
   const committed = (k) => readApplied(ws, k.key);
+  // An automatic admission checks its authority before each further effect;
+  // one that no longer holds stops the rest (what was done stays done).
+  const delegated = isDelegated(a);
+  const gate = () => (delegated ? delegatedGate(ws, a, now) : null);
   // 1. The intake record, written with its link in one operation.
   if (a.effects.intake !== 'done') {
     if (lapsed && !committed(intakeKey)) return lapse(ws, a, now);
+    const why = committed(intakeKey) ? null : gate();
+    if (why) return stopAdmission(ws, a, why, now);
     try {
       const doc = intakeDocOf(a);
       const r = runOp(ws, { type: 'scout_lead_admission_intake', summary: `Research request for admission ${id}`, idempotencyKey: intakeKey.key, payloadHash: intakeKey.payload_sha256 }, (op) => {
@@ -1162,22 +1339,40 @@ function completeAdmission(ws, id, { now = Date.now() } = {}) {
       if (projectDone && a.effects.project !== 'done') a = updateAdmission(ws, id, `Link ${id}`, (cur) => ({ ...cur, project_id: projectDone.result.project_id, project_basis: basisOf(projectDone), effects: { ...cur.effects, project: 'done' } }));
       return lapse(ws, a, now);
     }
+    if (delegated && !(projectDone && researchDone)) {
+      // Its project, once created under its key, is read by the gate.
+      const known = projectDone ? { ...a, project_id: projectDone.result.project_id } : a;
+      const why = delegatedGate(ws, known, now) || (projectDone ? null : delegatedDuplicate(ws, a));
+      if (why) {
+        if (projectDone && a.effects.project !== 'done') a = updateAdmission(ws, id, `Link ${id}`, (cur) => ({ ...cur, project_id: projectDone.result.project_id, project_basis: basisOf(projectDone), effects: { ...cur.effects, project: 'done' } }));
+        return stopAdmission(ws, a, why, now);
+      }
+    }
     let res;
     try {
       const sector = require('./intake').sectorGuess([]);
+      // An automatic admission's run is Claude's, in assistant mode, for the
+      // pilot worker to research: a configured API never changes its route,
+      // and no API is asked (research.newJob). A confirmed one keeps the
+      // routes and limits Eric confirmed (checkConsent).
       res = require('./intake').admitListing(ws, a.listing, {
         models: a.envelope.models,
-        evidence: [{ url: a.listing.coingecko_url, note: evidenceNote(a), kind: 'owner_confirmed' }],
+        evidence: [{ url: a.listing.coingecko_url, note: evidenceNote(a), kind: delegated ? 'delegated_admission' : 'owner_confirmed' }],
         sector: { primary: sector, source: 'suggested' },
-        utterance: `scout lead ${a.lead_key} (admission ${a.admission_id})`,
+        utterance: delegated ? `scout lead ${a.lead_key} (automatic admission ${a.admission_id})` : `scout lead ${a.lead_key} (admission ${a.admission_id})`,
         run_utterance: null,
         owner_instructions: null,
-        channel: 'scout-leads',
+        channel: delegated ? 'scout-leads (automatic admission)' : 'scout-leads',
         idempotency: { project: a.effects.project === 'done' ? null : projectKey, research: researchKey },
-        consent: { routes: a.envelope.routes, budget_scope: a.envelope.budget_scope },
+        consent: delegated ? null : { routes: a.envelope.routes, budget_scope: a.envelope.budget_scope },
+        ...(delegated ? { assistant: 'claude' } : {}),
       });
     } catch (err) {
       const p = committed(projectKey);
+      if (delegated && (err.code === 'AMBIGUOUS' || err.code === 'CONFLICT')) {
+        if (p && a.effects.project !== 'done') a = updateAdmission(ws, id, `Link ${id}`, (cur) => ({ ...cur, project_id: p.result.project_id, project_basis: basisOf(p), effects: { ...cur.effects, project: 'done' } }));
+        return stopAdmission(ws, a, String(err.message).slice(0, 300), now);
+      }
       const consent = err.code === 'CONSENT_CHANGED';
       a = updateAdmission(ws, id, `Admission ${id} ${consent ? 'needs your word again' : 'failed'}`, (cur) => ({
         ...cur,
@@ -1188,7 +1383,7 @@ function completeAdmission(ws, id, { now = Date.now() } = {}) {
       }));
       return finish(ws, a);
     }
-    const words = `${res.added.status === 'exists' ? 'Already in your records' : 'Added to your watchlist'}; ${res.run.status === 'exists' ? 'a research run you started a few minutes ago is linked' : `research requested from ${namesOf(a.envelope.models)}`}.`;
+    const words = `${res.added.status === 'exists' ? 'Already in your records' : 'Added to your watchlist'}; ${res.run.status === 'exists' ? 'a research run you started a few minutes ago is linked' : `research requested from ${namesOf(a.envelope.models)}${delegated ? ' through the pilot worker' : ''}`}.`;
     try {
       a = linkEffects(ws, id, a, res, words, now);
     } catch (err) {
@@ -1196,6 +1391,15 @@ function completeAdmission(ws, id, { now = Date.now() } = {}) {
       // replays both and links them.
       return failStep(ws, id, err, now, ['project', 'research']);
     }
+  }
+  // 4. An automatic admission's pilot enrollment and exit target, only on the
+  // project it created itself.
+  if (delegated && a.effects.pilot !== 'done') {
+    if (lapsed) return lapse(ws, a, now);
+    if (a.project_basis === 'existing') return stopAdmission(ws, a, `it linked ${a.project_id}, a project already in the records, which is never enrolled automatically`, now);
+    const why = gate();
+    if (why) return stopAdmission(ws, a, why, now);
+    a = pilotEffect(ws, id, a, now);
   }
   return finish(ws, a);
 }
@@ -1209,8 +1413,8 @@ function linkEffects(ws, id, a, res, words, now) {
         ...doc,
         status: 'researching',
         updated_at: isoOf(now),
-        confirmed: { coingecko_id: a.listing.coingecko_id, name: a.listing.name, symbol: a.listing.symbol, at: cur.created_at, project_id: res.project_id, project_status: res.added.status, run_id: res.run.run_id, run_status: res.run.status, models: a.envelope.models },
-        events: [...(doc.events || []), { at: isoOf(now), what: `${a.listing.name} confirmed from a scout lead. ${words}` }].slice(-40),
+        confirmed: { coingecko_id: a.listing.coingecko_id, name: a.listing.name, symbol: a.listing.symbol, at: cur.created_at, project_id: res.project_id, project_status: res.added.status, run_id: res.run.run_id, run_status: res.run.status, models: a.envelope.models, ...(isDelegated(a) ? { by: a.actor } : {}) },
+        events: [...(doc.events || []), { at: isoOf(now), what: isDelegated(a) ? `${a.listing.name} admitted automatically from a scout lead (${a.actor}). ${words}` : `${a.listing.name} confirmed from a scout lead. ${words}` }].slice(-40),
       });
     }
     return {
@@ -1230,6 +1434,12 @@ function finish(ws, a) {
   if (state === a.state && state !== 'failed') return a;
   const last = a.errors.length ? a.errors[a.errors.length - 1].words : null;
   const project = !a.project_id ? 'Nothing was added' : a.project_basis === 'existing' ? 'Linked to the project already in your records' : 'Project added';
+  if (isDelegated(a)) {
+    const w = state === 'complete' ? `${doneWords(a)}. Admitted automatically; no person reviewed this lead. Pending evidence and research: the Prosecutor, the contract and exit-cost gates and the paper mandate decide everything after this.`
+      : state === 'failed' ? `Not finished: ${last || 'an effect failed'} (tried again until ${a.start_deadline})` : null;
+    if (state === a.state && w === a.words) return a;
+    return updateAdmission(ws, a.admission_id, `Admission ${a.admission_id} ${state}`, (cur) => ({ ...cur, state, words: w }));
+  }
   const words = state === 'complete'
     ? `${project}; research ${a.run_basis === 'existing_recent' ? 'linked to a run started a few minutes earlier' : `requested from ${namesOf(a.envelope.models)}`}.`
     : state === 'needs_consent' ? `${project}; research not requested: ${last || 'what you confirmed changed'}`
@@ -1240,7 +1450,8 @@ function finish(ws, a) {
 
 function lapse(ws, a, now) {
   return updateAdmission(ws, a.admission_id, `Admission ${a.admission_id} lapsed`, (cur) => {
-    const effects = Object.fromEntries(EFFECTS.map((e) => [e, cur.effects[e] === 'done' ? 'done' : 'lapsed']));
+    const effects = Object.fromEntries(effectsOf(cur).map((e) => [e, cur.effects[e] === 'done' ? 'done' : 'lapsed']));
+    if (isDelegated(cur)) return { ...cur, effects, state: 'lapsed', lapsed_at: isoOf(now), words: `${doneWords(cur)}; the rest was not started: the automatic admission lapsed at ${cur.start_deadline}.` };
     const done = cur.effects.project !== 'done' ? 'Nothing was added' : cur.project_basis === 'existing' ? 'Linked to the project already in your records' : 'Project added';
     return { ...cur, effects, state: 'lapsed', lapsed_at: isoOf(now), words: `${done}; research not requested: the confirmation lapsed at ${cur.start_deadline}.` };
   });
@@ -1274,8 +1485,11 @@ function requestAgain(ws, body, { now = Date.now() } = {}) {
     const env = envelope(ws);
     if (!env.models.length) throw opErr('NO_MODEL', 'Every model is on hold: nothing to request. Nothing was written.', 409);
     if (stableStringify(b.expect_envelope) !== stableStringify(env)) throw opErr('CHANGED', 'Changed since you looked: the models, routes or budget. Nothing was written; look again.', 409, { envelope: { reviewed: b.expect_envelope || null, now: env } });
+    // Eric's request: a confirmed admission, whatever admitted the lead first
+    // (an automatic one's kind, authority and day's reservation stay on it).
+    const { kind, actor, admission_policy, authority, reservation, capacity, enrollment, stopped_at, stopped_because, ...was } = prev;
     op.writeJson(`${ADMISSIONS}/${id}.json`, withKeys({
-      ...prev,
+      ...was,
       admission_id: id,
       request_id: b.request_id,
       envelope: env,
@@ -1366,7 +1580,9 @@ function reviewView(ws, { now = Date.now() } = {}) {
       admission: adm ? summaryOf(adm) : null,
     };
   });
-  return { schema_version: 'cr.scout-leads-review.v1', policy: { version: policy.version, sha256: policy.sha256, missing: policy.missing, enabled: policy.values.enabled }, envelope: env, rows, admissions: admissions.map(summaryOf) };
+  let auto;
+  try { auto = require('./lead-admission').statusView(ws, { now }); } catch (err) { auto = { on: false, code: 'unreadable', why: String((err && err.message) || err).slice(0, 200) }; }
+  return { schema_version: 'cr.scout-leads-review.v1', policy: { version: policy.version, sha256: policy.sha256, missing: policy.missing, enabled: policy.values.enabled }, envelope: env, rows, admissions: admissions.map(summaryOf), auto_admission: auto };
 }
 
 // An eligibility receipt by its ID, checked against its hash. Read only.
@@ -1442,4 +1658,14 @@ module.exports = {
   listAdmissions,
   reviewView,
   evidenceNote,
+  // Automatic admission (lead-admission.js) reuses the confirm's checks and
+  // effects through these.
+  DELEGATED_EFFECTS,
+  effectsOf,
+  rowCheck,
+  listingOf,
+  delegatedAdmission,
+  delegatedGate,
+  attempt,
+  intakeDocOf,
 };

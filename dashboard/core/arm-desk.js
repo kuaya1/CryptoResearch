@@ -24,13 +24,24 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 // 0.20 a notional cap of 20% of NAV).
 // settings: the desk's settings the caps may already be in (locally); null
 // online, where only the flags count.
-function armPatch({ dailyCu, monthlyCu, allow = [], intentLife = INTENT_LIFE_DEFAULT, contractsOn = false, mandateDays, mandateOff = false, settings = null, now = Date.now() } = {}) {
+//
+// Automatic admission of scout leads (lead-admission.js) is its own flag and
+// never rides on the mandate's: --admission-days=N arms it for N days (1 to
+// 30) with --admission-daily=N admissions a New York day (0 to 3, default 1),
+// --admission-off turns it off. Without them the patch leaves it as it is.
+function armPatch({ dailyCu, monthlyCu, allow = [], intentLife = INTENT_LIFE_DEFAULT, contractsOn = false, mandateDays, mandateOff = false, admissionDays, admissionDaily, admissionOff = false, settings = null, now = Date.now() } = {}) {
   if (!Number.isInteger(intentLife) || intentLife < 1 || intentLife > 10080) throw fail('USAGE', '--intent-life takes whole minutes from 1 to 10080.');
   if (mandateDays !== undefined && mandateOff) throw fail('USAGE', '--mandate-days and --mandate-off cannot both be given.');
   if (mandateDays !== undefined && !(Number.isInteger(mandateDays) && mandateDays >= 1 && mandateDays <= 30)) throw fail('USAGE', '--mandate-days takes whole days from 1 to 30.');
+  if (admissionDays !== undefined && admissionOff) throw fail('USAGE', '--admission-days and --admission-off cannot both be given.');
+  if (admissionDays !== undefined && !(Number.isInteger(admissionDays) && admissionDays >= 1 && admissionDays <= 30)) throw fail('USAGE', '--admission-days takes whole days from 1 to 30.');
+  if (admissionDaily !== undefined && !(Number.isInteger(admissionDaily) && admissionDaily >= 0 && admissionDaily <= 3)) throw fail('USAGE', '--admission-daily takes a whole number from 0 to 3.');
+  if (admissionDaily !== undefined && admissionDays === undefined) throw fail('USAGE', '--admission-daily goes with --admission-days=N (automatic admission is armed only with an expiry).');
   const automation = { exit_quotes_auto: true };
   if (mandateDays !== undefined) Object.assign(automation, { autonomous_paper_loop: true, mandate: { expires_at: new Date(now + mandateDays * DAY).toISOString() } });
   if (mandateOff) automation.autonomous_paper_loop = false;
+  if (admissionDays !== undefined) automation.lead_admission = { enabled: true, daily_limit: admissionDaily === undefined ? 1 : admissionDaily, expires_at: new Date(now + admissionDays * DAY).toISOString() };
+  if (admissionOff) automation.lead_admission = { enabled: false };
   const patch = {
     leads: { enabled: true, chains: [...LEAD_CHAINS], min_market_cap_usd: 5000000, min_volume_24h_usd: 250000, max_sell_tax_pct: 5, eligibility_hours: 48 },
     automation,
@@ -69,6 +80,9 @@ function leftOpen(patch, settings) {
   const expires = (pm.mandate && pm.mandate.expires_at) || (a.mandate && a.mandate.expires_at) || null;
   if (loop === true) out.push(`The paper mandate is on until ${expires || 'no expiry (it grants nothing)'}: pilot projects only, grade 50 or more, 1 grant a day and 2 open by default; undo any grant on its card. Run arm-desk --mandate-days=N again to extend it (at most 30).`);
   else out.push('The paper mandate is off: every grant is yours (--mandate-days=N turns it on for N days).');
+  const la = pm.lead_admission !== undefined ? { ...(a.lead_admission || {}), ...pm.lead_admission } : a.lead_admission || {};
+  if (la.enabled === true) out.push(`Automatic admission of scout leads is on until ${la.expires_at || 'no expiry (it admits nothing)'}: at most ${la.daily_limit === undefined ? 1 : la.daily_limit} a New York day, one pipeline at a time, each a research request (never a trade); --admission-off turns it off.`);
+  else out.push('Automatic admission of scout leads is off: an ELIGIBLE lead waits for your confirm (--admission-days=N turns it on for N days; the mandate flags never do).');
   out.push('The pilot-all pre-poll of the online desk needs CR_PILOT_POLL_TOKEN_SHA256 in Render > Environment; its token stays in %USERPROFILE%\\.cryptoresearch\\secrets.json (pilot_poll_token).');
   return out;
 }
@@ -94,17 +108,21 @@ function onlineScript(patch, { url = 'https://cryptoresearch.onrender.com', left
   ].join('\n');
 }
 
-// The Windows Task Scheduler line for --pilot-all every 30 minutes, printed
-// and never run. /IT runs it only while Eric is signed in; a task made this
-// way does not start a new instance while one runs, and does not wake the PC.
+// The Windows Task Scheduler task for --pilot-all every 30 minutes, through
+// dashboard/scripts/pilot-task.ps1 (readiness PR, 2026-10-31), printed and
+// never run: registered disabled for the signed-in user, the verified Node
+// binary and pilot.js in the repository folder, no window, IgnoreNew, a
+// 3-hour limit; it never replaces a task it did not make.
 const TASK_NAME = 'CryptoResearch pilot-all';
 function scheduleText(root) {
-  const run = `cmd.exe /c cd /d \\"${root}\\" && npm run pilot -- --pilot-all --desk=online --max-agents=2`;
+  const ps = `powershell -NoProfile -ExecutionPolicy Bypass -File "${root}\\dashboard\\scripts\\pilot-task.ps1"`;
   return [
-    'Paste into a Command Prompt (cmd.exe) to schedule the pilot every 30 minutes. Nothing was run.',
-    `schtasks /Create /TN "${TASK_NAME}" /SC MINUTE /MO 30 /IT /TR "${run}" /F`,
-    'Only while you are signed in (/IT); if a run is still going the next is not started (the task\'s default); the PC is not woken. Exit code 3 in the task history means a project needs you (an expired dispatch to reconcile).',
-    `To remove it: schtasks /Delete /TN "${TASK_NAME}" /F`,
+    'Paste into PowerShell or a Command Prompt to register the pilot every 30 minutes, disabled until you enable it. Nothing was run.',
+    `${ps} -Register -MaxAgents 1`,
+    `${ps} -Status`,
+    `${ps} -Enable`,
+    'Only while you are signed in; if a run is still going the next is skipped; a missed start runs once when the PC is available; the PC is not woken. The runner\'s result is the last line of %USERPROFILE%\\.cryptoresearch\\pilot-all.jsonl (exit 3: a project needs you).',
+    `To stop it: ${ps} -Disable (or -Remove).`,
   ].join('\n');
 }
 

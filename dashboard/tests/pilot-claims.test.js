@@ -216,8 +216,9 @@ test('automation.paused: the connector\'s pilot queue answers "paused" for every
 test('defaults: automation not paused, the standing exit-quote policy off, research Claude only', (t) => {
   const s = setup(t);
   // The paper mandate (automation.autonomous_paper_loop) is off by default and has no expiry;
-  // the pilot runner's agent sessions are capped at 6 a day (corrective PR, 2026-10-31).
-  assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false, autonomous_paper_loop: false, mandate: { expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: ['ethereum', 'base', 'arbitrum', 'optimism', 'solana'] }, pilot_daily_sessions: 6 });
+  // the pilot runner's agent sessions are capped at 6 a day (corrective PR, 2026-10-31);
+  // automatic admission of scout leads is off, 1 a day once armed, no expiry (readiness PR).
+  assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false, autonomous_paper_loop: false, mandate: { expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: ['ethereum', 'base', 'arbitrum', 'optimism', 'solana'] }, pilot_daily_sessions: 6, lead_admission: { enabled: false, daily_limit: 1, expires_at: null } });
   assert.deepEqual(s.ws.settings.research.default_providers, ['claude']);
   assert.deepEqual(require('../core/forensics').autoExitQuotePlan(s.ws), { add: [], over_budget: [] });
   assert.ok(HOUR);

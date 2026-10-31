@@ -144,6 +144,12 @@ const DEFAULT_SETTINGS = {
     // The pilot runner's agent sessions a day (pilot-claims.js), reserved
     // before each starts, failed ones included.
     pilot_daily_sessions: 6,
+    // Automatic admission of ELIGIBLE scout leads (lead-admission.js): off;
+    // when armed, at most daily_limit (0 to 3) a New York day, one pipeline
+    // at a time, until expires_at (at most 30 days ahead). Outside `mandate`,
+    // so it never changes the paper mandate's authority. Its `authority` is
+    // recorded by the desk on each arming write, never sent.
+    lead_admission: { enabled: false, daily_limit: 1, expires_at: null },
   },
   // Eric's own trader rules (trader-rules.js; Preferences > Screening): the
   // minimum stop distance, the notional cap, an intent's longest life and the

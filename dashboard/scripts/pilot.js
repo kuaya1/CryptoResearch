@@ -217,21 +217,103 @@ function sessionDir() {
 }
 
 // Managed (policy) settings can add hooks, allow rules or MCP servers that no
-// launch flag removes, so a machine that has them is refused.
-function managedPolicy({ platform = process.platform, env = process.env, exists = fs.existsSync, reg = null } = {}) {
-  const files = platform === 'win32'
-    ? [...new Set([env.ProgramW6432, env.ProgramFiles, 'C:\\Program Files'].filter(Boolean))].flatMap((d) => ['managed-settings.json', 'managed-mcp.json'].map((n) => path.win32.join(d, 'ClaudeCode', n)))
-    : platform === 'darwin' ? ['/Library/Application Support/ClaudeCode/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-mcp.json']
-      : ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-mcp.json'];
-  const found = files.filter((f) => exists(f));
-  if (platform === 'win32') {
-    const query = reg || ((key) => spawnSync(path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'reg.exe'), ['query', key], { encoding: 'utf8', windowsHide: true, timeout: 15000 }));
-    for (const key of ['HKLM\\SOFTWARE\\Policies\\ClaudeCode', 'HKCU\\SOFTWARE\\Policies\\ClaudeCode']) {
-      const r = query(key);
-      if (!r || r.error || (r.status !== 0 && r.status !== 1)) found.push(`${key} (could not be read)`);
-      else if (r.status === 0) found.push(key);
+// launch flag removes, so a machine that has them is refused. Only a confirmed
+// absence passes: a policy file or key that is present (whatever it holds),
+// that cannot be read, or whose state is not known refuses the launch.
+//
+// A policy file: absent only when the file system says it does not exist
+// (ENOENT, ENOTDIR); a permission or other error is "could not be read".
+function policyFileState(f) {
+  try {
+    fs.statSync(f);
+    return 'present';
+  } catch (err) {
+    return err && (err.code === 'ENOENT' || err.code === 'ENOTDIR') ? 'absent' : `could not be read (${(err && err.code) || 'error'})`;
+  }
+}
+
+// The Windows policy keys are read through the registry API, not reg.exe:
+// reg.exe exits 1 both for a missing key and for one it may not read, and its
+// words are localized. A PowerShell child opens each key with .NET
+// (Microsoft.Win32.RegistryKey, in the 64- and 32-bit registry views) and
+// reports one structured state per key: absent (OpenSubKey returned null),
+// present, denied (SecurityException, UnauthorizedAccessException) or error.
+// Only an answer in exactly that shape with every key absent is an absence; a
+// spawn failure, a timeout, another exit, other output or a missing row
+// refuses (cr-policy-registry@1).
+const POLICY_SUBKEY = 'SOFTWARE\\Policies\\ClaudeCode';
+const REG_FORMAT = 'cr-policy-registry@1';
+const REG_HIVES = Object.freeze({ LocalMachine: 'HKLM', CurrentUser: 'HKCU' });
+const REG_VIEWS = Object.freeze({ Registry64: '64-bit view', Registry32: '32-bit view' });
+const REG_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  '$rows = New-Object System.Collections.ArrayList',
+  `foreach ($h in @(${Object.keys(REG_HIVES).map((h) => `'${h}'`).join(',')})) {`,
+  `  foreach ($v in @(${Object.keys(REG_VIEWS).map((v) => `'${v}'`).join(',')})) {`,
+  "    $state = 'error'; $detail = ''",
+  '    try {',
+  '      $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]$h, [Microsoft.Win32.RegistryView]$v)',
+  '      try {',
+  `        $k = $base.OpenSubKey('${POLICY_SUBKEY}', $false)`,
+  "        if ($null -eq $k) { $state = 'absent' }",
+  "        else { try { $state = 'present'; $detail = 'values ' + $k.ValueCount + ', subkeys ' + $k.SubKeyCount } finally { $k.Close() } }",
+  '      } finally { $base.Close() }',
+  "    } catch [System.Security.SecurityException] { $state = 'denied'; $detail = $_.Exception.GetType().FullName }",
+  "    catch [System.UnauthorizedAccessException] { $state = 'denied'; $detail = $_.Exception.GetType().FullName }",
+  "    catch { $state = 'error'; $detail = $_.Exception.GetType().FullName }",
+  '    [void]$rows.Add([ordered]@{ hive = $h; view = $v; state = $state; detail = $detail })',
+  '  }',
+  '}',
+  `[Console]::Out.Write((ConvertTo-Json -Compress -Depth 4 ([ordered]@{ format = '${REG_FORMAT}'; keys = @($rows) })))`,
+].join('\n');
+
+function regQuery(env, run = spawnSync) {
+  const ps = path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return run(ps, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(REG_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
+}
+
+// The registry answer, judged: [] only when every policy key is confirmed absent.
+function readPolicyRegistry(r) {
+  const unread = (why) => [`${Object.values(REG_HIVES).map((h) => `${h}\\${POLICY_SUBKEY}`).join(', ')} (could not be read: ${why})`];
+  if (!r) return unread('no answer');
+  if (r.error) return unread(r.error.code === 'ETIMEDOUT' ? 'timed out' : `PowerShell did not run, ${r.error.code || r.error.message}`);
+  if (r.signal) return unread(`stopped by ${r.signal}`);
+  if (r.status !== 0) return unread(`PowerShell exit ${r.status}`);
+  let j = null;
+  try { j = JSON.parse(String(r.stdout || '').trim()); } catch (_) { return unread('an answer that is not the expected JSON'); }
+  if (!j || j.format !== REG_FORMAT || !Array.isArray(j.keys) || j.keys.length !== Object.keys(REG_HIVES).length * Object.keys(REG_VIEWS).length) return unread('an answer in another shape');
+  const found = [];
+  for (const [hive, short] of Object.entries(REG_HIVES)) {
+    for (const [view, words] of Object.entries(REG_VIEWS)) {
+      const rows = j.keys.filter((x) => x && x.hive === hive && x.view === view);
+      const key = `${short}\\${POLICY_SUBKEY}`;
+      if (rows.length !== 1) { found.push(`${key} (could not be read: ${words} not answered once)`); continue; }
+      const { state, detail } = rows[0];
+      if (state === 'absent') continue;
+      if (state === 'present') found.push(`${key} (${words}: present, ${String(detail || '').slice(0, 60)})`);
+      else if (state === 'denied') found.push(`${key} (could not be read: ${words}, access denied)`);
+      else found.push(`${key} (could not be read: ${words}, ${state === 'error' ? String(detail || 'error').slice(0, 80) : `unknown state ${JSON.stringify(String(state)).slice(0, 40)}`})`);
     }
   }
+  return found;
+}
+
+// `statFile` and `reg` (a spawnSync-like runner for the registry read) are
+// the tests' seams.
+function managedPolicy({ platform = process.platform, env = process.env, statFile = policyFileState, reg = null } = {}) {
+  const files = platform === 'win32'
+    ? [...new Set([env.ProgramW6432, env.ProgramFiles, 'C:\\Program Files'].filter(Boolean))].map((d) => path.win32.join(d, 'ClaudeCode'))
+      .concat([path.win32.join(env.ProgramData || env.ALLUSERSPROFILE || 'C:\\ProgramData', 'ClaudeCode')])
+      .flatMap((d) => ['managed-settings.json', 'managed-mcp.json', 'managed-settings.d'].map((n) => path.win32.join(d, n)))
+    : platform === 'darwin' ? ['/Library/Application Support/ClaudeCode/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-mcp.json', '/Library/Application Support/ClaudeCode/managed-settings.d', '/Library/Managed Preferences/com.anthropic.claudecode.plist']
+      : ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-mcp.json', '/etc/claude-code/managed-settings.d'];
+  const found = [];
+  for (const f of files) {
+    const s = statFile(f);
+    if (s === 'absent') continue;
+    found.push(s === 'present' ? f : `${f} (${String(s).slice(0, 60)})`);
+  }
+  if (platform === 'win32') found.push(...readPolicyRegistry(regQuery(env, reg || spawnSync)));
   return found;
 }
 
@@ -247,29 +329,56 @@ function checkHelp(bin, env, { run = spawnSync } = {}) {
   return v && v.status === 0 ? String(v.stdout || '').trim().slice(0, 80) : null;
 }
 
-// One tool the model is offered, judged: WebSearch or WebFetch; Claude Code's
+// The capability one offered tool gives, in either form a request may carry
+// it: Claude Code's own client tools (WebSearch, WebFetch) or the API's
+// server tools (web_search_<date>, web_fetch_<date>). null for anything else.
+function capabilityOf(t) {
+  if (!t || typeof t !== 'object') return null;
+  const client = !t.type || t.type === 'custom';
+  if (client && t.name === 'WebSearch') return 'search';
+  if (client && t.name === 'WebFetch') return 'fetch';
+  if (t.name === 'web_search' && /^web_search_\d+$/.test(String(t.type))) return 'search';
+  if (t.name === 'web_fetch' && /^web_fetch_\d+$/.test(String(t.type))) return 'fetch';
+  return null;
+}
+const CAPABILITIES = Object.freeze(['search', 'fetch']);
+
+// One tool the model is offered, judged: a web capability; Claude Code's
 // inert deferred-loading placeholder (no input, never callable); nothing else.
 function toolAllowed(t) {
+  if (capabilityOf(t)) return true;
   if (!t || typeof t !== 'object') return false;
-  if (AGENT_TOOLS.includes(t.name) && (!t.type || t.type === 'custom')) return true;
-  if ((t.name === 'web_search' && /^web_search_\d+$/.test(String(t.type))) || (t.name === 'web_fetch' && /^web_fetch_\d+$/.test(String(t.type)))) return true;
   const props = t.input_schema && t.input_schema.properties ? Object.keys(t.input_schema.properties) : [];
   return t.name === PLACEHOLDER && t.defer_loading === true && props.length === 0;
 }
 
 // The probe's verdict on the model requests the CLI sent to the stand-in.
+// Every request may offer the web capabilities and the inert placeholder only,
+// with no MCP tool or server named anywhere; and the session's own request
+// must offer both, search and fetch. An empty, missing, placeholder-only or
+// incomplete tool list is not the checked boundary: the session would not be
+// the one this runner was built for, so it refuses too.
 function judgeProbe(bodies) {
   if (!bodies.length) return { ok: false, words: 'the probe saw no model request, so what the session would be offered is unknown.' };
   const seen = new Set();
+  let complete = false;
   for (const raw of bodies) {
     let j = null;
     try { j = JSON.parse(raw); } catch (_) { return { ok: false, words: 'the probe could not read a model request.' }; }
-    const tools = Array.isArray(j && j.tools) ? j.tools : [];
+    if (!j || typeof j !== 'object') return { ok: false, words: 'the probe could not read a model request.' };
+    if (j.tools !== undefined && !Array.isArray(j.tools)) return { ok: false, words: 'the session\'s model request carries a tool list the probe cannot read.' };
+    const tools = Array.isArray(j.tools) ? j.tools : [];
     const extra = tools.filter((t) => !toolAllowed(t)).map((t) => String((t && t.name) || (t && t.type) || '?'));
     if (extra.length) return { ok: false, words: `the session would be offered ${[...new Set(extra)].slice(0, 12).join(', ')}, beyond ${AGENT_TOOLS.join(' and ')}.` };
     if (Array.isArray(j.mcp_servers) && j.mcp_servers.length) return { ok: false, words: 'the session\'s model request names MCP servers.' };
     if (raw.includes('mcp__')) return { ok: false, words: 'the session\'s model request names an MCP tool.' };
-    for (const t of tools) if (t.name !== PLACEHOLDER) seen.add(t.name);
+    const caps = new Set(tools.map(capabilityOf).filter(Boolean));
+    if (CAPABILITIES.every((c) => caps.has(c))) complete = true;
+    for (const t of tools) if (capabilityOf(t)) seen.add(t.name);
+  }
+  if (!complete) {
+    const offered = seen.size ? [...seen].sort().join(', ') : 'no web tool';
+    return { ok: false, words: `the session's model request did not offer both web capabilities (search and fetch); it offered ${offered}. An empty, placeholder-only or incomplete tool list is not the checked boundary.` };
   }
   return { ok: true, tools: [...seen].sort() };
 }
@@ -322,7 +431,7 @@ function probeTools(bin, args, env, { timeoutMs = 60000, spawnImpl = spawn, cwd:
 // A launcher: the session function the runners call, with its preflight.
 // Tests give it a stand-in executable (bin) and environment; the runner's own
 // is makeLauncher() on the real claude.
-function makeLauncher({ bin = null, env = process.env, settings = null, platform = process.platform, exists = fs.existsSync, reg = null, run = spawnSync, spawnImpl = spawn, probeTimeoutMs = 60000 } = {}) {
+function makeLauncher({ bin = null, env = process.env, settings = null, platform = process.platform, exists = fs.existsSync, statFile = policyFileState, reg = null, run = spawnSync, spawnImpl = spawn, probeTimeoutMs = 60000 } = {}) {
   const passed = new Map();
   const binOf = () => bin || { file: resolveClaude({ platform, env, exists }), args: [] };
   const argsFor = (model) => launchArgs(sessionChoice(model, env, settings || userModelSettings(env)));
@@ -333,7 +442,7 @@ function makeLauncher({ bin = null, env = process.env, settings = null, platform
     const args = argsFor(o.model || null);
     const k = key(b, args);
     if (passed.has(k)) return passed.get(k);
-    const policy = managedPolicy({ platform, env, exists, reg });
+    const policy = managedPolicy({ platform, env, statFile, reg });
     if (policy.length) throw isolationError(`managed Claude Code settings are installed on this machine (${policy.join('; ')}); they can add hooks, allow rules or MCP servers that no launch flag removes.`);
     const version = checkHelp(b, env, { run });
     const p = await probeTools(b, args, env, { timeoutMs: probeTimeoutMs, spawnImpl });
@@ -830,7 +939,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, runOnline, runLocal, runAll, takeLock, readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, judgeProbe, probeTools, makeLauncher };
+module.exports = { resolveClaude, parse, forcedTicket, runOnline, runLocal, runAll, takeLock, readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {
