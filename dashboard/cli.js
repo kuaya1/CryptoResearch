@@ -942,12 +942,25 @@ async function run(argv) {
         const PC = require('./core/pilot-claims');
         const claims = {};
         for (const s of steps) { const c = PC.peek(ws, s.project_id, s); if (c) claims[s.project_id] = c; }
-        return { steps, pending: tk.pendingFor(ws), paused: require('./core/workspace').automationPaused(ws), claims };
+        const sessions = PC.sessionsView(ws);
+        // Each project's next action, blocker, authority, claim and IDs.
+        const status = require('./core/mandate-authority').statusRows(ws, steps, { sessions });
+        return { steps, pending: tk.pendingFor(ws), paused: require('./core/workspace').automationPaused(ws), claims, sessions, status };
       }
       // The pilot runner's execution claim (cr-pilot-claim@1, stage 5.4).
       if (sub === 'claim') return require('./core/pilot-claims').claim(ws, need(pid, 'tickets claim <project> [--expect KEY] [--owner NAME]'), { owner: one(flags.owner) || actor, expect: one(flags.expect) || null, force: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
       if (sub === 'bind') return require('./core/pilot-claims').bind(ws, need(pid, 'tickets bind <project> --token T [--run R] [--ticket K]'), need(one(flags.token), '--token'), { run_id: one(flags.run) || null, ticket_id: one(flags.ticket) || null });
       if (sub === 'release') return require('./core/pilot-claims').release(ws, need(pid, 'tickets release <project> --token T | --reconciled'), { token: one(flags.token) || null, reconciled: Boolean(flags.reconciled), outcome: one(flags.outcome) || null });
+      // Eric's human latch on the paper mandate (mandate-authority.js): --stop
+      // holds the project's automatic grants and openings; --rearm clears it.
+      if (sub === 'autonomy') {
+        const usage = 'tickets autonomy <project> --stop|--rearm [--note TEXT]';
+        const p = need(pid, usage);
+        if (!flags.stop && !flags.rearm) return { project_id: p, autonomy: tk.autonomyOf(ws, p) };
+        if (flags.stop && flags.rearm) throw Object.assign(new Error(usage), { code: 'USAGE' });
+        const r = tk.setAutonomy(ws, p, { action: flags.stop ? 'stop' : 'rearm', note: one(flags.note) || null, by: actor });
+        return { ...r, ...(r.status === 'saved' ? await afterWrite(ws, p) : {}) };
+      }
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
         const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), reopen: Boolean(flags.reopen), restart: Boolean(flags.restart), force_prosecution: Boolean(flags['force-prosecution'] || flags.force_prosecution) });

@@ -16,7 +16,7 @@ const F = require('../core/forensics');
 const projects = require('../core/projects');
 const leases = require('../core/leases');
 const { withExitReadings } = require('./helpers');
-const { mandateDesk, saveTicket, inDays } = require('./mandate-fixture');
+const { mandateDesk, saveTicket, inDays, ARMED } = require('./mandate-fixture');
 
 const H = 3600000;
 const BY = 'mandate:cr-paper-mandate@1';
@@ -126,19 +126,23 @@ test('a $0 ticket (no exit) is not granted (R2); a non-pilot project is not look
   assert.deepEqual([q.granted.length, q.skipped.length], [0, 0]);
 });
 
-test('Eric\'s veto first, or his approve then undo: the mandate never grants that ticket (R3)', (t) => {
+test('Eric\'s veto first, or his approve then undo: the project is suspended (R0); rearmed, that ticket is still his (R3)', (t) => {
   const v = sweepDesk(t);
   T.decide(v.ws, v.pid, { receipt_id: v.r.receipt_id, action: 'veto', request_id: 'req_mandate_veto1', by: 'eric' });
   const a = T.mandateSweep(v.ws);
   assert.equal(a.granted.length, 0);
-  assert.match(skippedBy(a, 'R3')[0].words, /already has a decision/);
+  assert.match(skippedBy(a, 'R0')[0].words, /suspended by Eric's veto/);
+  T.setAutonomy(v.ws, v.pid, { action: 'rearm', request_id: 'req_mandate_rearm1', by: 'eric' });
+  const a2 = T.mandateSweep(v.ws);
+  assert.equal(a2.granted.length, 0);
+  assert.match(skippedBy(a2, 'R3')[0].words, /Eric decided this ticket/);
 
   const u = sweepDesk(t);
   T.decide(u.ws, u.pid, { receipt_id: u.r.receipt_id, action: 'approve', request_id: 'req_mandate_appr1', by: 'eric' });
   T.decide(u.ws, u.pid, { receipt_id: u.r.receipt_id, action: 'undo', request_id: 'req_mandate_undo1', by: 'eric' });
   const b = T.mandateSweep(u.ws);
   assert.equal(b.granted.length, 0);
-  assert.equal(skippedBy(b, 'R3').length, 1);
+  assert.match(skippedBy(b, 'R0')[0].words, /suspended by Eric's Undo/);
   assert.ok(!linesOf(u.ws, u.pid).some((l) => l.decided_by === BY));
 });
 
@@ -148,7 +152,11 @@ test('the mandate grants an undone mandate grant\'s ticket never again', (t) => 
   T.decide(s.ws, s.pid, { receipt_id: g.receipt_id, action: 'undo', request_id: 'req_mandate_undo2', by: 'eric' });
   const out = T.mandateSweep(s.ws);
   assert.equal(out.granted.length, 0);
-  assert.equal(skippedBy(out, 'R3').length, 1);
+  assert.match(skippedBy(out, 'R0')[0].words, /suspended by Eric's Undo/);
+  T.setAutonomy(s.ws, s.pid, { action: 'rearm', request_id: 'req_mandate_rearm2', by: 'eric' });
+  const again = T.mandateSweep(s.ws);
+  assert.equal(again.granted.length, 0);
+  assert.equal(skippedBy(again, 'R3').length, 1, 'rearmed, the undone ticket is still Eric\'s');
 });
 
 test('R4: a native L1, a chain off the list, a contract hold or one not observed is skipped', (t) => {
@@ -156,7 +164,7 @@ test('R4: a native L1, a chain off the list, a contract hold or one not observed
   rewriteIdentity(n.ws, n.pid, (id) => { id.native_chain = true; });
   assert.match(skippedBy(T.mandateSweep(n.ws), 'R4')[0].words, /native L1 coin stays Eric's own decision/);
 
-  const c = sweepDesk(t, { settings: { automation: { autonomous_paper_loop: true, mandate: { expires_at: inDays(7), allowed_chains: ['ethereum'] } } } });
+  const c = sweepDesk(t, { settings: { automation: { autonomous_paper_loop: true, mandate: { expires_at: inDays(7), allowed_chains: ['ethereum'], authority: ARMED() } } } });
   assert.match(skippedBy(T.mandateSweep(c.ws), 'R4')[0].words, /exit chain \(Base\) is not among/);
 
   const h = sweepDesk(t, { evidence: 'The contract gate holds: the observation is older than its evidence life (CG-20, FICTIONAL).' });
@@ -232,7 +240,7 @@ test('the day\'s cap stops a grant: one mandate grant today elsewhere, cap 1', (
 });
 
 test('the open cap stops a grant, and a trader book that does not read grants nothing', (t) => {
-  const s = sweepDesk(t, { settings: { automation: { autonomous_paper_loop: true, mandate: { expires_at: inDays(7), max_open_grants: 1 } } } });
+  const s = sweepDesk(t, { settings: { automation: { autonomous_paper_loop: true, mandate: { expires_at: inDays(7), max_open_grants: 1, authority: ARMED() } } } });
   const other = otherGrant(s.ws, new Date(Date.now() - 36 * H).toISOString());
   const real = TD.requests;
   t.after(() => { TD.requests = real; });
@@ -244,7 +252,7 @@ test('the open cap stops a grant, and a trader book that does not read grants no
   TD.requests = () => { throw new Error('book unreadable (FICTIONAL)'); };
   const failed = T.mandateSweep(s.ws);
   assert.equal(failed.granted.length, 0);
-  assert.match(failed.why, /could not be read .*grants nothing/);
+  assert.match(failed.why, /caps could not be counted \(book unreadable \(FICTIONAL\)\), so it grants nothing/);
   TD.requests = () => ({ requests: [{ decision_id: other.decision_id, in_force: true, phase: 'closed' }] });
   assert.equal(T.mandateSweep(s.ws).granted.length, 1, 'a closed grant frees the cap');
 });

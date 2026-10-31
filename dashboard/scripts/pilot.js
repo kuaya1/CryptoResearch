@@ -3,8 +3,8 @@
 // The autonomous pilot, from PowerShell in one command:
 //
 //   npm run pilot -- --project=olas                 this folder's desk (local)
-//   npm run pilot -- --project=olas --desk=online   the online desk, through the
-//                                                   CryptoResearch connector
+//   npm run pilot -- --project=olas --desk=online   the online desk, through its
+//                                                   worker routes (cr-pilot-worker@1)
 //   npm run pilot -- --project=olas --dry-run       say what would run, run nothing
 //   npm run pilot -- --pilot-all --desk=online      every pilot project: a zero-token
 //                                                   pre-poll first, then at most
@@ -25,11 +25,14 @@
 //                         session that never sees Agent 1's session.
 //
 // Local: every record change goes through `node dashboard/cli.js` and is
-// verified by it. Online: one fresh `claude -p` session per step, each
-// allowed only its role's CryptoResearch connector tools and web search,
-// following autonomous_pilot_queue; the Researcher's and the Prosecutor's
-// sessions share no transcript. Either way the chain stops at Eric's PM
-// review: it never decides a ticket, places an order or moves money.
+// verified by it. Online: the runner takes the online desk's claim and the
+// frozen prompt through the worker routes (core/pilot-worker.js) and runs
+// each step in a fresh `claude -p` session with web tools only; the desk
+// saves and verifies the answer. Either way each session is reserved against
+// the day's ceiling before it starts (automation.pilot_daily_sessions), the
+// Researcher's and the Prosecutor's sessions share no transcript and hold no
+// desk credential, and the chain stops at Eric's PM review: it never decides
+// a ticket, places an order or moves money.
 
 const fs = require('fs');
 const os = require('os');
@@ -102,6 +105,9 @@ function claude(prompt, { tools, model, timeoutMin }) {
   const args = ['-p', '--output-format', 'text', '--allowedTools', tools.join(',')];
   if (model) args.push('--model', model);
   const r = spawnSync(resolveClaude(), args, { cwd: os.tmpdir(), input: prompt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: timeoutMin * 60000 });
+  // A session that timed out or was stopped by a signal may still have been
+  // working: its outcome is uncertain, never retried.
+  if ((r.error && r.error.code === 'ETIMEDOUT') || r.signal) throw Object.assign(new Error(`claude -p did not finish (${r.error ? r.error.code : r.signal}) within ${timeoutMin} minutes.`), { uncertain: true });
   if (r.error) throw new Error(`claude -p could not run: ${r.error.message}`);
   if (r.status !== 0) throw new Error(`claude -p stopped (exit ${r.status}): ${(r.stderr || '').trim().slice(0, 600)}`);
   return r.stdout;
@@ -130,7 +136,7 @@ function forcedTicket(step, ticket, o) {
 // The claim's answers that stop the runner (cr-pilot-claim@1): another runner
 // holds the project, an expired dispatch waits to be reconciled, the one
 // correction was used, or Eric paused automation.
-const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused']);
+const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused', 'session_ceiling', 'sessions_unknown']);
 
 // A claim not yet bound is let go when the runner stops; a bound one (an
 // agent was dispatched and its outcome is unknown) is left to expire, so the
@@ -225,108 +231,114 @@ function localSteps(o, cli, h, agent = claude) {
   say(`Stopped after ${MAX_STEPS} steps.`);
 }
 
-// Online, as locally, each role is its own `claude -p` session: a fresh
-// context that never sees the other's transcript, allowed only its own
-// connector tools (and web search). The runner carries nothing from one
-// session to the next but the queue's step name; the Prosecutor reads the
-// report only as frozen into its prompt by start_ticket.
-const ROLE_TOOLS = Object.freeze({
-  researcher: Object.freeze(['autonomous_pilot_queue', 'start_research', 'get_research', 'save_research_draft', 'save_report']),
-  prosecutor: Object.freeze(['autonomous_pilot_queue', 'start_ticket', 'get_ticket', 'save_ticket']),
-});
-const STEPS = ['research', 'ticket', 'ticket_failed', 'gate_closed', 'contract_evidence', 'pm_review', 'paused', 'done', 'blocked', 'unknown'];
-const PAUSED_WORDS = 'Not dispatched: automation is paused on the online desk (settings automation.paused); no agent is dispatched until you resume it.';
+// Online (cr-pilot-worker@1, corrective PR 2026-10-31): the runner, not an
+// agent, talks to the online desk, with the worker token (pilot_worker_token
+// in %USERPROFILE%\.cryptoresearch\secrets.json, never printed). For each
+// step it takes the desk's own claim (claim), has the desk open the run or
+// ticket and hand back the exact frozen prompt (prepare: the desk reserves
+// the day's session before it answers), runs that prompt in a fresh
+// `claude -p` session with web tools only (no connector, no desk token,
+// nothing of another session), and gives the answer back for the desk to
+// save and verify (complete). The Researcher's and the Prosecutor's sessions
+// are separate processes that share nothing but the desk's frozen records.
+//
+// Uncertainty is kept, never retried: a lost or timed-out answer from the
+// desk, or a session that timed out, leaves the claim dispatched for Eric to
+// reconcile on the online desk; nothing is run again by itself. A session
+// that failed outright (it could save nothing: it has no desk tools) is
+// released as agent_failed; its session still counts against the day.
+// Eric's override (--force-prosecution) is local only.
+const WORKER_FORMAT = 'cr-pilot-worker@1';
+const ONLINE_RECONCILE = (pid) => `Check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true}); nothing is run again until then.`;
+const sha256 = (t) => require('crypto').createHash('sha256').update(t, 'utf8').digest('hex');
 
-const roleTools = (role, o) => [...ROLE_TOOLS[role].map((t) => `${o.connector}__${t}`), ...WEB_TOOLS];
+// The worker token, from %USERPROFILE%\.cryptoresearch\secrets.json
+// (pilot_worker_token). Never printed or logged, never given to a session.
+function readWorkerToken(file = path.join(homeDir(), 'secrets.json')) {
+  let s = null;
+  try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw new Error(`The worker token could not be read from ${file} (${err.code || 'unreadable'}).`); }
+  const t = s && typeof s.pilot_worker_token === 'string' ? s.pilot_worker_token.trim() : '';
+  if (t.length < 16) throw new Error(`${file} holds no pilot_worker_token.`);
+  return t;
+}
 
-function roleInstruction(role, o) {
-  const words = JSON.stringify(o.ownerWords || FORCE_WORDS);
-  const head = `CryptoResearch autonomous pilot, project "${o.project}", Eric's online desk. Use only the tools you are given.`;
-  const tail = [
-    'If the queue answers "paused", Eric paused automation: call nothing else and answer only "NEXT_STEP: paused".',
-    'Never decide a ticket, never choose a dollar amount, never place or simulate an order.',
-    `When you are done, call autonomous_pilot_queue with project "${o.project}" once more and end your answer with one line, exactly "NEXT_STEP: <step>", naming the step it returns.`,
-  ];
-  if (role === 'researcher') {
-    return [
-      head,
-      'You are Agent 1, the Researcher, in a session of your own.',
-      `1. Call autonomous_pilot_queue with project "${o.project}". If its step is not "research", do nothing else.`,
-      '2. If it is "research": use start_research for Claude only (owner_request "autonomous pilot") or resume the open run, follow its frozen prompt exactly with your own web research, and save_report with the whole report. One report, then stop.',
-      ...tail,
-    ].join('\n');
+// One worker request. A desk that did not answer, answered 5xx or answered
+// something unreadable is `uncertain` (the request may have been carried
+// out); a 4xx is the desk's refusal, with its code.
+async function workerCall(fetchImpl, desk, token, op, body, { timeoutMs = 120000 } = {}) {
+  let res;
+  try {
+    res = await fetchImpl(`${desk}/api/pilot/worker/${op}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    throw Object.assign(new Error(`The online desk did not answer ${op} (${err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : String(err && err.message || err).slice(0, 120)}).`), { uncertain: true });
   }
-  return [
-    head,
-    'You are Agent 2, the Prosecutor, in a session of your own. You have not seen the research session; the report reaches you only as frozen into the prompt start_ticket returns.',
-    `1. Call autonomous_pilot_queue with project "${o.project}" and do only its one next step.`,
-    o.forceProsecution
-      ? `2. Eric asked for a Prosecutor although the desk's gate closed on the grade (his words: ${words}). On a "gate_closed" step, and on a "pm_review" step whose ticket in force (get_ticket) is the desk's gate receipt (desk_gate: true) still waiting for his review, call start_ticket with force_prosecution: true and owner_request exactly those words, then do step 3 with the ticket it opens. Never on a desk gate Eric already decided. If start_ticket opens no ticket, give its message and stop.`
-      : '2. A "gate_closed" step needs no Prosecutor: call start_ticket (owner_request "autonomous pilot") once, which saves the desk\'s gate receipt, and stop.',
-    '3. A "ticket" or "ticket_failed" step: start_ticket (owner_request "autonomous pilot"), take the Prosecutor\'s role its frozen prompt gives you, apart from the report\'s author, and save_ticket with the whole text and its JSON block. One ticket, then stop.',
-    '4. Any other step: do nothing.',
-    ...tail,
-  ].join('\n');
+  let json = null;
+  try { json = await res.json(); } catch (_) { json = null; }
+  if (res.status >= 500 || (res.ok && (!json || json.format !== WORKER_FORMAT))) throw Object.assign(new Error(`The online desk's answer to ${op} is not settled (${res.status}${json && json.error ? `: ${String(json.error).slice(0, 200)}` : ''}).`), { uncertain: true, status: res.status });
+  if (!res.ok) throw Object.assign(new Error(`The online desk refused ${op} (${res.status}${json && json.code ? ` ${json.code}` : ''}${res.status === 404 ? ', CR_PILOT_WORKER_TOKEN_SHA256 is not set on the desk' : ''}): ${json && json.error ? String(json.error).slice(0, 300) : 'no reason given'}`), { status: res.status, code: (json && json.code) || null });
+  return json;
 }
 
-// The last "NEXT_STEP: <step>" line of a session's answer, or null.
-function nextStepOf(text) {
-  const all = [...String(text || '').matchAll(/^\s*NEXT_STEP:\s*([a-z_]+)\s*$/gm)].map((m) => m[1]);
-  const s = all.length ? all[all.length - 1] : null;
-  return STEPS.includes(s) ? s : null;
-}
-
-// Which role's session takes a step, or null to stop. `forced` says Eric's
-// override already had its one Prosecutor on this run.
-function roleForStep(step, o, { forced = false } = {}) {
-  if (step === null) return 'researcher';
-  if (step === 'research') return 'researcher';
-  if (['ticket', 'ticket_failed', 'gate_closed'].includes(step)) return 'prosecutor';
-  if (step === 'pm_review' && o.forceProsecution && !forced) return 'prosecutor';
-  return null;
-}
-
-function runOnline(o, { run = claude, out = say } = {}) {
+async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fetch, token = null, env = process.env } = {}) {
+  if (o.forceProsecution) throw new Error('Eric\'s override (--force-prosecution) is local only: the online worker never forces a Prosecutor.');
+  const desk = deskUrlOf(o, env);
+  const result = { sessions: [], stop: null, words: null, claims: [] };
   if (o.dryRun) {
-    for (const role of ['researcher', 'prosecutor']) out(`Would run a ${role} claude -p session with tools ${roleTools(role, o).join(', ')}:\n\n${roleInstruction(role, o)}\n`);
-    return [];
+    out(`Would claim ${o.project}'s next step on ${desk}, have the desk prepare its frozen prompt, run it in a fresh claude -p session with ${WEB_TOOLS.join(', ')} only, and give the answer back to the desk to save and verify.`);
+    return result;
   }
-  const sessions = [];
-  // --pilot-all hands in the step its pre-poll read, so the first session is
-  // the role that step needs (no researcher session spent on a ticket step).
-  let step = o.startStep && STEPS.includes(o.startStep) ? o.startStep : null;
-  let forced = false;
+  const tok = token || readWorkerToken();
+  const post = (op, body, opts) => workerCall(fetchImpl, desk, tok, op, { project_id: o.project, ...body }, opts);
+  const stop = (kind, words) => { Object.assign(result, { stop: kind, words }); out(`    Not dispatched: ${words}`); return result; };
   for (let i = 0; i < MAX_STEPS; i++) {
-    // The pause, as locally: the runner stops before its next session.
-    if (step === 'paused') {
-      out(PAUSED_WORDS);
-      return sessions;
+    if (o.budget && o.budget.left <= 0) return stop('cap', 'this run\'s agent cap is reached; the next run takes it.');
+    const c = await post('claim', { owner: `pilot ${process.pid}` });
+    if (c.status === 'nothing') {
+      out(c.step === 'pm_review' ? 'Done: the ticket waits for your PM review (inspector > PM decision).' : `Nothing for the agents to do (${c.step || 'no step'}).`);
+      return result;
     }
-    const role = roleForStep(step, o, { forced });
-    if (!role) {
-      out(step === 'pm_review' ? 'Done: the ticket waits for your PM review (inspector > PM decision).' : `Nothing for the agents to do (${step}).`);
-      return sessions;
+    if (c.status !== 'claimed_now') return stop(c.status, c.words || c.status);
+    result.claims.push({ attempt_id: c.attempt_id, key: c.key });
+    out(`[${i + 1}] ${o.project}: ${c.step}, claim ${c.attempt_id} (${c.key}) until ${c.expires_at}`);
+    let p;
+    try {
+      p = await post('prepare', { token: c.token });
+    } catch (err) {
+      if (err.uncertain) return stop('reconcile', `${err.message} Whether the desk reserved a session and opened the record is unknown. ${ONLINE_RECONCILE(o.project)}`);
+      try { await post('release', { token: c.token, outcome: 'stopped' }); } catch (_) { /* it expires */ }
+      return stop(err.code || 'refused', err.message);
     }
-    if (o.budget && o.budget.left <= 0) {
-      out('Not dispatched: this run\'s agent cap is reached; the next run takes it.');
-      sessions.stop = 'cap';
-      return sessions;
+    if (p.status === 'gate_closed') { out(`    desk gate: ${p.receipt_id || ''} — ${p.words || ''}`); continue; }
+    if (p.status !== 'prepared') return stop(p.status, p.words || p.status);
+    const rec = p.run_id || p.ticket_id;
+    if (typeof p.prompt !== 'string' || sha256(p.prompt) !== p.prompt_sha256) {
+      try { await post('release', { token: c.token, outcome: 'agent_failed' }); } catch (_) { /* it expires */ }
+      return stop('integrity', `The frozen prompt for ${rec} did not arrive whole (its SHA-256 does not match); no session was run.`);
     }
-    if (role === 'prosecutor' && o.forceProsecution && ['gate_closed', 'pm_review'].includes(step)) forced = true;
-    const prompt = roleInstruction(role, o);
-    const tools = roleTools(role, o);
-    out(`[${i + 1}] ${role}: a fresh claude -p session through ${o.connector}${step ? ` (step ${step})` : ''}…`);
     if (o.budget) o.budget.left -= 1;
-    const answer = run(prompt, { tools, model: o.model, timeoutMin: o.timeoutMin });
-    sessions.push({ role, prompt, tools });
-    out(answer);
-    const next = nextStepOf(answer);
-    if (!next) throw new Error(`The ${role} session did not end with a NEXT_STEP line; nothing more is run. Check the desk, then run the pilot again.`);
-    if (role === 'researcher' && step !== null && next === 'research') throw new Error('The research step is still open after the researcher\'s session; nothing more is run.');
-    step = next;
+    out(`    ${p.role === 'researcher' ? 'Agent 1 (Researcher)' : 'Agent 2 (Prosecutor)'}: a fresh claude -p session on the frozen prompt of ${rec} (${p.prompt.length} characters, SHA-256 ${p.prompt_sha256.slice(0, 12)}…), tools ${WEB_TOOLS.join(', ')} only; day's sessions ${p.sessions ? `${p.sessions.used}/${p.sessions.ceiling}` : '?'}`);
+    result.sessions.push({ role: p.role, attempt_id: p.attempt_id, run_id: p.run_id || null, ticket_id: p.ticket_id || null, prompt_sha256: p.prompt_sha256 });
+    let answer;
+    try {
+      answer = run(p.prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
+    } catch (err) {
+      if (err && err.uncertain) return stop('reconcile', `${err.message} ${ONLINE_RECONCILE(o.project)}`);
+      try { await post('release', { token: c.token, outcome: 'agent_failed' }); } catch (_) { /* it expires and waits to be reconciled */ }
+      return stop('agent_failed', `${String(err && err.message || err).slice(0, 300)} The session saved nothing (it has no desk tools); its claim was let go and its session still counts today.`);
+    }
+    const f = scratch(p.role, p.role === 'researcher' ? 'agent1-report.md' : 'agent2-ticket.md', answer);
+    let done;
+    try {
+      done = await post('complete', { token: c.token, prompt_sha256: p.prompt_sha256, text: answer }, { timeoutMs: 300000 });
+    } catch (err) {
+      return stop('reconcile', `${err.message} The session's answer is kept at ${f}. ${ONLINE_RECONCILE(o.project)}`);
+    }
+    out(`    saved: ${done.status} ${done.report_id || done.receipt_id || ''}${done.words ? ` — ${done.words}` : ''}`);
+    if (done.status === 'unverified') return stop('reconcile', `${done.words || 'The save did not verify.'} The session's answer is kept at ${f}.`);
+    if (done.status !== 'saved') return stop(done.status || 'refused', `${done.words || 'The desk did not save it.'} The session's answer is also kept at ${f}.`);
   }
-  out(`Stopped after ${MAX_STEPS} sessions.`);
-  return sessions;
+  out(`Stopped after ${MAX_STEPS} steps.`);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,16 +411,16 @@ async function pollOnline(o, { fetchImpl = globalThis.fetch, token, env = proces
   if (res.status !== 200) throw new Error(`The online desk's pilot poll answered ${res.status}${res.status === 404 ? ' (CR_PILOT_POLL_TOKEN_SHA256 is not set on the desk)' : res.status === 401 ? ' (the poll token was refused)' : ''}.`);
   const body = await res.json();
   if (!body || body.format !== 'cr-pilot-poll@1' || !Array.isArray(body.steps)) throw new Error('The online desk\'s pilot poll did not answer cr-pilot-poll@1.');
-  return { paused: body.paused === true, steps: body.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })) };
+  return { paused: body.paused === true, sessions: body.sessions || null, steps: body.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })) };
 }
 function pollLocal(call) {
   const q = call(['tickets', 'queue']);
   const claims = (q && q.claims) || {};
-  return { paused: q.paused === true, steps: (q.steps || []).map((s) => ({ project_id: s.project_id, step: s.step, claim: claims[s.project_id] || null })) };
+  return { paused: q.paused === true, sessions: q.sessions || null, steps: (q.steps || []).map((s) => ({ project_id: s.project_id, step: s.step, claim: claims[s.project_id] || null })) };
 }
 
 async function runAll(o, {
-  call = cli, agent = claude, fetchImpl = globalThis.fetch, token = null, env = process.env,
+  call = cli, agent = claude, fetchImpl = globalThis.fetch, token = null, workerToken = null, env = process.env,
   lockFile = lockPath(), logFile = pilotLogPath(), out = say, now = () => Date.now(), pid = process.pid,
   runLocalImpl = runLocal, runOnlineImpl = runOnline,
 } = {}) {
@@ -447,7 +459,12 @@ async function runAll(o, {
       out('Automation is paused on the desk: no agent is dispatched until you resume it.');
       return finish(0);
     }
-    for (const s of q.steps) if (s.claim === 'reconcile') log.needs_eric.push({ project_id: s.project_id, step: s.step, words: RECONCILE_WORDS });
+    const reconcileWords = (pid) => (o.desk === 'online' ? `An earlier dispatch on the online desk has no known outcome (often after the PC slept, or a lost answer). ${ONLINE_RECONCILE(pid)}` : RECONCILE_WORDS);
+    for (const s of q.steps) if (s.claim === 'reconcile') log.needs_eric.push({ project_id: s.project_id, step: s.step, words: reconcileWords(s.project_id) });
+    // The day's session ceiling, as the desk counts it (the claim decides).
+    log.sessions = q.sessions || null;
+    const noSessions = Boolean(q.sessions && (q.sessions.unreadable || q.sessions.left <= 0));
+    if (noSessions) out(q.sessions.unreadable ? 'The desk\'s session ledger does not read: no agent session is started until it is repaired.' : `Today's ${q.sessions.ceiling} agent sessions are used (${q.sessions.day}): no session is started until tomorrow.`);
     const todo = q.steps.filter((s) => ALL_ORDER.includes(s.step) && !CLAIM_SKIP.has(s.claim)).sort((a, b) => ALL_ORDER.indexOf(a.step) - ALL_ORDER.indexOf(b.step));
     if (!todo.length) out('Nothing for the agents to do.');
     const budget = { left: o.maxAgents };
@@ -455,6 +472,10 @@ async function runAll(o, {
       if (o.dryRun) {
         out(`Would dispatch ${s.project_id}: ${s.step}.`);
         log.dispatches.push({ project_id: s.project_id, step: s.step, outcome: 'dry_run' });
+        continue;
+      }
+      if (noSessions && s.step !== 'gate_closed') {
+        log.dispatches.push({ project_id: s.project_id, step: s.step, outcome: 'session_ceiling' });
         continue;
       }
       if (budget.left <= 0 && s.step !== 'gate_closed') {
@@ -467,8 +488,10 @@ async function runAll(o, {
       const row = { project_id: s.project_id, step: s.step, outcome: 'done', agents: 0, stop: null, error: null, next_step: null };
       try {
         const po = { ...o, project: s.project_id, budget, startStep: s.step };
-        const r = o.desk === 'online' ? await runOnlineImpl(po, { run: agent, out }) : runLocalImpl(po, { call, agent });
+        const r = o.desk === 'online' ? await runOnlineImpl(po, { run: agent, out, fetchImpl, token: workerToken, env }) : runLocalImpl(po, { call, agent });
         if (r && r.stop) row.stop = r.stop;
+        if (r && r.claims) row.claims = r.claims;
+        if (r && r.sessions && r.sessions.length) row.sessions = r.sessions;
       } catch (err) {
         row.outcome = 'error';
         row.error = String(err && err.message || err).slice(0, 300);
@@ -476,7 +499,7 @@ async function runAll(o, {
       }
       row.agents = before - budget.left;
       if (row.stop) row.outcome = row.stop === 'cap' ? 'cap' : 'not_dispatched';
-      if (row.stop === 'reconcile' && !log.needs_eric.some((x) => x.project_id === s.project_id)) log.needs_eric.push({ project_id: s.project_id, step: s.step, words: RECONCILE_WORDS });
+      if (row.stop === 'reconcile' && !log.needs_eric.some((x) => x.project_id === s.project_id)) log.needs_eric.push({ project_id: s.project_id, step: s.step, words: reconcileWords(s.project_id) });
       // That project again, at zero tokens.
       try {
         const again = await poll();
@@ -510,12 +533,12 @@ function main() {
     return;
   }
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(o.project)) throw new Error(`"${o.project}" is not a project ID.`);
-  if (o.desk === 'online') runOnline(o);
-  else if (o.desk === 'local') runLocal(o);
+  if (o.desk === 'online') return runOnline(o).then((r) => { if (r && r.stop === 'reconcile') process.exitCode = 3; });
+  if (o.desk === 'local') runLocal(o);
   else throw new Error('--desk is local or online.');
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, runLocal, runAll, takeLock, readPollToken, deskUrlOf, pollOnline, pollLocal, ROLE_TOOLS, FORCE_WORDS, PAUSED_WORDS, ALL_ORDER, RECONCILE_WORDS };
+module.exports = { resolveClaude, parse, forcedTicket, runOnline, runLocal, runAll, takeLock, readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, CLAIM_STOPS };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

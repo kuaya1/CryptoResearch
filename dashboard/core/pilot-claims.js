@@ -20,16 +20,73 @@
 // correction run per ticket; after that the step stays ticket_failed for Eric.
 // The records live under .cr/pilot-claims/ (runner state, not research
 // records); nothing here asks a provider or writes a ticket.
+//
+// The daily session ceiling (cr-pilot-session@1, corrective PR 2026-10-31):
+// every agent session is reserved in .cr/pilot-sessions.jsonl when its claim
+// is bound, before the session starts, so a session that fails, times out or
+// never answers is counted all the same. The day is New York's; the ceiling
+// is settings automation.pilot_daily_sessions (default 6). No run, restart or
+// new lock file resets it: the count is read from the ledger each time, and a
+// ledger that does not read stops every new session (unknown is never zero).
+// claim() refuses a step that needs a session when none is left today;
+// bind() is what reserves one.
 
 const crypto = require('crypto');
+const fs = require('fs');
 const { withLock, OpError } = require('./ops');
 const { readJson, atomicWrite, mkdirp } = require('./fsx');
+const { ymdInTz } = require('./dates');
 const path = require('path');
 
 const VERSION = 'cr-pilot-claim@1';
 const TTL_MS = 90 * 60000;
 const MAX_CORRECTIONS = 1;
 const DISPATCH = new Set(['research', 'ticket', 'ticket_failed', 'gate_closed']);
+// The steps whose dispatch starts an agent session (gate_closed starts none).
+const SESSION_STEPS = new Set(['research', 'ticket', 'ticket_failed', 'pm_review']);
+const SESSION_FORMAT = 'cr-pilot-session@1';
+const SESSIONS_REL = '.cr/pilot-sessions.jsonl';
+const DAILY_SESSIONS_DEFAULT = 6;
+const DAILY_SESSIONS_MAX = 50;
+
+function dailyCeiling(ws) {
+  const v = ws.settings && ws.settings.automation ? ws.settings.automation.pilot_daily_sessions : undefined;
+  return Number.isInteger(v) && v >= 0 && v <= DAILY_SESSIONS_MAX ? v : DAILY_SESSIONS_DEFAULT;
+}
+
+// Today's reserved sessions, read strictly: a line that is not a session
+// record makes the count unknown and throws UNREADABLE.
+function sessionsToday(ws, now = Date.now()) {
+  const day = ymdInTz(new Date(now));
+  let text = '';
+  try { text = fs.readFileSync(ws.abs(SESSIONS_REL), 'utf8'); } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw new OpError('UNREADABLE', `The pilot's session ledger (${SESSIONS_REL}) could not be read (${(err && err.code) || 'error'}), so how many sessions ran today is unknown; no session is started until it is repaired.`);
+  }
+  const lines = [];
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim()) return;
+    let r = null;
+    try { r = JSON.parse(line); } catch (_) { r = null; }
+    if (!r || typeof r !== 'object' || r.format !== SESSION_FORMAT || typeof r.day !== 'string' || typeof r.attempt_id !== 'string') {
+      throw new OpError('UNREADABLE', `Line ${i + 1} of the pilot's session ledger (${SESSIONS_REL}) is not a session record, so how many sessions ran today is unknown; no session is started until it is repaired (the file is kept as it is).`);
+    }
+    lines.push(r);
+  });
+  const mine = lines.filter((r) => r.day === day);
+  const ceiling = dailyCeiling(ws);
+  return { day, used: mine.length, ceiling, left: Math.max(0, ceiling - mine.length), attempts: new Set(mine.map((r) => r.attempt_id)), all_attempts: new Set(lines.map((r) => r.attempt_id)) };
+}
+const ceilingWords = (s) => `Today's ${s.ceiling} agent session${s.ceiling === 1 ? ' is' : 's are'} used (${s.used} reserved on ${s.day}, New York, failed ones included); no session is started until tomorrow or until you raise automation.pilot_daily_sessions.`;
+
+// Read-only, for the poll and the queue: today's count, or why it is unknown.
+function sessionsView(ws, now = Date.now()) {
+  try {
+    const s = sessionsToday(ws, now);
+    return { day: s.day, used: s.used, ceiling: s.ceiling, left: s.left, unreadable: false };
+  } catch (err) {
+    return { day: ymdInTz(new Date(now)), used: null, ceiling: dailyCeiling(ws), left: 0, unreadable: true };
+  }
+}
 
 const claimAbs = (ws, pid) => {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(pid))) throw new OpError('BAD_ID', `"${pid}" is not a project ID.`);
@@ -73,6 +130,11 @@ function claim(ws, pid, { owner = null, now = Date.now(), ttlMs = TTL_MS, expect
     }
     if (step.step === 'ticket_failed' && step.ticket_id && (corrections[step.ticket_id] || 0) >= MAX_CORRECTIONS) {
       return { status: 'correction_limit', key, step, words: `The Prosecutor's save on ${step.ticket_id} was refused again after ${MAX_CORRECTIONS} correction. It waits for you.` };
+    }
+    if (SESSION_STEPS.has(step.step)) {
+      let s;
+      try { s = sessionsToday(ws, now); } catch (err) { return { status: 'sessions_unknown', key, step, words: err.message }; }
+      if (s.left <= 0) return { status: 'session_ceiling', key, step, words: ceilingWords(s) };
     }
     const at = new Date(now).toISOString();
     const rec = {
@@ -123,15 +185,26 @@ function held(ws, pid, token) {
 // when the claim has expired (another runner may take it over) or automation
 // was paused since the claim; nothing is dispatched then. The claim keeps its
 // first key and attempt ID; the key under the bound record is kept beside it.
-function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now() } = {}) {
+// Binding reserves the attempt's agent session in the ledger first (once per
+// attempt): refused when today's ceiling is used or the ledger does not read.
+// `extra` (role, prompt_sha256) is kept on the claim for the worker's
+// complete step (pilot-worker.js).
+function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now(), extra = null } = {}) {
   return withLock(ws, `pilot bind ${pid}`, () => {
     const cur = held(ws, pid, token);
     if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was dispatched.`);
     if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was dispatched.');
     const bound = { run_id: run_id || cur.run_id, ticket_id: ticket_id || cur.ticket_id };
-    const rec = { ...cur, state: 'dispatched', dispatched_at: new Date(now).toISOString(), ...bound, bound_key: transitionKey({ step: cur.step, ...bound }) };
+    const s = sessionsToday(ws, now);
+    if (!s.all_attempts.has(cur.attempt_id)) {
+      if (s.left <= 0) throw new OpError('SESSION_CEILING', ceilingWords(s));
+      const abs = ws.abs(SESSIONS_REL);
+      mkdirp(path.dirname(abs));
+      fs.appendFileSync(abs, `${JSON.stringify({ format: SESSION_FORMAT, day: s.day, at: new Date(now).toISOString(), project_id: pid, attempt_id: cur.attempt_id, step: cur.step, ...bound, owner: cur.owner || null })}\n`);
+    }
+    const rec = { ...cur, ...(extra || {}), state: 'dispatched', dispatched_at: new Date(now).toISOString(), ...bound, bound_key: transitionKey({ step: cur.step, ...bound }) };
     write(ws, pid, rec);
-    return { status: 'bound', claim: rec };
+    return { status: 'bound', claim: rec, sessions: { day: s.day, used: s.all_attempts.has(cur.attempt_id) ? s.used : s.used + 1, ceiling: s.ceiling } };
   });
 }
 
@@ -149,4 +222,4 @@ function release(ws, pid, { token = null, reconciled = false, outcome = null, no
   });
 }
 
-module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, transitionKey, claim, bind, release, read, peek };
+module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, transitionKey, claim, bind, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };

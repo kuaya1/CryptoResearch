@@ -66,10 +66,19 @@ No paid API key is needed. Both agents run on Eric's Claude subscription, throug
     - The identity is unchanged since the save, and no sell-tax spike has appeared.
     - The pair prices this token: no ticker twin, and no candle binding to another token.
     - A native L1 coin is never granted; it stays Eric's.
-  - **Caps.** `max_grants_per_day` (1, New York day) and `max_open_grants` (2), each 1 to 5. The highest grade goes first.
-  - **Re-open.** It also re-opens a ticket that froze no exit once a fresh, complete exit reading within the limit arrives, at most once per Claude report.
-  - **The record.** A grant is a `decide()` line with `decided_by: mandate:cr-paper-mandate@1` and its `mandate` block (tier, grade used, expiry, settings hash), with `effects.paper: null`. Only the Trader Sim book acts on it.
+  - **Caps.** `max_grants_per_day` (1, New York day) and `max_open_grants` (2), each 1 to 5. The highest grade goes first. A grant holds its open slot while its trade is waiting, ready, an order, a position or closing, while it has not opened for a reason that may still pass, and while the trader does not list it at all; only a finished grant, or one that can never open, frees it (corrective PR 2026-10-31).
+  - **Re-open.** It also re-opens a ticket that froze no exit once a fresh, complete exit reading within the limit arrives, at most once per Claude report, never on a project Eric suspended.
+  - **The record.** A grant is a `decide()` line with `decided_by: mandate:cr-paper-mandate@1` and its `mandate` block (tier, grade used, expiry, settings hash, and its `authority`), with `effects.paper: null`. Only the Trader Sim book acts on it.
   - **At opening.** The trader reads the contract again: a block, a gone observation or a changed identity opens nothing, and a hold waits.
+  - **Authority** (`cr-mandate-authority@1`, `core/mandate-authority.js`, corrective PR 2026-10-31):
+    - Arming is a settings write that turns the loop on or changes the mandate block. Inside that write the desk records `automation.mandate.authority` with a new `generation`; a client can never send it.
+    - Turning the loop off or pausing revokes the generation in force. Resuming does not arm again, and a new arming never revives an earlier generation's grants.
+    - Each grant records its generation and `policy_sha256` (the SHA-256 of the mandate block). At every opening, and before every hour the book applies, the grant's authority is read again: the same generation, unrevoked, unexpired, the same policy, Eric not intervening since, and a consistent ticket.
+    - A buy the mandate no longer covers is cancelled through the book's own cancel before the next hour is applied, so that hour cannot fill it. Expiry covers an hour that ends at or before `expires_at`; any other revocation covers no hour still to apply. What already filled stays and is managed as before: stops, targets and closes go on while paused.
+    - A grant recorded before this binding keeps its record and opens nothing new.
+  - **Eric's latch** (`cr.autonomy.v1`, `projects/<id>/tickets/autonomy.jsonl`): any veto or undo of his, an archive, or an explicit stop suspends automatic grants and openings on the whole project, across new reports, replacement tickets, re-armings and restarts. Only his explicit rearm clears it: `node dashboard/cli.js tickets autonomy <project> --stop|--rearm [--note TEXT]`, or `POST /api/projects/:id/autonomy` signed in.
+  - **A fatal finding holds.** A ticket whose verdict is `fatal_flaw`, with any finding of severity `fatal`, or whose prosecution fields are missing or malformed is never granted or opened automatically. Eric may still review it. A serious or minor entry in `fatal_flaws` holds nothing.
+  - **Scheduled path.** The `trader` job is due on the mandate's own work (a ticket to grant) and on a step the book can take, not only on hours a pair needs. GeckoTerminal's backoff holds the candle read, never the sweep or the book's step.
   - **On the card.** The PM card says "Granted by paper mandate (0.5R, $250)" or "(1.0R, $500)", the tier and the expiry. After an Undo it says the mandate will not grant the ticket again.
 - The grade is the desk's calculated grade of Claude's current report. A range is read by its low end; a withheld grade means no grade.
 - A proposal the rules don't allow is capped to WATCH_ONLY at $0. The model's own type is kept beside the capped one, with the reason.
@@ -222,6 +231,7 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
   - `ALCHEMY_API_KEY` on Render, with each chain probed, before contract observations count.
   - The mandate's expiry.
   - `CR_PILOT_POLL_TOKEN_SHA256` on Render for the pilot's pre-poll.
+  - `CR_PILOT_WORKER_TOKEN_SHA256` on Render for the online worker routes, the SHA-256 of `pilot_worker_token` in `%USERPROFILE%\.cryptoresearch\secrets.json`. A separate token from the poll's. Without it the worker routes answer 404 and the online runner dispatches nothing.
 
 **Pilot enrollment approves the exit target** (`forensics.js` `approvePrimaryExitQuote`):
 
@@ -238,10 +248,13 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
 - **Dispatch.**
   - Paused: nothing is dispatched.
   - Order: `ticket`, `ticket_failed`, `gate_closed`, then `research`, each through the per-project path and its claim.
-  - At most `--max-agents` `claude -p` sessions per run.
-  - Online, the first session is the role the polled step needs.
+  - At most `--max-agents` `claude -p` sessions per run, and never past the desk's daily session ceiling.
+  - Online (corrective PR 2026-10-31), through the worker routes below: the desk claims the step, prepares it (opens the run or ticket and freezes its prompt), and the runner gives that exact prompt to one `claude -p` session with `WebSearch` and `WebFetch` only. The session holds no desk credential. The runner posts the answer back with the prompt's SHA-256, and the desk saves and verifies it.
+  - A timeout, a lost answer or an unreadable one leaves the outcome unknown: the claim stays dispatched and nothing is run again.
   - A project held by another runner, or whose one correction is used, is skipped.
-- **Needs Eric.** An expired dispatch with no known outcome (`reconcile`) is listed for Eric and the run exits 3. It is never released by the runner.
+  - `exit_evidence` (the desk's own exit reading at the exit size is not complete yet) and `contract_evidence` steps start no session.
+- **Daily session ceiling** (`cr-pilot-session@1`, `.cr/pilot-sessions.jsonl`, `automation.pilot_daily_sessions`, default 6, 0 to 50): each session is reserved on the desk before it starts, failed ones included, per New York day. Repeated runs never reset it; an unreadable ledger starts none.
+- **Needs Eric.** An expired dispatch with no known outcome (`reconcile`) is listed for Eric and the run exits 3. It is never released by the runner. Online, Eric checks the project on the desk, then releases it signed in: `POST /api/projects/<id>/pilot-claim/release` with `{"reconciled":true}`.
 - **The log.** One JSON line per run in `%USERPROFILE%\.cryptoresearch\pilot-all.jsonl`.
 - **Exit codes.** 0 done or nothing to do; 3 needs Eric; 1 an error.
 
@@ -249,8 +262,15 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
 
 - **Off by default.** It answers 404 unless `CR_PILOT_POLL_TOKEN_SHA256` (hex) is set in the desk's environment.
 - **The bearer.** Its SHA-256 is compared with `timingSafeEqual`.
-- **Rate.** 60 requests an hour, refused ones included.
-- **Read only.** It returns `{ format: 'cr-pilot-poll@1', paused, steps: [{ project_id, step, ticket_id, run_id, receipt_id, claim }] }`: no prompt, report text, settings or reasons.
+- **Rate.** 60 requests an hour for the runner. Refused bearers fill their own allowance of 60 an hour, never the runner's (corrective PR 2026-10-31).
+- **Read only.** It returns `{ format: 'cr-pilot-poll@1', paused, sessions, steps: [{ project_id, step, ticket_id, run_id, receipt_id, claim }], status }`: no prompt, report text, settings or reasons. `status` gives each project's next action, who takes it, whether it is blocked, the mandate's authority (generation, the project's latch, the latest grant's authority code, phase and order state), the claim and the IDs (report, run, ticket, receipt, decision, intent, order, attempt), as codes and IDs. `tickets queue` gives the same rows with the words (`blocker`, authority words).
+
+**The worker routes** (`core/pilot-worker.js`, `cr-pilot-worker@1`, answered in `frontdoor.js` before the sign-in):
+
+- **Off by default.** 404 unless `CR_PILOT_WORKER_TOKEN_SHA256` is set. The poll token is refused here, and the worker token is refused everywhere else.
+- **What it may do.** `POST /api/pilot/worker/claim`, `prepare`, `complete` and `release` (`stopped` or `agent_failed` only). Nothing else: no PM decision, no mandate arming, no settings, no reconciling, no trade.
+- **One dispatch.** The claim is the desk's own (`cr-pilot-claim@1`, under the workspace lock): of two runners, only one gets a token. Only the claim's holder can prepare or complete, and a completion for another prompt's SHA-256 saves nothing.
+- **Rate.** 240 requests an hour; refused bearers 60 an hour of their own.
 
 **`contracts init-defaults`** (`core/contract-presets.js`; `POST /api/contracts/init-defaults` on the desk, `{ "dry_run": true }` for the plan) adds:
 

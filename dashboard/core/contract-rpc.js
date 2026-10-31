@@ -24,6 +24,7 @@
 // Alchemy's dashboard is the provider's record of usage.
 
 const { withLock, replaceFile, OpError } = require('./ops');
+const fs = require('fs');
 const { readJson, jsonText } = require('./fsx');
 const { ymdInTz } = require('./dates');
 
@@ -96,18 +97,47 @@ function emptyState() {
   return { schema_version: 'cr.contract-rpc-state.v1', calls: null, retry_after_until: null, quota_until: null, key_refused_until: null };
 }
 
-function readState(ws) {
-  try {
-    const s = readJson(ws.abs(STATE_REL), null);
-    return s && typeof s === 'object' ? { ...emptyState(), ...s } : emptyState();
-  } catch (_) {
-    return { ...emptyState(), unreadable: true };
+// What makes a budget state unusable (corrective PR, 2026-10-31): only the
+// supported schema with whole, non-negative counters of one month and one day
+// of it is arithmetic the desk can reserve against. Anything else (string or
+// negative counters, a missing field, another schema) stops new requests and
+// is kept as it is for repair: unknown accounting is never zero.
+const COUNTERS = Object.freeze(['month_cu', 'month_count', 'day_cu', 'day_count']);
+const GATES = Object.freeze(['retry_after_until', 'quota_until', 'key_refused_until']);
+function stateProblem(s) {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return 'it is not an object';
+  if (s.schema_version !== 'cr.contract-rpc-state.v1') return `its schema is ${JSON.stringify(s.schema_version === undefined ? null : s.schema_version)}, not cr.contract-rpc-state.v1`;
+  if (s.calls !== null && s.calls !== undefined) {
+    const c = s.calls;
+    if (typeof c !== 'object' || Array.isArray(c)) return 'its counters are not an object';
+    if (typeof c.month !== 'string' || !/^\d{4}-\d{2}$/.test(c.month)) return 'its counted month is not YYYY-MM';
+    if (typeof c.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(c.day) || !c.day.startsWith(c.month)) return 'its counted day is not a day of its month';
+    for (const k of COUNTERS) if (!(Number.isSafeInteger(c[k]) && c[k] >= 0)) return `its ${k} is ${JSON.stringify(c[k] === undefined ? null : c[k])}, not a whole number of 0 or more`;
+    if (c.day_cu > c.month_cu || c.day_count > c.month_count) return 'its day counts are larger than its month counts';
   }
+  for (const f of GATES) if (s[f] !== null && s[f] !== undefined && !(typeof s[f] === 'string' && Number.isFinite(Date.parse(s[f])))) return `its ${f} is not a time`;
+  return null;
+}
+
+function readState(ws) {
+  let text;
+  try { text = fs.readFileSync(ws.abs(STATE_REL), 'utf8'); } catch (err) {
+    if (err && err.code === 'ENOENT') return emptyState();
+    return { ...emptyState(), unreadable: true, malformed: `it could not be read (${(err && err.code) || 'error'})` };
+  }
+  let s;
+  try { s = JSON.parse(text); } catch (_) { return { ...emptyState(), unreadable: true, malformed: 'it is not JSON' }; }
+  const why = stateProblem(s);
+  if (why) return { ...emptyState(), unreadable: true, malformed: why };
+  return { ...emptyState(), ...s };
 }
 
 // An unreadable budget file is never replaced: the cap and the evidence of
 // what was spent would both be lost. Nothing is sent until it is repaired.
 const UNREADABLE_WORDS = 'The contract RPC budget state could not be read; nothing is sent until it is repaired.';
+const unreadableWords = (st) => (st && st.malformed ? `The contract RPC budget state (${STATE_REL}) could not be read; nothing is sent until it is repaired (${st.malformed}; the file is kept as it is).` : UNREADABLE_WORDS);
+// The later of two times (ISO), so a wait already on record is never shortened.
+const laterOf = (a, b) => (a && Date.parse(a) > Date.parse(b) ? a : b);
 
 function updateState(ws, fn) {
   return withLock(ws, 'contract_rpc_state', () => {
@@ -119,10 +149,15 @@ function updateState(ws, fn) {
   });
 }
 
+// The counters for now. A period that has ended starts again at 0 (a valid
+// rollover); a counted period after today is unknown history (the clock went
+// back, or the record is not this desk's), and nothing is reserved.
 function countsOf(state, now) {
   const day = ymdInTz(new Date(now));
   const month = day.slice(0, 7);
-  const c = state.calls && state.calls.month === month ? { ...state.calls } : { month, month_cu: 0, month_count: 0, day, day_cu: 0, day_count: 0 };
+  const cur = state.calls;
+  if (cur && (cur.month > month || (cur.month === month && cur.day > day))) return { unknown: `The contract RPC budget counts ${cur.day}, after today (${day}) in New York, so what was spent is unknown; nothing is sent until it is repaired.` };
+  const c = cur && cur.month === month ? { ...cur } : { month, month_cu: 0, month_count: 0, day, day_cu: 0, day_count: 0 };
   if (c.day !== day) Object.assign(c, { day, day_cu: 0, day_count: 0 });
   return c;
 }
@@ -147,6 +182,7 @@ function reserveCu(ws, cu, now) {
     updateState(ws, (s) => {
       if (s.unreadable) return s;
       const c = countsOf(s, now);
+      if (c.unknown) throw new OpError('INTEGRITY', c.unknown);
       if (c.day_cu + cu > caps.daily || c.month_cu + cu > caps.monthly) return s;
       ok = true;
       return { ...s, calls: { ...c, day_cu: c.day_cu + cu, month_cu: c.month_cu + cu, day_count: c.day_count + 1, month_count: c.month_count + 1 } };
@@ -262,7 +298,7 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
     const caps = capsOf(ws);
     if (!caps.set) throw new Stop('caps_unset', caps.why);
     const st = readState(ws);
-    if (st.unreadable) throw new Stop('budget_unreadable', UNREADABLE_WORDS);
+    if (st.unreadable) throw new Stop('budget_unreadable', unreadableWords(st));
     const g = gateOf(st, clock());
     if (!g.open) throw new Stop(g.rate_limited ? 'rate_limited' : 'gate_closed', `${g.why}; next try after ${g.until}.`, { until: g.until });
     if (!k) throw new Stop('no_key', 'No Alchemy key is set (ALCHEMY_API_KEY).');
@@ -276,8 +312,19 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
       session.cu += cu;
       return { kind: 'planned' };
     }
+    // The shared provider gates, read again before every send: another
+    // session's 429, quota or key refusal stops this one too.
+    const st0 = readState(ws);
+    if (st0.unreadable) throw new Stop('budget_unreadable', unreadableWords(st0));
+    const g0 = gateOf(st0, clock());
+    if (!g0.open) throw new Stop(g0.rate_limited ? 'rate_limited' : 'gate_closed', `${g0.why}; next try after ${g0.until}.`, { until: g0.until });
+    const unknown = st0.calls ? countsOf(st0, clock()).unknown : null;
+    if (unknown) throw new Stop('budget_unreadable', unknown);
     if (!reserveCu(ws, cu, clock())) {
-      if (readState(ws).unreadable) throw new Stop('budget_unreadable', UNREADABLE_WORDS);
+      const st1 = readState(ws);
+      if (st1.unreadable) throw new Stop('budget_unreadable', unreadableWords(st1));
+      const u1 = st1.calls ? countsOf(st1, clock()).unknown : null;
+      if (u1) throw new Stop('budget_unreadable', u1);
       throw new Stop('budget', `The contract compute-unit budget would be passed by ${method} (${cu} CU); nothing more is sent.`);
     }
     session.requests++;
@@ -288,8 +335,8 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
       res = await fetchImpl(endpoint(id, k), { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'CryptoResearch-desk' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }), signal: AbortSignal.timeout(tmo) });
       if (res.status === 429) {
         const wait = Math.min(RATE_LIMIT_CEILING_MS, Math.max(RATE_LIMIT_MIN_MS, require('./market').retryAfterMs(res) || 0));
-        updateState(ws, (s) => ({ ...s, retry_after_until: isoOf(clock() + wait) }));
-        throw new Stop('rate_limited', `Alchemy rate-limited ${method}; the desk waits until ${isoOf(clock() + wait)}.`);
+        const until = updateState(ws, (s) => ({ ...s, retry_after_until: laterOf(s.retry_after_until, isoOf(clock() + wait)) })).retry_after_until;
+        throw new Stop('rate_limited', `Alchemy rate-limited ${method}; the desk waits until ${until}.`, { until });
       }
       text = await res.text();
     } catch (err) {
@@ -298,7 +345,7 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
       throw new Stop('failed', `${method}: ${err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'no answer in time' : 'the request failed (network)'}.`);
     }
     if (res.status === 401 || res.status === 403) {
-      updateState(ws, (s) => ({ ...s, key_refused_until: isoOf(clock() + KEY_REFUSED_MS) }));
+      updateState(ws, (s) => ({ ...s, key_refused_until: laterOf(s.key_refused_until, isoOf(clock() + KEY_REFUSED_MS)) }));
       throw new Stop('key_refused', `Alchemy refused the key (HTTP ${res.status}).`);
     }
     let body = null;
@@ -308,11 +355,11 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
       const code = Number(body.error.code);
       const msg = scrub(typeof body.error.message === 'string' ? body.error.message : '', k).slice(0, 160);
       if (code === 429 || /rate limit|too many requests|compute units per second/i.test(msg)) {
-        updateState(ws, (s) => ({ ...s, retry_after_until: isoOf(clock() + RATE_LIMIT_MIN_MS) }));
+        updateState(ws, (s) => ({ ...s, retry_after_until: laterOf(s.retry_after_until, isoOf(clock() + RATE_LIMIT_MIN_MS)) }));
         throw new Stop('rate_limited', `Alchemy rate-limited ${method}.`);
       }
       if (/capacity|monthly limit|exceeded .*limit|upgrade your plan/i.test(msg)) {
-        updateState(ws, (s) => ({ ...s, quota_until: isoOf(clock() + QUOTA_MS) }));
+        updateState(ws, (s) => ({ ...s, quota_until: laterOf(s.quota_until, isoOf(clock() + QUOTA_MS)) }));
         throw new Stop('quota', `Alchemy says the plan's capacity is used up (${msg}).`);
       }
       if (/canonical|unknown block|header not found|block not found/i.test(msg) && PINNED.has(method)) throw new Stop('reorg', `${method}: the pinned block is no longer canonical (${msg}).`);
@@ -355,4 +402,4 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
   return session;
 }
 
-module.exports = { VERSION, CU, READ_METHODS, PINNED, HOSTS, STATE_REL, UNREADABLE_WORDS, NETWORKS_REL, Stop, assertReadMethod, pin, pinnedParams, openSession, readState, gateOf, capsOf, readNetworks, networkSupport, supportedNetworks, probeWaitOf, noteProbe };
+module.exports = { VERSION, CU, READ_METHODS, PINNED, HOSTS, STATE_REL, UNREADABLE_WORDS, stateProblem, countsOf, NETWORKS_REL, Stop, assertReadMethod, pin, pinnedParams, openSession, readState, gateOf, capsOf, readNetworks, networkSupport, supportedNetworks, probeWaitOf, noteProbe };

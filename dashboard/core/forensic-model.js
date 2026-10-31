@@ -350,6 +350,10 @@ function costWords(e) {
 // An older answer of the same scope is history, whatever it cost. The best
 // complete route is the cheapest current one whose cost is known in full, so a
 // cheaper lower bound never hides it (the ticket gate's, cr-ticket-sizing@3).
+// A reading dated after now (beyond EXIT_FUTURE_SKEW_MS of clock skew) is not
+// current: it would read as fresh until real time caught up with it
+// (corrective PR 2026-10-31). It is listed with future: true and never counts.
+const EXIT_FUTURE_SKEW_MS = 5 * 60000;
 function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, feeOf = null, now = Date.now(), freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
   const obs = Array.isArray(observations) ? observations : [];
   const fresh = freshnessHours * HOUR;
@@ -361,11 +365,12 @@ function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, f
     const speaking = rows.filter((r) => (r.status === 'estimated' || r.status === 'no_route') && Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
     const latest = new Map();
     for (const r of speaking) latest.set(r.scope, r);
-    const current = [...latest.values()].map((r) => ({ ...r, age_hours: round((now - r.t) / HOUR, 1), stale: now - r.t > fresh }));
-    const live = current.filter((r) => !r.stale);
+    const current = [...latest.values()].map((r) => ({ ...r, age_hours: round((now - r.t) / HOUR, 1), stale: now - r.t > fresh, ...(r.t - now > EXIT_FUTURE_SKEW_MS ? { future: true } : {}) }));
+    const live = current.filter((r) => !r.stale && !r.future);
     const estimated = live.filter((r) => r.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct);
     const noRoute = live.filter((r) => r.status === 'no_route');
-    const status = estimated.length ? 'estimated' : noRoute.length ? 'no_route' : current.length ? 'stale' : 'no_supported_estimate';
+    const future = current.length && current.every((r) => r.future || r.stale) && current.some((r) => r.future);
+    const status = estimated.length ? 'estimated' : noRoute.length ? 'no_route' : future ? 'future_dated' : current.length ? 'stale' : 'no_supported_estimate';
     const complete = estimated.find((r) => r.cost_complete === true) || null;
     const strip = ({ t, ...r }) => r;
     return {
@@ -378,7 +383,7 @@ function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, f
       as_of: estimated[0] ? estimated[0].retrieved_at : live.length ? live.map((r) => r.retrieved_at).sort().pop() : null,
       earlier: speaking.length - current.length,
       status,
-      note: estimated.length ? null : noRoute.length ? 'No route found at this size by the quote source asked.' : current.length ? `The latest reading at this size is older than ${Math.round(fresh / HOUR)} hours.` : 'No supported estimate at this size: no executable quote at it and no constant-product reserves.',
+      note: estimated.length ? null : noRoute.length ? 'No route found at this size by the quote source asked.' : future ? 'The latest reading at this size is dated after now, so it is not counted.' : current.length ? `The latest reading at this size is older than ${Math.round(fresh / HOUR)} hours.` : 'No supported estimate at this size: no executable quote at it and no constant-product reserves.',
     };
   });
 }

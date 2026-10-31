@@ -112,10 +112,16 @@ test('mandateOf: on with the loop on, not paused, a future expiry, readable limi
 test('mandateOf: paused, a restored copy on hold, or an unparsable limit keeps it off', (t) => {
   const ws = setup(t);
   applySettings(ws, { automation: { autonomous_paper_loop: true, mandate: { expires_at: inDays(7) } } });
+  assert.equal(T.mandateOf(ws).generation, 1);
   applySettings(ws, { automation: { paused: true } });
   assert.match(T.mandateOf(ws).why, /paused/);
+  // Pausing revoked generation 1; resuming does not arm it again.
   applySettings(ws, { automation: { paused: false } });
-  assert.equal(T.mandateOf(ws).on, true);
+  assert.equal(T.mandateOf(ws).on, false);
+  assert.match(T.mandateOf(ws).why, /generation 1 was revoked at .*arm it again/);
+  // Only a new arming does, under a new generation.
+  applySettings(ws, { automation: { mandate: { expires_at: inDays(7) } } });
+  assert.deepEqual([T.mandateOf(ws).on, T.mandateOf(ws).generation], [true, 2]);
   // A hand-edited limit that does not read.
   const file = path.join(ws.root, 'config', 'settings.json');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
