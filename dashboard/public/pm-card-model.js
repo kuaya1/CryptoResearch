@@ -71,3 +71,23 @@ export function riskWords(ticket) {
   if (capped || TAKES_RISK.has(t.proposal_type)) return { text: '$0', why: 'Capped', title: `Capped at $0 by the desk's gate: ${reason || 'no reason recorded'}.` };
   return { text: '$0', why: 'No new risk', title: `This proposal takes no new risk${reason ? `: ${reason}` : '.'}` };
 }
+
+// Who recorded the decision on this ticket (autonomous paper playbook, Stage
+// 10): the paper mandate's grant with its R and amount, its tier in words and
+// its expiry; the mandate's re-open when an exit reading arrived; or, after
+// Eric undid a mandate grant, that the mandate never grants it again. Null
+// for Eric's own decisions. { kind, text, tier_words, expires_at, why }.
+const MANDATE_TIER_WORDS = { exploratory_50_54: 'Exploratory, grade 50–54.9', standard_55_plus: 'Standard, grade 55+' };
+const byMandate = (d) => Boolean(d && typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:'));
+export function provenanceOf(ticket) {
+  const t = ticket || {};
+  const d = t.decision;
+  if (byMandate(d) && (d.action === 'approve' || d.action === 'halve')) {
+    const m = d.mandate || {};
+    const amount = isNum(t.pm_approved_risk_usd) ? usd0(t.pm_approved_risk_usd) : '—';
+    return { kind: 'mandate_grant', text: `Granted by paper mandate (${d.action === 'halve' ? '0.5R' : '1.0R'}, ${amount})`, tier_words: MANDATE_TIER_WORDS[m.tier] || null, expires_at: typeof m.expires_at === 'string' ? m.expires_at : null, why: null };
+  }
+  if (byMandate(d) && d.action === 'reopen') return { kind: 'mandate_reopen', text: 'Re-opened by the paper mandate: an exit reading arrived', tier_words: null, expires_at: null, why: (d.reopen && d.reopen.why) || null };
+  if (t.mandate_latched) return { kind: 'mandate_latched', text: 'Undone by you. The mandate will not grant this ticket again.', tier_words: null, expires_at: null, why: null };
+  return null;
+}
