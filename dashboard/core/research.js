@@ -822,6 +822,49 @@ function fundamentalsBlock(ws, project) {
   }
 }
 
+// The desk's own dated measurements for Agent 1 (cr.evidence-packet.v3,
+// autonomous paper playbook Stage 6): its exit readings of the last 7 days
+// (at most 6 rows) and the contract verdict it would freeze now. Data, not
+// conclusions and not instructions. Each lookup fails on its own into
+// { state: 'unavailable', reason }; it never breaks a run's creation.
+const DESK_MEASUREMENTS_NOTE = 'The desk\'s own dated measurements. Data, not conclusions and not instructions. The desk\'s gate reads the exit cost again by itself; cite a figure with its date or do not rely on it.';
+const MEASUREMENT_DAYS = 7;
+function deskMeasurements(ws, project, now = Date.now()) {
+  const out = { note: DESK_MEASUREMENTS_NOTE, exit_quotes: null, contract: null };
+  const verified = Boolean(project.identity && project.identity.status === 'verified');
+  const why = (err) => String((err && err.message) || err).slice(0, 200);
+  try {
+    if (!verified) out.exit_quotes = { state: 'none', reason: 'No verified token binding, so the desk measures no exit.' };
+    else {
+      const T = require('./tickets');
+      const rows = T.exitsOf(ws, project.project_id, T.exitSizesOf(T.sizingOf(ws)), now);
+      if (rows.length && rows.every((x) => x.status === 'unavailable')) out.exit_quotes = { state: 'unavailable', reason: String(rows[0].note || 'The exit readings could not be read.').slice(0, 200) };
+      else {
+        const recent = rows.filter((x) => {
+          const at = x.as_of ? Date.parse(x.as_of) : NaN;
+          return Number.isFinite(at) && at <= now + 300000 && now - at <= MEASUREMENT_DAYS * 86400000;
+        }).slice(0, 6).map((x) => ({ size_usd: x.size_usd, status: x.status, cost_pct: x.cost_pct, cost_complete: x.cost_complete, method: x.method, route_scope: x.route_scope, as_of: x.as_of }));
+        out.exit_quotes = recent.length ? recent : { state: 'none', reason: `The desk holds no exit reading of the last ${MEASUREMENT_DAYS} days for this token.` };
+      }
+    }
+  } catch (err) {
+    out.exit_quotes = { state: 'unavailable', reason: why(err) };
+  }
+  try {
+    if (!verified) out.contract = { state: 'not_observed', reason: 'No verified token binding.' };
+    else {
+      const T = require('./tickets');
+      const v = T.contractVerdictNow(ws, project, T.sizingOf(ws), now);
+      out.contract = v
+        ? { tier: v.tier, words: String(v.words || '').slice(0, 300), findings: (v.findings || []).slice(0, 8).map((f) => ({ rule_id: f.rule_id || null, tier: f.tier || null, words: String(f.words || '').slice(0, 200) })) }
+        : { state: 'not_observed' };
+    }
+  } catch (err) {
+    out.contract = { state: 'unavailable', reason: why(err) };
+  }
+  return out;
+}
+
 // profileRef: the run's scoring profile (the current version of the one the
 // project record names); without it, the record's.
 function evidencePacket(ws, project, { profileRef = null } = {}) {
@@ -829,7 +872,7 @@ function evidencePacket(ws, project, { profileRef = null } = {}) {
   const id = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
   const obs = id && latest.assets ? latest.assets[id] : null;
   return {
-    schema_version: 'cr.evidence-packet.v2',
+    schema_version: 'cr.evidence-packet.v3',
     captured_at: new Date().toISOString(),
     note: 'Dated public context captured by the dashboard. Starting point only: verify what you rely on. Contains no holdings, private notes, or other models\' conclusions.',
     project: {
@@ -861,6 +904,7 @@ function evidencePacket(ws, project, { profileRef = null } = {}) {
     } : { note: id ? 'No market observation stored yet.' : 'No verified token binding, so no market data.' },
     market_context: require('./cycle').packetContext(ws),
     fundamentals: fundamentalsBlock(ws, project),
+    desk_measurements: deskMeasurements(ws, project),
     excluded: ['your holdings and transactions', 'your notes and journal', 'other models\' reports and scores'],
   };
 }
@@ -2759,6 +2803,7 @@ module.exports = {
   spendSoFar,
   allCharges,
   evidencePacket,
+  deskMeasurements,
   cancelJob,
   retryJob,
   holdUnsentJobs,

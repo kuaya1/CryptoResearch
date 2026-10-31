@@ -98,6 +98,21 @@ function claim(ws, pid, { owner = null, now = Date.now(), ttlMs = TTL_MS, expect
   });
 }
 
+// Read-only: what the claim alone would stop now, without taking it. A live
+// claim is 'claimed', an expired dispatch of this step 'reconcile', a used
+// correction 'correction_limit'; null when nothing stops a claim. For the
+// pre-poll (core/pilot-poll.js, tickets queue); claim() still decides.
+function peek(ws, pid, step, now = Date.now()) {
+  let cur = null;
+  try { cur = read(ws, pid); } catch (_) { return null; }
+  if (cur && !cur.released) {
+    if (Date.parse(cur.expires_at) > now) return 'claimed';
+    if (cur.state === 'dispatched' && sameAttempt(cur, step, transitionKey(step))) return 'reconcile';
+  }
+  if (step && step.step === 'ticket_failed' && step.ticket_id && cur && ((cur.corrections || {})[step.ticket_id] || 0) >= MAX_CORRECTIONS) return 'correction_limit';
+  return null;
+}
+
 function held(ws, pid, token) {
   const cur = read(ws, pid);
   if (!cur || cur.released || cur.token !== token) throw new OpError('CHANGED', 'This runner no longer holds the claim; nothing was dispatched.');
@@ -134,4 +149,4 @@ function release(ws, pid, { token = null, reconciled = false, outcome = null, no
   });
 }
 
-module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, transitionKey, claim, bind, release, read };
+module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, transitionKey, claim, bind, release, read, peek };

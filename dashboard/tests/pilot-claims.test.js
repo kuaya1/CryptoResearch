@@ -215,7 +215,8 @@ test('automation.paused: the connector\'s pilot queue answers "paused" for every
 
 test('defaults: automation not paused, the standing exit-quote policy off, research Claude only', (t) => {
   const s = setup(t);
-  assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false });
+  // The paper mandate (automation.autonomous_paper_loop) is off by default and has no expiry.
+  assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false, autonomous_paper_loop: false, mandate: { expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: ['ethereum', 'base', 'arbitrum', 'optimism', 'solana'] } });
   assert.deepEqual(s.ws.settings.research.default_providers, ['claude']);
   assert.deepEqual(require('../core/forensics').autoExitQuotePlan(s.ws), { add: [], over_budget: [] });
   assert.ok(HOUR);
@@ -231,8 +232,12 @@ test('the standing exit-quote policy approves pilot projects only, within the mo
   const a = add('Pilot One (FICTIONAL)', 'XPA');
   const b = add('Pilot Two (FICTIONAL)', 'XPB');
   const c = add('Not In Pilot (FICTIONAL)', 'XPC');
-  T.setPilot(w.ws, a, true);
+  // Enrollment approves its own target (setPilot); enrolled while paused it
+  // approves none, so the standing policy is left both to place.
+  w.ws.settings = { ...w.ws.settings, automation: { exit_quotes_auto: true, paused: true } };
+  assert.equal(T.setPilot(w.ws, a, true).exit_quote.status, 'paused');
   T.setPilot(w.ws, b, true);
+  w.ws.settings = { ...w.ws.settings, automation: { exit_quotes_auto: true, paused: false } };
   assert.deepEqual(forensics.autoExitQuotePlan(w.ws).add.map((x) => x.project_id).sort(), [a, b].sort(), 'never a project outside the pilot');
   // A budget that fits one project's quotes only.
   const per = (forensics.prefsOf(w.ws).exit_sizes_usd || []).length * Math.round((24 / forensics.monitorCfg(w.ws).quote_interval_hours) * 30);

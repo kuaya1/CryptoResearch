@@ -252,17 +252,49 @@ function settlementOf(snap) {
   };
 }
 
+// The allowlist the engine is handed (autonomous paper playbook, Stage 9):
+// the sorted union of Eric's saved list, the pair of every grant in force
+// that pairOf resolves (a ticker twin or a pair bound to another token never
+// enters), and every pair the book holds exposure in (an open position or a
+// live order), so an undone grant's close is never stranded. Derived on every
+// call; nothing writes trader.rules.allowlist.
+function allowlistOf(saved, { grants = [], projects = [], snap = null } = {}) {
+  const settings = Array.isArray(saved) ? [...saved] : [];
+  const fromGrants = [];
+  for (const g of grants) {
+    const d = g.decision || {};
+    if (!g.in_force || !(d.action === 'approve' || d.action === 'halve') || !d.effects || d.effects.trader !== 'open') continue;
+    const pr = pairOf(g.project, projects, { sources: snap ? snap.sources : null });
+    if (pr.pair) fromGrants.push({ pair: pr.pair, decision_id: d.decision_id, by: d.decided_by || null });
+  }
+  const exposure = new Set();
+  if (snap) {
+    for (const p of snap.open.values()) if (p && typeof p.pair === 'string') exposure.add(p.pair);
+    for (const i of snap.list) if (i && typeof i.pair === 'string' && LIVE.includes(i.state)) exposure.add(i.pair);
+  }
+  const list = [...new Set([...settings, ...fromGrants.map((x) => x.pair), ...exposure])].sort();
+  return { list, basis: { settings, grants: fromGrants, exposure: [...exposure].sort() } };
+}
+
 // Eric's settings: the engine's rules (trader.rules and the desk's price
-// freshness), and the book's funding and venue fee (trader.book).
-function settingsOf(ws) {
+// freshness), and the book's funding and venue fee (trader.book). With the
+// grants and a snapshot, the allowlist is the effective one (allowlistOf).
+function settingsOf(ws, { grants = [], projects = [], snap = null } = {}) {
   const r = TR.rulesOf(ws);
   const b = TR.bookOf(ws);
   const waits = [];
-  if (r.unset.length) waits.push(`Your trader rules are not all set (${r.unset.join(', ')}); set them in Preferences > Screening.`);
+  const al = allowlistOf(r.rules.allowlist, { grants, projects, snap });
+  const rules = { ...r.rules };
+  let unset = r.unset;
+  if (al.list.length) {
+    rules.allowlist = al.list;
+    unset = unset.filter((k) => k !== 'allowlist');
+  }
+  if (unset.length) waits.push(`Your trader rules are not all set (${unset.join(', ')}); set them in Preferences > Screening.`);
   if (b.unset.includes('cash_usd')) waits.push('The trader\'s Paper Book is not funded; set its funding in Preferences > Screening.');
   if (b.unset.includes('fee_rate')) waits.push('The venue fee is not set, and an unknown fee is never read as 0; set it in Preferences > Screening.');
   const venue = { lot: LOT, min_notional_usd: MIN_NOTIONAL_USD, maker_rate: b.book.fee_rate, taker_rate: b.book.fee_rate };
-  return { rules: r.rules, book: b.book, venue, waits };
+  return { rules, book: b.book, venue, waits, allowlist_basis: al.basis };
 }
 
 // The ticket receipt a decision is on, or the reason it cannot be used.
@@ -277,14 +309,51 @@ function receiptOf(ws, pid, rid) {
   return { receipt: r };
 }
 
-// The pair a project trades as in the book: its ticker against USDC.
-function pairOf(project, projects) {
+// The pool each pair's hourly candles are bound to for good
+// (paper/candles/sources.jsonl, create-only): the first line per pair wins,
+// the rule trader-candles.js readSources reads it by. Read here, since that
+// module requires this one. A file that is there but does not read is
+// `unreadable`, and no pair is then taken as unbound.
+const SOURCES_REL = 'paper/candles/sources.jsonl';
+const SOURCE_VERSION = 'cr.trader-candle-source.v1';
+function sourceBindings(ws) {
+  const out = new Map();
+  let text = '';
+  try { text = require('fs').readFileSync(ws.abs(SOURCES_REL), 'utf8'); } catch (err) {
+    if (!err || err.code !== 'ENOENT') out.unreadable = true;
+    return out;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let s;
+    try { s = JSON.parse(line); } catch (_) { continue; }
+    if (s && typeof s.pair === 'string' && s.schema_version === SOURCE_VERSION && !out.has(s.pair)) out.set(s.pair, s);
+  }
+  return out;
+}
+const sourceBindingOf = (ws, pair) => sourceBindings(ws).get(pair) || null;
+
+// Whether a binding prices this project's own token: the same project and a
+// contract among its verified identity's on that chain.
+function boundToOwn(project, b) {
+  if (!b.project_id || b.project_id !== project.project_id) return false;
+  return require('./tickets').ownsContract(project, b.chain_id, b.contract_address);
+}
+
+// The pair a project trades as in the book: its ticker against USDC. With
+// `sources` (sourceBindings), a pair whose candles are bound to another
+// project or another contract is refused: its hours would not price this token.
+function pairOf(project, projects, { sources = null } = {}) {
   const sym = typeof project.symbol === 'string' ? project.symbol.trim().toUpperCase() : '';
   const name = project.name || project.project_id;
   if (!/^[A-Z0-9.]{1,24}$/.test(sym)) return { pair: null, why: `${name} has no ticker the book can name a pair with.` };
   const twin = projects.find((q) => q.project_id !== project.project_id && q.status !== 'archived' && typeof q.symbol === 'string' && q.symbol.trim().toUpperCase() === sym);
   if (twin) return { pair: null, why: `Another project on the desk, ${twin.name || twin.project_id}, also trades as ${sym}, so ${sym}/${QUOTE} would not name one token.` };
-  return { pair: `${sym}/${QUOTE}`, why: null };
+  const pair = `${sym}/${QUOTE}`;
+  if (sources && sources.unreadable) return { pair: null, why: `The candle bindings (${SOURCES_REL}) could not be read, so whether ${pair} prices this token is unknown.` };
+  const b = sources ? sources.get(pair) : null;
+  if (b && !boundToOwn(project, b)) return { pair: null, why: `${pair}'s hourly candles are bound to ${b.project_id || 'another project'} (${b.contract_address || 'no contract'}) for good, so ${pair} would not price this token.` };
+  return { pair, why: null };
 }
 
 // The order a ticket's proposal makes at the book's price, or why it makes
@@ -389,6 +458,7 @@ function snapshotOf(ws, now) {
     funded: r.funded_usd !== null,
     last: new Map(hours.map((h) => [h.pair, h.last_hour])),
     gaps: readGaps(ws),
+    sources: sourceBindings(ws),
   };
   snap.settlement = settlementOf(snap);
   return snap;
@@ -412,7 +482,7 @@ function assess(ws, ctx, g, snap) {
     if (!g.in_force) return out('not_opened', `${g.undo ? 'Undone' : 'Replaced'} before the book was asked: no order was made.`);
     const rc = receiptOf(ws, pid, d.receipt_id);
     if (rc.why) return out('not_opened', `${rc.why} No order is made from it.`);
-    const pr = pairOf(g.project, ctx.projects);
+    const pr = pairOf(g.project, ctx.projects, { sources: snap.sources });
     if (!pr.pair) return out('not_opened', `${pr.why} No order is made.`);
     const plan0 = planOf(rc.receipt, d, null);
     if (plan0.why) return out('not_opened', plan0.why, null, { pair: pr.pair });
@@ -463,6 +533,25 @@ function assess(ws, ctx, g, snap) {
     const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
     if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const sz = f.sizing;
+    // A paper mandate grant (decided_by mandate:…) reads the contract again
+    // at opening, in every gate mode: a verdict that is gone or blocks, or an
+    // identity changed or a sell tax spiked since the save, opens nothing; a
+    // hold (a stale observation, CG-20) waits for the next one. Eric's own
+    // grants keep the enforce-only guard below.
+    if (typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:')) {
+      const T = require('./tickets');
+      let v = null;
+      let chk = null;
+      try {
+        v = T.contractVerdictNow(ws, g.project, T.sizingOf(ws), ctx.t);
+        chk = T.contractCheckOf(ws, g.project, rc.receipt, ctx.t);
+      } catch (err) {
+        return out('waiting', `The contract could not be read again for the paper mandate's grant (${String(err && err.message || err).slice(0, 160)}); the order waits.`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK' } });
+      }
+      if (!v || v.tier === 'block') return out('not_opened', `The paper mandate's grant opens nothing: ${v ? `the contract gate now blocks (${v.words})` : 'the contract has no observation the desk can read now'}.`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', tier: v ? v.tier : null } });
+      if (chk && chk.status === 'triggered') return out('not_opened', `The paper mandate's grant opens nothing: ${chk.words}`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', status: chk.status } });
+      if (v.tier === 'hold') return out('waiting', `The paper mandate's grant waits: the contract gate holds (${v.words}).`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', tier: v.tier } });
+    }
     // The contract gate, when Eric enforces it (tickets.js contractOpenGuard):
     // the same contract, current evidence, and the exit at this fitted
     // notional (CG-14), not only at the reference tranche. Openings only.
@@ -507,7 +596,7 @@ function assess(ws, ctx, g, snap) {
   const bk = PT.book(ws, asked.pair, { now: ctx.now, venue: ctx.s.venue });
   const stale = ctx.s.rules.price_stale_minutes;
   const waits = [
-    ...ctx.s.waits.filter((w) => !/not funded/.test(w)),
+    ...ctx.s.waits.filter((w) => !/not funded/.test(w) && !/rules are not all set \(allowlist\)/.test(w)),
     unresolved(snap).length && `${unresolved(snap).length} order${unresolved(snap).length === 1 ? ' is' : 's are'} not yet resolved.`,
     bk.price === null && `${asked.pair} has no recent closed hour in the book.`,
     bk.price !== null && Number.isSafeInteger(stale) && ctx.t - Date.parse(bk.price_at) > stale * MIN && `${asked.pair}'s latest hour in the book ended more than ${stale} minutes ago.`,
@@ -524,17 +613,20 @@ function assess(ws, ctx, g, snap) {
   return out('closing', `${reason.words} Ready to sell ${pos.quantity} ${asked.pair} at ${usd(intent.entry_price)}.`, { kind: 'close', intent }, closing);
 }
 
+// The grants, the book as it stands (snap) and the settings they make: the
+// effective allowlist reads both.
 function contextOf(ws, now, project) {
   const n = nowOf(now);
   const { projects, grants } = grantsOf(ws, project);
-  return { ...n, s: settingsOf(ws), projects, grants };
+  const snap = snapshotOf(ws, n.now);
+  return { ...n, s: settingsOf(ws, { grants, projects, snap }), projects, grants, snap };
 }
 
 // Every request Eric's decisions make of the trader, as the book stands now.
 // Reads only.
 function requests(ws, { now, project = null } = {}) {
   const ctx = contextOf(ws, now, project);
-  return requestsOf(ws, ctx, snapshotOf(ws, ctx.now));
+  return requestsOf(ws, ctx, ctx.snap);
 }
 function requestsOf(ws, ctx, snap) {
   return { version: VERSION, now: ctx.now, waits: ctx.s.waits, settlement: snap.settlement, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
@@ -547,7 +639,7 @@ function requestsOf(ws, ctx, snap) {
 // refusal with the project and decision it belongs to. Reads only.
 function view(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
-  const snap = snapshotOf(ws, ctx.now);
+  const snap = ctx.snap;
   const res = snap.results;
   const reqs = ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; });
   // Every intent a decision makes, its buy and each sell attempt, to its request.
@@ -572,6 +664,7 @@ function view(ws, { now } = {}) {
     version: VERSION,
     now: ctx.now,
     waits: ctx.s.waits,
+    allowlist_basis: ctx.s.allowlist_basis,
     settlement: st,
     book: { cash_usd: ctx.s.book.cash_usd || null, fee_rate: ctx.s.book.fee_rate || null },
     venue: { lot: LOT, min_notional_usd: MIN_NOTIONAL_USD },
@@ -594,7 +687,7 @@ function view(ws, { now } = {}) {
 function wanted(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   if (!ctx.s.book.cash_usd) return [];
-  const snap = snapshotOf(ws, ctx.now);
+  const snap = ctx.snap;
   const last = snap.last;
   const out = new Map();
   const add = (pair, pid, why) => { if (pair && !out.has(pair)) out.set(pair, { pair, project_id: pid, why, last_hour: last.get(pair) || null }); };
@@ -637,7 +730,7 @@ function step(ws, { now, project = null } = {}) {
   const done = [];
   const problems = [];
   const attempt = (what, fn) => { try { const r = fn(); done.push({ ...what, status: r.status, state: r.state || null, words: r.words || null, refusals: r.refusals || null }); return r; } catch (err) { problems.push({ ...what, code: err.code || null, words: String(err && err.message || err).slice(0, 300) }); return null; } };
-  let snap = snapshotOf(ws, ctx.now);
+  let snap = ctx.snap;
   if (fundOnce(ws, ctx, done, problems, snap)) snap = snapshotOf(ws, ctx.now);
   // Read again only when recovery or a reconcile was attempted.
   const before = done.length + problems.length;
@@ -705,4 +798,4 @@ function gapOf(ws, pair, hour, now) {
   }
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, intentIdOf, plain, closeLimit, fit, settingsOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };

@@ -18,7 +18,7 @@ import { createPortal } from 'react-dom';
 import { FootSlot } from './footSlot.js';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
-import { ruleNoteOf, deltaBadgeOf, widestCategoryLink } from '../../../../public/pm-card-model.js';
+import { ruleNoteOf, deltaBadgeOf, widestCategoryLink, provenanceOf } from '../../../../public/pm-card-model.js';
 import { GatePanel } from './GatePanel.jsx';
 
 const enc = encodeURIComponent;
@@ -311,6 +311,8 @@ export function PMDecisionCard({ p }) {
   const fatal = ((t.prosecution && t.prosecution.fatal_flaws) || []).filter((f) => f.severity === 'fatal');
   const risk = t.suggested_risk_usd || 0;
   const decided = t.decision;
+  // Who recorded it: the paper mandate, or Eric (null).
+  const prov = provenanceOf(t);
   // The card sends what it shows (status, suggested risk, a newer report), so
   // the desk refuses a decision on a ticket that changed since it was drawn.
   const decide = async (action, { repair = false } = {}) => {
@@ -438,11 +440,18 @@ export function PMDecisionCard({ p }) {
       <GatePanel pid={pid} t={t} />
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
+      {prov ? (
+        <p className="pm-provenance" data-key={`pm-provenance-${pid}`} data-kind={prov.kind} title={prov.why || undefined}>
+          <span className="pm-provenance-k">{prov.text}</span>
+          {prov.tier_words ? <span>{prov.tier_words}</span> : null}
+          {prov.expires_at ? <span>{`Mandate expires ${fmtDateTime(prov.expires_at)}`}</span> : null}
+        </p>
+      ) : null}
       {gated && !decided ? <p className="v3-gated" data-key={`pm-gated-${pid}`}>{`${gated === 'block' ? 'Deterministic veto' : 'Held by the gate'}: ${t.contract_gate.words} No risk can be granted on this ticket; it re-opens only on a fresh packet.`}</p> : null}
       <Actions pid={pid}>
         {decided ? (
           <p className="pm-decided">
-            <span>{DECIDED_WORDS[decided.action] || `Approved ${usd(t.pm_approved_risk_usd)}`}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
+            <span>{prov && prov.kind !== 'mandate_latched' ? prov.text : DECIDED_WORDS[decided.action] || `Approved ${usd(t.pm_approved_risk_usd)}`}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
             <span className="faint">{` · ${fmtDateTime(decided.at)}`}</span>
             {decided.paper === 'missing' ? <button type="button" className="btn btn-sm" data-key={`pm-repair-${pid}`} disabled={Boolean(busy)} title="The decision is recorded but its paper position is not: records the same decision again, which completes it once" onClick={() => decide(decided.action, { repair: true })}>Complete paper position</button> : null}
             <button type="button" className="btn btn-sm" data-key={`pm-undo-${pid}`} disabled={Boolean(busy)} onClick={() => decide('undo')}>Undo</button>

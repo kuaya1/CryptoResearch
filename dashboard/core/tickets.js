@@ -1483,6 +1483,99 @@ function receiptText(ws, pid, rid) {
 }
 
 // ---------------------------------------------------------------------------
+// The paper mandate (cr-paper-mandate@1; settings automation.autonomous_paper_loop
+// and automation.mandate). Under it the desk may grant a Prosecutor's ticket
+// on the Trader Sim book by itself, within Eric's caps, until it expires. A
+// mandate grant is the mandate's, never Eric's; it never opens a PM Cohort
+// position; his Undo or Veto latches the ticket off for good. Whatever cannot
+// be read keeps it off: unknown is never a grant.
+
+const MANDATE_VERSION = 'cr-paper-mandate@1';
+const MANDATE_BY = `mandate:${MANDATE_VERSION}`;
+// A hard floor, whatever tickets.sizing.min_grade_new_entry says.
+const MANDATE_MIN_GRADE = 50;
+const MANDATE_MAX_DAYS = 30;
+const MANDATE_MAX_CAP = 5;
+const MANDATE_MAX_CHAINS = 10;
+const MANDATE_DEFAULTS = Object.freeze({ expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: Object.freeze(['ethereum', 'base', 'arbitrum', 'optimism', 'solana']) });
+const MANDATE_MEANING = 'The desk\'s paper mandate recorded this under the limits Eric set (automation.mandate). It is not Eric\'s decision and places no real order.';
+
+// The tier from the receipt's own grade (a range read at its low end): 50 up
+// to 55 is the exploratory half grant, 55 and above the standard grant, under
+// 50 nothing.
+function mandateTierOf(grade) {
+  if (!isNum(grade) || grade < MANDATE_MIN_GRADE) return null;
+  return grade < 55 ? { name: 'exploratory_50_54', action: 'halve' } : { name: 'standard_55_plus', action: 'approve' };
+}
+
+// Whether a verified identity names this contract on this chain (chain IDs
+// and aliases through chains.js, addresses compared as the family keys them).
+function ownsContract(project, chainId, address) {
+  const { chainInfo, addressKey } = require('./chains');
+  const want = chainInfo(chainId);
+  if (!want || typeof address !== 'string' || !address.trim()) return false;
+  const id = (project && project.identity) || {};
+  if (id.status !== 'verified') return false;
+  return (Array.isArray(id.assets) ? id.assets : []).some((a) => {
+    const info = chainInfo(a && a.chain);
+    return Boolean(info && info.chain_id === want.chain_id && typeof a.contract_address === 'string' && addressKey(info.family, a.contract_address.trim()) === addressKey(want.family, address.trim()));
+  });
+}
+
+const isMandateLine = (d) => Boolean(d && typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:'));
+
+// 1 to 10 unique chains that chains.js knows (aliases count once). Throws INVALID.
+function mandateChains(list) {
+  const { chainInfo } = require('./chains');
+  if (!Array.isArray(list) || !list.length || list.length > MANDATE_MAX_CHAINS) throw new OpError('INVALID', `automation.mandate.allowed_chains must list 1 to ${MANDATE_MAX_CHAINS} chains.`);
+  const seen = new Set();
+  return list.map((c) => {
+    const info = chainInfo(c);
+    if (!info) throw new OpError('INVALID', `automation.mandate.allowed_chains: "${String(c).slice(0, 40)}" is not a chain the desk knows.`);
+    if (seen.has(info.chain_id)) throw new OpError('INVALID', `automation.mandate.allowed_chains names ${info.label} twice.`);
+    seen.add(info.chain_id);
+    return String(c).trim().toLowerCase();
+  });
+}
+
+// The mandate in force. `on` only when the loop is on, automation is not
+// paused, the expiry is in the future and at most MANDATE_MAX_DAYS ahead, every
+// limit reads, and this is not a restored copy on hold.
+function mandateOf(ws, now = Date.now()) {
+  const a = (ws.settings && ws.settings.automation) || {};
+  const raw = a.mandate && typeof a.mandate === 'object' && !Array.isArray(a.mandate) ? a.mandate : {};
+  const out = {
+    version: MANDATE_VERSION,
+    on: false,
+    why: null,
+    expires_at: typeof raw.expires_at === 'string' ? raw.expires_at : null,
+    max_grants_per_day: null,
+    max_open_grants: null,
+    allowed_chains: null,
+    settings_sha256: sha256(require('./requests').stableStringify(raw)),
+  };
+  const problems = [];
+  for (const k of ['max_grants_per_day', 'max_open_grants']) {
+    const v = raw[k] === undefined ? MANDATE_DEFAULTS[k] : raw[k];
+    if (Number.isInteger(v) && v >= 1 && v <= MANDATE_MAX_CAP) out[k] = v;
+    else problems.push(`automation.mandate.${k} does not read as a whole number from 1 to ${MANDATE_MAX_CAP}`);
+  }
+  try { out.allowed_chains = mandateChains(raw.allowed_chains === undefined ? [...MANDATE_DEFAULTS.allowed_chains] : raw.allowed_chains); } catch (err) { problems.push(err.message.replace(/\.$/, '')); }
+  const t = out.expires_at ? Date.parse(out.expires_at) : NaN;
+  let held = null;
+  try { held = require('./research').restoredHold(ws); } catch (_) { held = { unreadable: true }; }
+  if (a.autonomous_paper_loop !== true) out.why = 'The paper mandate is off (automation.autonomous_paper_loop).';
+  else if (a.paused === true) out.why = 'Automation is paused: the paper mandate grants nothing.';
+  else if (problems.length) out.why = `The paper mandate's limits do not read, so it grants nothing: ${problems.join('; ')}.`;
+  else if (!Number.isFinite(t)) out.why = 'The paper mandate has no expiry (automation.mandate.expires_at), so it grants nothing.';
+  else if (t <= now) out.why = `The paper mandate expired at ${out.expires_at}.`;
+  else if (t - now > MANDATE_MAX_DAYS * 86400000) out.why = `The paper mandate's expiry is more than ${MANDATE_MAX_DAYS} days ahead; set it again.`;
+  else if (held) out.why = 'This is a restored copy on hold: the paper mandate grants nothing until it is released.';
+  else out.on = true;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Eric's PM decisions
 
 // The decision in force for a receipt: the last line that an undo has not
@@ -1554,6 +1647,11 @@ function newerRuleOf(receipt) {
 // has one; null otherwise. Reads the verified packet; writes nothing.
 const EXIT_EVIDENCE_VERSION = 'cr-ticket-exit-evidence@1';
 const EXIT_FRESH_HOURS = require('./forensic-defs').EVENTS.liquidity_impairment.freshness_hours;
+// The frozen exit readings that count: complete, dated, within the limit.
+function countedExits(exits, limit) {
+  return (Array.isArray(exits) ? exits : []).filter((x) => x && Number(x.size_usd) > 0 && x.cost_complete === true && isNum(x.cost_pct) && limit > 0 && x.cost_pct <= limit && Number.isFinite(Date.parse(x.as_of)));
+}
+
 function exitEvidenceOf(ws, receipt, now = Date.now()) {
   if (!receipt || receipt.kind === 'desk_gate' || !receipt.desk || !RISK_TAKING.has(receipt.desk.proposal_type) || !(receipt.desk.suggested_risk_usd > 0)) return null;
   const base = { version: EXIT_EVIDENCE_VERSION, fresh_hours: EXIT_FRESH_HOURS };
@@ -1565,7 +1663,7 @@ function exitEvidenceOf(ws, receipt, now = Date.now()) {
     return { ...base, state: 'unknown', expires_at: null, expired: false, words: `The exit readings cannot be read: ${String(err && err.message || err).slice(0, 200)}` };
   }
   const limit = Number(receipt.desk.sizing && receipt.desk.sizing.max_exit_cost_pct);
-  const counted = (Array.isArray(packet.exits) ? packet.exits : []).filter((x) => x && Number(x.size_usd) > 0 && x.cost_complete === true && isNum(x.cost_pct) && limit > 0 && x.cost_pct <= limit && Number.isFinite(Date.parse(x.as_of)));
+  const counted = countedExits(packet.exits, limit);
   if (!counted.length) return { ...base, state: 'none', expires_at: null, expired: false, words: 'No exit reading on this ticket is complete and within its limit, so the trader has no size from it.' };
   const newest = Math.max(...counted.map((x) => Date.parse(x.as_of)));
   const ends = newest + EXIT_FRESH_HOURS * 3600000;
@@ -1574,14 +1672,56 @@ function exitEvidenceOf(ws, receipt, now = Date.now()) {
   return { ...base, state: 'current', expires_at: iso(ends), expired: false, words: `The exit readings this ticket froze give the trader a size until ${day} UTC.` };
 }
 
-// Why a saved ticket may be re-opened: it is invalidated, it was sized under
-// an older rules version than the one in force, or (M3) its exit readings
-// have expired while no grant is in force. Null when none holds. Nothing
-// re-opens automatically.
+// An exit reading arrived after a ticket froze none (autonomous paper
+// playbook, Stage 5): { kind: 'exit_evidence_arrived', why, exit } or null.
+// All must hold: a Prosecutor's ticket (not the desk's gate) with no grant in
+// force; its frozen packet holds no complete exit within its limit; the
+// desk's reading at the exit size is now complete, within the limit in force
+// and under EXIT_FRESH_HOURS old; and the gate with no proposal would now
+// allow risk, so a replacement is never one that would still be $0. The
+// cheap reads go first. Fails closed: a packet that does not read is null.
+function exitArrivedOf(ws, project, receipt, now = Date.now()) {
+  if (!receipt || receipt.kind === 'desk_gate' || newerRuleOf(receipt) || !receipt.desk) return null;
+  const pid = receipt.project_id || project.project_id;
+  const inForce = decisionFor(readDecisions(ws, pid), receipt.receipt_id);
+  if (inForce && (inForce.action === 'approve' || inForce.action === 'halve')) return null;
+  let packet;
+  try {
+    if (!receipt.packet || !receipt.packet.path) return null;
+    packet = JSON.parse(verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+  } catch (_) {
+    return null;
+  }
+  const frozenLimit = Number(receipt.desk.sizing && receipt.desk.sizing.max_exit_cost_pct);
+  if (countedExits(packet.exits, frozenLimit).length) return null;
+  const sizing = sizingOf(ws);
+  const researcher = researcherOf(ws, pid);
+  if (!researcher) return null;
+  const x = exitsOf(ws, pid, [sizing.exit_size_usd], now)[0];
+  const at = x && x.as_of ? Date.parse(x.as_of) : NaN;
+  if (!x || x.cost_complete !== true || !isNum(x.cost_pct) || !(x.cost_pct <= sizing.max_exit_cost_pct) || !Number.isFinite(at) || now - at > EXIT_FRESH_HOURS * 3600000) return null;
+  const market = marketOf(ws, project);
+  // held changes only the trim type, never whether new risk is allowed.
+  const g = gate({ researcher, held: false, exits: [x], market, native: { native_chain: Boolean(project.identity && project.identity.native_chain === true), market_cap_usd: isNum(market.market_cap_usd) ? market.market_cap_usd : null } }, sizing);
+  if (g.risk_allowed !== true) return null;
+  return {
+    kind: 'exit_evidence_arrived',
+    why: `An exit reading at ${usd(x.size_usd)} arrived after this ticket froze none: ${x.cost_pct}%, complete, as of ${x.as_of}. A new ticket can freeze it.`,
+    exit: { size_usd: x.size_usd, cost_pct: x.cost_pct, cost_complete: true, method: x.method, as_of: x.as_of },
+  };
+}
+
+// Why a saved ticket may be re-opened: it is invalidated, an exit reading
+// arrived after it froze none (exitArrivedOf), it was sized under an older
+// rules version than the one in force, or (M3) its exit readings have expired
+// while no grant is in force. Null when none holds. Only the paper mandate
+// re-opens by itself, and only for an exit reading that arrived.
 function reopenReason(ws, project, receipt, { now = Date.now() } = {}) {
   if (!receipt || receipt.kind === 'desk_gate' || newerRuleOf(receipt)) return null;
   const inv = invalidationOf(ws, project, receipt, { now });
   if (inv.invalidated) return { kind: 'invalidated', why: inv.words || 'The ticket is invalidated.' };
+  const arrived = exitArrivedOf(ws, project, receipt, now);
+  if (arrived) return arrived;
   const was = receipt.versions && receipt.versions.sizing;
   const inForce = sizingOf(ws).version;
   if (was && was !== inForce) return { kind: 'rules_upgrade', why: `Sized under ${was}; ${inForce} is in force.` };
@@ -1634,9 +1774,15 @@ function seenChanges(seen, now) {
   return out;
 }
 
-function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: requestId = null, by = null, seen = null }) {
+// mandate: { version, tier, grade_used }, from mandateSweep only. No route,
+// command or connector tool passes it (tests/tickets-mandate-decide.test.js).
+function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: requestId = null, by = null, seen = null, mandate = null }) {
   if (!RECEIPT_RE.test(String(rid))) throw new OpError('BAD_ID', 'Name the ticket you decided (its receipt ID).');
   if (!ACTIONS.includes(action)) throw new OpError('INVALID', `The decision is one of ${ACTIONS.join(', ')}.`);
+  if (mandate !== null) {
+    if (!mandate || typeof mandate !== 'object' || mandate.version !== MANDATE_VERSION) throw new OpError('INVALID', `A paper mandate decision names ${MANDATE_VERSION}.`);
+    if (!['approve', 'halve', 'reopen'].includes(action)) throw new OpError('INVALID', `The paper mandate records approve, halve or reopen only, never ${action}.`);
+  }
   const text = note === null || note === undefined ? null : String(note).replace(/\r\n/g, '\n').trim().slice(0, 1000) || null;
   const reqId = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
   const rel = decisionsRel(pid);
@@ -1647,11 +1793,12 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
   if (action === 'reopen') {
     const rec = readJson(ws.abs(receiptRel(pid, rid)), null);
     if (rec) {
-      reopen = reopenReason(ws, project(), rec);
-      if (!reopen && rec.kind !== 'desk_gate') throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, one sized under an older rules version than the one in force, or one whose exit readings expired before any grant. This ticket is none of these.');
+      reopen = mandate ? exitArrivedOf(ws, project(), rec) : reopenReason(ws, project(), rec);
+      if (!reopen && mandate) throw new OpError('REFUSED', 'Not recorded: the paper mandate re-opens a ticket only when an exit reading arrived after it froze none and the gate would now allow risk. This ticket is not one.', { reason: 'MANDATE_NO_REOPEN' });
+      if (!reopen && rec.kind !== 'desk_gate') throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, one that froze no exit reading when one has since arrived, one sized under an older rules version than the one in force, or one whose exit readings expired before any grant. This ticket is none of these.');
     }
   }
-  const out = runOp(ws, { type: 'ticket_decision', summary: `PM ${action} on ${rid} for ${pid}` }, (op) => {
+  const out = runOp(ws, { type: 'ticket_decision', summary: `${mandate ? 'Paper mandate' : 'PM'} ${action} on ${rid} for ${pid}` }, (op) => {
     const r = op.readJson(receiptRel(pid, rid), null);
     if (!r) throw new OpError('NOT_FOUND', `No ticket ${rid} for ${pid}.`);
     if (r.kind === 'desk_gate' && !['pass', 'watch', 'undo'].includes(action)) throw new OpError('REFUSED', `This is the desk's gate, not a Prosecutor's ticket (${r.desk && r.desk.proposal_type || 'no proposal'}, no risk): ${action} does not apply. Confirm the pass or keep it on watch.`);
@@ -1670,6 +1817,26 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     const latest = listReceipts(ws, pid).filter((x) => !x.broken).pop();
     if (action !== 'undo' && latest && latest.receipt_id !== rid) throw new OpError('NEWER_REPORT', `Not recorded: a newer ticket was saved (${latest.receipt_id}, ${latest.saved_at}). Look at it, then decide that one.`, { newer: [{ receipt_id: latest.receipt_id, saved_at: latest.saved_at }] });
     const inForce = decisionFor(lines, rid);
+    // The paper mandate, checked under this lock: on now, zero history on the
+    // receipt for a grant (any decision of Eric's, a veto or an undo
+    // included, latches it off), the tier from the receipt's own grade, and
+    // one mandate re-open per Claude report.
+    let mandateLine = null;
+    if (mandate) {
+      const m = mandateOf(ws, Date.now());
+      if (!m.on) throw new OpError('REFUSED', `Not recorded: ${m.why}`, { reason: 'MANDATE_OFF' });
+      const g = gateGrade(r.researcher && r.researcher.grade);
+      if (action === 'approve' || action === 'halve') {
+        if (lines.some((l) => l.receipt_id === rid)) throw new OpError('REFUSED', 'Not recorded: this ticket already has a decision on record. The paper mandate grants only a ticket nobody has decided.', { reason: 'MANDATE_PRIOR_DECISION' });
+        const tier = mandateTierOf(g);
+        if (!tier || tier.action !== action || tier.name !== mandate.tier) throw new OpError('INVALID', `Not recorded: grade ${g === null ? 'none' : g} gives the paper mandate ${tier ? `${tier.action} (${tier.name})` : 'nothing'}, not ${action} (${mandate.tier || 'no tier'}).`);
+      } else {
+        const reportOf = new Map(listReceipts(ws, pid).filter((x) => !x.broken).map((x) => [x.receipt_id, x.researcher ? x.researcher.report_id : null]));
+        const was = r.researcher ? r.researcher.report_id : null;
+        if (lines.some((l) => l.action === 'reopen' && isMandateLine(l) && reportOf.get(l.receipt_id) === was)) throw new OpError('REFUSED', `Not recorded: the paper mandate already re-opened a ticket on Claude's report ${was}.`, { reason: 'MANDATE_REOPEN_DONE' });
+      }
+      mandateLine = { version: MANDATE_VERSION, tier: action === 'reopen' ? null : mandate.tier, grade_used: g, expires_at: m.expires_at, settings_sha256: m.settings_sha256 };
+    }
     const at = new Date().toISOString();
     let line;
     if (action === 'undo') {
@@ -1681,7 +1848,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       if (action === 'reopen' && inForce && inForce.action === 'reopen') return replay(inForce);
       if ((action === 'approve' || action === 'halve') && !(suggested > 0)) throw new OpError('REFUSED', `This ticket suggests no risk (${type || 'no proposal'}): there is nothing to approve. Confirm the pass, or keep watching.`);
       if ((action === 'pass' || action === 'watch') && suggested > 0) throw new OpError('REFUSED', `This ticket suggests ${usd(suggested)} of risk: approve, halve or veto it.`);
-      if (action === 'reopen' && !reopen) throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, one sized under an older rules version, or one whose exit readings expired before any grant.');
+      if (action === 'reopen' && !reopen) throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, one that froze no exit reading when one has since arrived, one sized under an older rules version, or one whose exit readings expired before any grant.');
       if (action === 'trim' && type !== 'TRIM_EXIT') throw new OpError('REFUSED', `This ticket proposes ${type || 'nothing'}, not a trim.`);
       if (inForce && inForce.action === action) return replay(inForce);
       // One live paper exposure per ticket: a grant in force is undone before
@@ -1713,14 +1880,16 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     const grants = (d) => d && (d.action === 'approve' || d.action === 'halve');
     line.effects = {
       archive: action === 'pass' && line.archive === 'archived' ? 'archive' : action === 'undo' && inForce.archive === 'archived' ? 'restore' : null,
-      paper: grants(line) ? 'open' : action === 'undo' && grants(inForce) ? 'void' : null,
+      // The PM Cohort book (paper.js) measures Eric's own grants only: a
+      // mandate grant opens none, and its undo voids none.
+      paper: grants(line) && !mandateLine ? 'open' : action === 'undo' && paperWanted(inForce) ? 'void' : null,
       journal: 'entry',
       // The trader's Paper Book (cr-paper@2, slot 12a): a grant asks for its
       // order, an undo of one for what has not filled cancelled and what has
       // closed (core/trader-desk.js; only decisions stating this ask it).
       trader: grants(line) ? 'open' : action === 'undo' && grants(inForce) ? 'close' : null,
     };
-    const full = { schema_version: 'cr.ticket-decision.v1', decision_id: `td_${sha256(`${pid}:${rid}:${action}:${at}:${lines.length}`).slice(0, 14)}`, project_id: pid, receipt_id: rid, ticket_id: r.ticket_id, ...line, note: text, decided_at: at, decided_by: by || ws.actor || null, request_id: reqId, meaning: 'Eric\'s PM decision on the ticket: it records his choice and places no order.' };
+    const full = { schema_version: 'cr.ticket-decision.v1', decision_id: `td_${sha256(`${pid}:${rid}:${action}:${at}:${lines.length}`).slice(0, 14)}`, project_id: pid, receipt_id: rid, ticket_id: r.ticket_id, ...line, note: text, decided_at: at, decided_by: mandateLine ? MANDATE_BY : by || ws.actor || null, request_id: reqId, ...(mandateLine ? { mandate: mandateLine } : {}), meaning: mandateLine ? MANDATE_MEANING : 'Eric\'s PM decision on the ticket: it records his choice and places no order.' };
     op.write(rel, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(full)}\n`);
     return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null };
   });
@@ -1747,9 +1916,20 @@ function effectsOf(ws, pid, rid, d, undone) {
     if (out.restore.status !== 'failed') out.project_restored = true;
   }
   out.journal = journalDecision(ws, pid, d, undone);
-  out.paper = paperBook(ws, pid, rid, d, undone);
+  // The PM Cohort book only where the decision asks it (effects.paper); a
+  // line written before effects existed keeps the action-based rule.
+  const asked = d.effects && typeof d.effects === 'object' ? d.effects.paper === 'open' || d.effects.paper === 'void' : true;
+  out.paper = asked ? paperBook(ws, pid, rid, d, undone) : null;
   out.trader = traderBook(ws, pid, d);
   return out;
+}
+
+// Whether a decision's grant opens (or opened) a PM Cohort position: an
+// approve or halve whose effects ask the paper book, or an older line with no
+// effects at all. A mandate grant never does.
+function paperWanted(d) {
+  if (!d || !(d.action === 'approve' || d.action === 'halve')) return false;
+  return d.effects && typeof d.effects === 'object' ? d.effects.paper === 'open' : true;
 }
 
 // The decision's order in the trader's Paper Book (cr-paper@2): the desk's
@@ -1798,12 +1978,21 @@ function journalDecision(ws, pid, d, undone, { late = false } = {}) {
     if (have) return { status: 'unchanged', entry_id: have.entry_id };
     const undo = d.action === 'undo';
     const shown = undo ? undone : d;
-    const reasons = [`pm_action: ${d.action}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`];
+    const byMandate = isMandateLine(d);
+    const reasons = byMandate
+      ? [`mandate_action: ${d.action}`, `decided_by: ${d.decided_by}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`]
+      : [`pm_action: ${d.action}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`];
     if (undo) reasons.push(`undoes: ${undone.decision_id}`);
     else if (isNum(d.pm_approved_risk_usd)) reasons.push(`approved_risk_usd: ${d.pm_approved_risk_usd}`);
+    if (byMandate && d.mandate && d.mandate.tier) reasons.push(`mandate_tier: ${d.mandate.tier}`);
+    const tierOf = (x) => (x.mandate && x.mandate.tier) || 'no tier';
     const base = undo
-      ? `PM undid ${shown.action} on ticket ${d.receipt_id}.`
-      : `PM ${d.action} on ticket ${d.receipt_id}${isNum(d.pm_approved_risk_usd) ? `, approved risk ${usd(d.pm_approved_risk_usd)}` : ''}.${d.note ? ` ${d.note}` : ''}`;
+      ? isMandateLine(shown) ? `PM undid the paper mandate's ${shown.action} on ticket ${d.receipt_id}.` : `PM undid ${shown.action} on ticket ${d.receipt_id}.`
+      : byMandate
+        ? d.action === 'reopen'
+          ? `Paper mandate re-opened ticket ${d.receipt_id}: ${(d.reopen && d.reopen.why) || 'an exit reading arrived'}`
+          : `Paper mandate ${d.action} on ticket ${d.receipt_id}, approved risk ${usd(d.pm_approved_risk_usd)} (${tierOf(d)}).${d.note ? ` ${d.note}` : ''}`
+        : `PM ${d.action} on ticket ${d.receipt_id}${isNum(d.pm_approved_risk_usd) ? `, approved risk ${usd(d.pm_approved_risk_usd)}` : ''}.${d.note ? ` ${d.note}` : ''}`;
     const text = late ? `${base} Decided ${d.decided_at}; this entry was added later by tickets reconcile.` : base;
     const entry = require('./notes').addJournal(ws, pid, { type: 'decision', decision: d.action === 'watch' || d.action === 'trim' ? d.action : null, text, reasons });
     return { status: 'saved', entry_id: entry.entry_id };
@@ -1857,7 +2046,7 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
   for (const [pid, lines] of decisionsOf) {
     for (const rid of new Set(lines.map((l) => l.receipt_id))) {
       const inForce = decisionFor(lines, rid);
-      if (!inForce || !(inForce.action === 'approve' || inForce.action === 'halve') || !positions.ok || openFor(inForce.decision_id)) continue;
+      if (!inForce || !paperWanted(inForce) || !positions.ok || openFor(inForce.decision_id)) continue;
       let receipt = null;
       try { receipt = JSON.parse(require('fs').readFileSync(ws.abs(receiptRel(pid, rid)), 'utf8')); } catch (err) { problems.push(`${receiptRel(pid, rid)} could not be read (${(err && (err.code || err.message)) || 'unknown error'})`); continue; }
       const held = integrityOf(ws, receipt);
@@ -1880,7 +2069,7 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
     for (const rid of rids) {
       const inForce = decisionFor(lines, rid);
       if (!inForce) continue;
-      if (inForce.action === 'approve' || inForce.action === 'halve') {
+      if (paperWanted(inForce)) {
         const opened = openFor(inForce.decision_id);
         // A position saved with no entry price is complete, qualified; never opened again.
         if (opened) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...(opened.entry && opened.entry.status === 'no_entry_price' ? { qualified: 'no_entry_price' } : {}) });
@@ -2058,7 +2247,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
 // decision is recorded but its position is not; the same decision again
 // completes it), or null for a decision that grants nothing.
 function paperStateOf(ws, decision) {
-  if (!decision || !(decision.action === 'approve' || decision.action === 'halve') || !(decision.pm_approved_risk_usd > 0)) return null;
+  if (!paperWanted(decision) || !(decision.pm_approved_risk_usd > 0)) return null;
   try {
     return require('./paper').readRecords(ws).some((l) => l.event === 'open' && l.decision_id === decision.decision_id) ? 'open' : 'missing';
   } catch (_) {
@@ -2136,7 +2325,13 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       suggested_risk_usd: d.suggested_risk_usd || 0,
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
-      decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null, paper: paperStateOf(ws, decision) } : null,
+      decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null, paper: paperStateOf(ws, decision), decided_by: decision.decided_by || null, mandate: decision.mandate || null, reopen: decision.reopen || null } : null,
+      // Eric undid a paper mandate grant on this receipt: the mandate never grants it again.
+      mandate_latched: (() => {
+        const mine = decisions.filter((l) => l.receipt_id === current.receipt_id);
+        const u = mine.filter((l) => l.action === 'undo').map((l) => mine.find((x) => x.decision_id === l.undoes)).find((x) => isMandateLine(x) && (x.action === 'approve' || x.action === 'halve'));
+        return u ? { undone_decision_id: u.decision_id, action: u.action, tier: (u.mandate && u.mandate.tier) || null } : null;
+      })(),
       prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests, strongest_bull_rebuttal: current.prosecution.strongest_bull_rebuttal || '' } : null,
       agent_disagreement: current.agent_disagreement || null,
       invalidation,
@@ -2190,14 +2385,23 @@ function summary(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
 // ---------------------------------------------------------------------------
 // The autonomous pilot: Eric's opt-in per project, and the next step of each
 
+// Turning the pilot on also approves the project's primary exit-quote target
+// (forensics.js approvePrimaryExitQuote), after the enrollment is committed:
+// its outcome is `exit_quote`, and a failure there never undoes the enrollment.
 function setPilot(ws, pid, on, { by = null } = {}) {
   require('./projects').getProject(ws, pid);
-  return runOp(ws, { type: 'ticket_pilot', summary: `${on ? 'Start' : 'Stop'} the autonomous pilot on ${pid}` }, (op) => {
+  const out = runOp(ws, { type: 'ticket_pilot', summary: `${on ? 'Start' : 'Stop'} the autonomous pilot on ${pid}` }, (op) => {
     const cur = op.readJson(profileRel(pid), null) || readProfile(ws, pid);
     if (Boolean(cur.pilot) === Boolean(on)) return { noop: true, pilot: Boolean(on) };
     op.writeJson(profileRel(pid), { ...cur, pilot: Boolean(on), pilot_set_at: new Date().toISOString(), pilot_set_by: by || ws.actor || null });
     return { pilot: Boolean(on) };
   });
+  const turnedOn = Boolean(on) && !(out.result && out.result.noop) && !out.noop;
+  if (turnedOn) {
+    try { out.exit_quote = require('./forensics').approvePrimaryExitQuote(ws, pid, { by: 'pilot enrollment' }); }
+    catch (err) { out.exit_quote = { project_id: pid, status: 'failed', reason: String((err && err.message) || err).slice(0, 200) }; }
+  }
+  return out;
 }
 
 // What the chain needs next on one project: Agent 1 (Claude research), then
@@ -2220,7 +2424,7 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   if (refused) return { ...base, step: 'ticket_failed', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, refused_field: refused.field || null, refused_at: refused.at, why: `Prosecutor: save refused${refused.field ? `, ${refused.field}` : ''}: ${refused.message} Run the Prosecutor again on ticket ${open.ticket_id} (start_ticket resumes it with its draft), then save_ticket.` };
   if (open) return { ...base, step: 'ticket', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, why: `Ticket ${open.ticket_id} is open: write the Prosecutor's ticket (Agent 2).` };
   const v = view(ws, pid, { now });
-  if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `Eric re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
+  if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `${v.ticket.decision && typeof v.ticket.decision.decided_by === 'string' && v.ticket.decision.decided_by.startsWith('mandate:') ? 'The paper mandate' : 'Eric'} re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
   const sizing = sizingOf(ws);
   const enforce = sizing.version === SIZING_V5;
   let onCurrent = Boolean(v.ticket && v.ticket.researcher_report_id === r.report_id);
@@ -2240,6 +2444,159 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   if (v.ticket.status === 'pending_pm_review') return { ...base, step: 'pm_review', receipt_id: v.ticket.receipt_id, why: 'The ticket waits for Eric\'s PM review. Nothing for an agent to do.' };
   if (v.ticket.status === 'invalidated') return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: 'Invalidated: Re-open ticket on the card (or tickets start --reopen). Nothing for an agent to do until then.' };
   return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: `The ticket is ${v.ticket.status.replace(/_/g, ' ')}. Nothing for an agent to do until Claude's report changes.` };
+}
+
+// ---------------------------------------------------------------------------
+// The paper mandate's sweep (autonomous paper playbook, Stage 7): on each
+// trader tick, under one lease, it re-opens a pilot ticket an exit reading
+// arrived for (Phase A) and grants each pilot ticket that meets R2 to R5
+// (Phase B), the highest grade first, under the day's and the open caps. One
+// project's failure is listed in skipped and never stops the sweep. Grants go
+// through decide() like any decision; its own lock checks the mandate, the
+// zero history and the tier again.
+const MANDATE_LEASE = 'paper-mandate';
+const MANDATE_LEASE_MS = 10 * 60000;
+const MANDATE_OPEN_PHASES = Object.freeze(['waiting', 'ready', 'order', 'open', 'closing']);
+
+// R4's contract evidence for a mandate grant (a live Pillar 1 observation):
+// the ticket's packet carried an attestation, the verdict now reads and is
+// neither block nor hold, and the identity has not changed nor the sell tax
+// spiked since the save. Null when it holds, else the words. Reads only; the
+// lookups go through this module's exports, as the trader's re-check does.
+function mandateContractEvidence(ws, project, receipt, sizing, now) {
+  const self = module.exports;
+  if (!receipt.desk || !receipt.desk.contract_gate) return 'The ticket\'s packet carried no contract attestation.';
+  const v = self.contractVerdictNow(ws, project, sizing, now);
+  if (!v) return 'The contract has no observation the desk can read now.';
+  if (v.tier === 'block' || v.tier === 'hold') return `The contract gate ${v.tier === 'block' ? 'blocks' : 'holds'}: ${v.words}`;
+  const chk = self.contractCheckOf(ws, project, receipt, now);
+  if (chk && chk.status === 'triggered') return chk.words;
+  return null;
+}
+
+// Whether a receipt meets R2 to R5 for a grant now: { ok: true, tier, grade,
+// pair } or { ok: false, rule, words }. Reads only.
+function mandateEligible(ws, project, receipt, ctx) {
+  const no = (rule, words) => ({ ok: false, rule, words });
+  const desk = receipt.desk || {};
+  const g = desk.gate || {};
+  // R2, the receipt.
+  if (receipt.kind === 'desk_gate') return no('R2', 'The latest receipt is the desk\'s gate, not a Prosecutor\'s ticket.');
+  if (newerRuleOf(receipt)) return no('R2', 'The ticket was sized under rules newer than this code reads.');
+  if (g.risk_allowed !== true || !(desk.suggested_risk_usd > 0) || !RISK_TAKING.has(desk.proposal_type)) return no('R2', `The ticket proposes ${desk.proposal_type || 'nothing'} with ${usd(desk.suggested_risk_usd || 0)} of risk: nothing to grant.`);
+  const grade = gateGrade(receipt.researcher && receipt.researcher.grade);
+  const tier = mandateTierOf(grade);
+  if (!tier) return no('R2', `Agent 1's grade is ${grade === null ? 'withheld or none' : grade}, under the paper mandate's floor of ${MANDATE_MIN_GRADE}.`);
+  const inv = invalidationOf(ws, project, receipt, { now: ctx.now });
+  if (inv.unread || inv.invalidated) return no('R2', `The ticket is ${inv.invalidated ? 'invalidated' : 'not readable for invalidation'}: ${inv.words || 'no words'}`);
+  // R3, zero history.
+  if (ctx.lines.some((l) => l.receipt_id === receipt.receipt_id)) return no('R3', 'This ticket already has a decision on record, so the paper mandate never grants it.');
+  // R4, evidence.
+  if (project.identity && project.identity.native_chain === true) return no('R4', 'A native L1 coin stays Eric\'s own decision: the paper mandate never grants it.');
+  if (g.exit_basis === 'native_l1_liquid') return no('R4', 'The ticket was sized on a native L1\'s liquidity, not a measured exit: Eric decides it.');
+  const ev = exitEvidenceOf(ws, receipt, ctx.now);
+  if (!ev || ev.state !== 'current') return no('R4', ev ? ev.words : 'The ticket has no exit evidence.');
+  const limit = Number(desk.sizing && desk.sizing.max_exit_cost_pct);
+  if (g.exit_cost_complete !== true || !isNum(g.exit_cost_pct) || !(g.exit_cost_pct <= limit)) return no('R4', `The gate's exit cost is ${isNum(g.exit_cost_pct) ? `${g.exit_cost_complete ? '' : 'at least '}${g.exit_cost_pct}%` : 'unknown'}, not proven within ${limit}%.`);
+  const { chainInfo } = require('./chains');
+  const subject = require('./contract-forensics').subjectsOf(project)[0] || null;
+  if (!subject) return no('R4', 'The token has no contract the desk reads, so it has no exit chain.');
+  const allowed = new Set((ctx.mandate.allowed_chains || []).map((c) => (chainInfo(c) || {}).chain_id).filter(Boolean));
+  if (!allowed.has(subject.chain_id)) return no('R4', `The exit chain (${subject.label}) is not among the paper mandate's chains.`);
+  const cw = module.exports.mandateContractEvidence(ws, project, receipt, ctx.sizing, ctx.now);
+  if (cw) return no('R4', cw);
+  // R5, the pair.
+  const pr = require('./trader-desk').pairOf(project, ctx.projects, { sources: ctx.sources });
+  if (!pr.pair) return no('R5', pr.why);
+  return { ok: true, tier, grade, pair: pr.pair };
+}
+
+function mandateSweep(ws, { now = Date.now() } = {}) {
+  const m = mandateOf(ws, now);
+  const base = { version: MANDATE_VERSION, granted: [], reopened: [], skipped: [] };
+  if (!m.on) return { ...base, status: 'skipped', why: m.why, message: m.why };
+  const leases = require('./leases');
+  const token = leases.acquireLease(ws, MANDATE_LEASE, MANDATE_LEASE_MS, { label: 'paper mandate sweep' });
+  if (!token) return { ...base, status: 'busy', why: 'Another paper mandate sweep is running.', message: 'Another paper mandate sweep is running.' };
+  try {
+    const out = { ...base, status: 'ok', mandate: { expires_at: m.expires_at, max_grants_per_day: m.max_grants_per_day, max_open_grants: m.max_open_grants }, grants_today: 0, open_grants: 0, why: null };
+    const { ymdInTz } = require('./dates');
+    const today = ymdInTz(new Date(now));
+    const projects = require('./projects').listProjects(ws).filter((p) => !p.broken);
+    const linesOf = new Map(projects.map((p) => [p.project_id, readDecisions(ws, p.project_id)]));
+    const mandateGrants = [];
+    for (const lines of linesOf.values()) for (const l of lines) if (isMandateLine(l) && (l.action === 'approve' || l.action === 'halve')) mandateGrants.push(l);
+    out.grants_today = mandateGrants.filter((l) => Number.isFinite(Date.parse(l.decided_at)) && ymdInTz(new Date(l.decided_at)) === today).length;
+    // The open grants: a mandate grant in force the trader has not finished.
+    // A book that does not read grants nothing (fail closed).
+    let openKnown = true;
+    try {
+      const ids = new Set(mandateGrants.map((l) => l.decision_id));
+      const rq = require('./trader-desk').requests(ws, { now: iso(now) });
+      out.open_grants = rq.requests.filter((r) => ids.has(r.decision_id) && r.in_force && MANDATE_OPEN_PHASES.includes(r.phase)).length;
+    } catch (err) {
+      openKnown = false;
+      out.why = `The trader's requests could not be read (${String(err && err.message || err).slice(0, 160)}), so the paper mandate grants nothing this time.`;
+    }
+    let sources = null;
+    try { sources = require('./trader-desk').sourceBindings(ws); } catch (_) { sources = Object.assign(new Map(), { unreadable: true }); }
+    const ctx = { now, mandate: m, sizing: sizingOf(ws), projects, sources, lines: [] };
+    const candidates = [];
+    for (const p of projects) {
+      if (p.status === 'archived' || !readProfile(ws, p.project_id).pilot) continue;
+      const pid = p.project_id;
+      const skip = (receiptId, rule, words) => out.skipped.push({ project_id: pid, receipt_id: receiptId, rule, words: String(words || '').slice(0, 300) });
+      try {
+        if (!p.identity || p.identity.status !== 'verified') { skip(null, 'R1', 'The project has no verified token binding.'); continue; }
+        const latest = listReceipts(ws, pid).filter((x) => !x.broken).pop();
+        if (!latest) { skip(null, 'R2', 'The project has no ticket yet.'); continue; }
+        const lines = linesOf.get(pid) || [];
+        const inForce = decisionFor(lines, latest.receipt_id);
+        // Phase A: a re-open when an exit reading arrived after the ticket
+        // froze none, once per Claude report.
+        if (inForce && inForce.action === 'reopen') { skip(latest.receipt_id, 'R3', 'The ticket is re-opened and waits for Agent 2\'s new ticket.'); continue; }
+        const arrived = exitArrivedOf(ws, p, latest, now);
+        if (arrived) {
+          const reportOf = new Map(listReceipts(ws, pid).filter((x) => !x.broken).map((x) => [x.receipt_id, x.researcher ? x.researcher.report_id : null]));
+          const was = latest.researcher ? latest.researcher.report_id : null;
+          if (lines.some((l) => l.action === 'reopen' && isMandateLine(l) && reportOf.get(l.receipt_id) === was)) { skip(latest.receipt_id, 'R3', `The paper mandate already re-opened a ticket on Claude's report ${was}.`); continue; }
+          const r = decide(ws, pid, { receipt_id: latest.receipt_id, action: 'reopen', request_id: `mandate_r_${latest.receipt_id}`, note: `Paper mandate: ${arrived.why}`, mandate: { version: MANDATE_VERSION } });
+          if (r.result && r.result.status === 'saved') out.reopened.push({ project_id: pid, receipt_id: latest.receipt_id, decision_id: r.result.decision.decision_id, why: arrived.why });
+          continue;
+        }
+        // Phase B: a grant.
+        const e = mandateEligible(ws, p, latest, { ...ctx, lines });
+        if (!e.ok) { skip(latest.receipt_id, e.rule, e.words); continue; }
+        candidates.push({ project: p, receipt: latest, ...e });
+      } catch (err) {
+        skip(null, err && err.code ? err.code : 'ERROR', String(err && err.message || err));
+      }
+    }
+    candidates.sort((a, b) => b.grade - a.grade || String(a.receipt.saved_at || '').localeCompare(String(b.receipt.saved_at || '')));
+    for (const c of candidates) {
+      const pid = c.project.project_id;
+      const rid = c.receipt.receipt_id;
+      const skip = (rule, words) => out.skipped.push({ project_id: pid, receipt_id: rid, rule, words: String(words || '').slice(0, 300) });
+      if (!openKnown) { skip('R5', out.why); continue; }
+      if (out.grants_today >= m.max_grants_per_day) { skip('R5', `The paper mandate's ${m.max_grants_per_day} grant${m.max_grants_per_day === 1 ? '' : 's'} for today (New York) are made.`); continue; }
+      if (out.open_grants >= m.max_open_grants) { skip('R5', `The paper mandate holds ${out.open_grants} open grant${out.open_grants === 1 ? '' : 's'}, its limit.`); continue; }
+      try {
+        const r = decide(ws, pid, { receipt_id: rid, action: c.tier.action, request_id: `mandate_${rid}`, note: `Paper mandate, ${c.tier.name}, grade ${c.grade}.`, mandate: { version: MANDATE_VERSION, tier: c.tier.name, grade_used: c.grade } });
+        if (r.result && r.result.status === 'saved') {
+          out.grants_today += 1;
+          out.open_grants += 1;
+          const d = r.result.decision;
+          out.granted.push({ project_id: pid, receipt_id: rid, decision_id: d.decision_id, action: d.action, tier: c.tier.name, grade: c.grade, risk_usd: d.pm_approved_risk_usd, pair: c.pair, trader: r.result.trader ? r.result.trader.status || null : null });
+        } else skip('R3', 'decide() replayed an earlier decision; nothing new was granted.');
+      } catch (err) {
+        skip(err && err.details && err.details.reason ? err.details.reason : err && err.code ? err.code : 'ERROR', String(err && err.message || err));
+      }
+    }
+    out.message = `Paper mandate: ${out.granted.length} granted, ${out.reopened.length} re-opened, ${out.skipped.length} skipped (${out.grants_today} of ${m.max_grants_per_day} today, ${out.open_grants} of ${m.max_open_grants} open).`;
+    return out;
+  } finally {
+    leases.releaseLease(ws, MANDATE_LEASE, token);
+  }
 }
 
 function pilotQueue(ws, { project = null, now = Date.now() } = {}) {
@@ -2825,6 +3182,30 @@ module.exports = {
   TAX_SPIKE_BPS,
   contractIdentityNow,
   contractOpenGuard,
+  contractVerdictNow,
+  contractCheckOf,
+  exitsOf,
+  exitSizesOf,
+  MANDATE_VERSION,
+  MANDATE_BY,
+  MANDATE_MIN_GRADE,
+  MANDATE_MAX_DAYS,
+  MANDATE_MAX_CAP,
+  MANDATE_DEFAULTS,
+  MANDATE_MEANING,
+  mandateTierOf,
+  mandateChains,
+  mandateOf,
+  isMandateLine,
+  exitArrivedOf,
+  reopenReason,
+  ownsContract,
+  mandateContractEvidence,
+  mandateEligible,
+  mandateSweep,
+  MANDATE_LEASE,
+  paperWanted,
+  countedExits,
   PREGATE_VERSION,
   ADMISSION_VERSION,
   SIZING_DEFAULTS,

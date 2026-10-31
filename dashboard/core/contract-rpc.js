@@ -105,9 +105,15 @@ function readState(ws) {
   }
 }
 
+// An unreadable budget file is never replaced: the cap and the evidence of
+// what was spent would both be lost. Nothing is sent until it is repaired.
+const UNREADABLE_WORDS = 'The contract RPC budget state could not be read; nothing is sent until it is repaired.';
+
 function updateState(ws, fn) {
   return withLock(ws, 'contract_rpc_state', () => {
-    const next = { ...fn(readState(ws)), schema_version: 'cr.contract-rpc-state.v1' };
+    const cur = readState(ws);
+    if (cur.unreadable) throw new OpError('INTEGRITY', UNREADABLE_WORDS);
+    const next = { ...fn(cur), schema_version: 'cr.contract-rpc-state.v1' };
     replaceFile(ws, ws.abs(STATE_REL), jsonText(next));
     return next;
   });
@@ -130,17 +136,25 @@ function capsOf(ws) {
 }
 
 // Reserves one request's compute units on disk before it is sent. False, with
-// nothing counted, when a cap would be passed or the caps are unset.
+// nothing counted, when a cap would be passed, the caps are unset or the
+// budget state cannot be read (fail closed: unknown is never zero).
 function reserveCu(ws, cu, now) {
   const caps = capsOf(ws);
   if (!caps.set) return false;
+  if (readState(ws).unreadable) return false;
   let ok = false;
-  updateState(ws, (s) => {
-    const c = countsOf(s, now);
-    if (c.day_cu + cu > caps.daily || c.month_cu + cu > caps.monthly) return s;
-    ok = true;
-    return { ...s, calls: { ...c, day_cu: c.day_cu + cu, month_cu: c.month_cu + cu, day_count: c.day_count + 1, month_count: c.month_count + 1 } };
-  });
+  try {
+    updateState(ws, (s) => {
+      if (s.unreadable) return s;
+      const c = countsOf(s, now);
+      if (c.day_cu + cu > caps.daily || c.month_cu + cu > caps.monthly) return s;
+      ok = true;
+      return { ...s, calls: { ...c, day_cu: c.day_cu + cu, month_cu: c.month_cu + cu, day_count: c.day_count + 1, month_count: c.month_count + 1 } };
+    });
+  } catch (err) {
+    if (err instanceof OpError && err.code === 'INTEGRITY') return false;
+    throw err;
+  }
   return ok;
 }
 
@@ -247,7 +261,9 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
     if (held) throw new Stop('held', 'This is a restored copy: the desk asks the chain nothing until it is released.');
     const caps = capsOf(ws);
     if (!caps.set) throw new Stop('caps_unset', caps.why);
-    const g = gateOf(readState(ws), clock());
+    const st = readState(ws);
+    if (st.unreadable) throw new Stop('budget_unreadable', UNREADABLE_WORDS);
+    const g = gateOf(st, clock());
     if (!g.open) throw new Stop(g.rate_limited ? 'rate_limited' : 'gate_closed', `${g.why}; next try after ${g.until}.`, { until: g.until });
     if (!k) throw new Stop('no_key', 'No Alchemy key is set (ALCHEMY_API_KEY).');
     if (typeof fetchImpl !== 'function') fetchImpl = globalThis.fetch;
@@ -260,7 +276,10 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
       session.cu += cu;
       return { kind: 'planned' };
     }
-    if (!reserveCu(ws, cu, clock())) throw new Stop('budget', `The contract compute-unit budget would be passed by ${method} (${cu} CU); nothing more is sent.`);
+    if (!reserveCu(ws, cu, clock())) {
+      if (readState(ws).unreadable) throw new Stop('budget_unreadable', UNREADABLE_WORDS);
+      throw new Stop('budget', `The contract compute-unit budget would be passed by ${method} (${cu} CU); nothing more is sent.`);
+    }
     session.requests++;
     session.cu += cu;
     let res;
@@ -336,4 +355,4 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
   return session;
 }
 
-module.exports = { VERSION, CU, READ_METHODS, PINNED, HOSTS, STATE_REL, NETWORKS_REL, Stop, assertReadMethod, pin, pinnedParams, openSession, readState, gateOf, capsOf, readNetworks, networkSupport, supportedNetworks, probeWaitOf, noteProbe };
+module.exports = { VERSION, CU, READ_METHODS, PINNED, HOSTS, STATE_REL, UNREADABLE_WORDS, NETWORKS_REL, Stop, assertReadMethod, pin, pinnedParams, openSession, readState, gateOf, capsOf, readNetworks, networkSupport, supportedNetworks, probeWaitOf, noteProbe };

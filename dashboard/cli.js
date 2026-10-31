@@ -100,9 +100,12 @@ Contract state (read-only chain reads at a finalized block; nothing is read whil
   contracts observe <id> [--dry-run]     observe each contract now; --dry-run prints the planned reads and compute units, sends nothing
   contracts probe [<chain_id>]           what a network answers (finalized tag, block-hash pinning), recorded; none named: every unprobed chain your projects need
   contracts init-defaults [--dry-run]    add the published Uniswap V2/V3 factories, Safe singletons and network-fee ceilings; yours are kept
-  arm-desk [--desk=online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...]
-                                         the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules);
-                                         --desk=online prints what to paste into the signed-in desk's browser console
+  arm-desk [--desk=online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on]
+           [--mandate-days=N | --mandate-off] [--print-schedule]
+                                         the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules,
+                                         the floor for a new entry at 50); --contracts-on needs both caps; --mandate-days=N (1-30) turns the
+                                         paper mandate on; --desk=online prints what to paste into the signed-in desk's browser console;
+                                         --print-schedule prints the Task Scheduler line for npm run pilot -- --pilot-all (never runs it)
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
@@ -932,7 +935,15 @@ async function run(argv) {
         const wrote = !r.dry_run && (r.counts.opted_in || r.counts.gates_made || r.counts.quoted);
         return wrote ? { ...r, ...(await afterWrite(ws, null)) } : r;
       }
-      if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
+      if (sub === 'queue') {
+        // The pause and each step's claim state ride along for the pilot-all
+        // pre-poll (scripts/pilot.js), as the online poll gives them.
+        const steps = tk.pilotQueue(ws, { project: pid || null });
+        const PC = require('./core/pilot-claims');
+        const claims = {};
+        for (const s of steps) { const c = PC.peek(ws, s.project_id, s); if (c) claims[s.project_id] = c; }
+        return { steps, pending: tk.pendingFor(ws), paused: require('./core/workspace').automationPaused(ws), claims };
+      }
       // The pilot runner's execution claim (cr-pilot-claim@1, stage 5.4).
       if (sub === 'claim') return require('./core/pilot-claims').claim(ws, need(pid, 'tickets claim <project> [--expect KEY] [--owner NAME]'), { owner: one(flags.owner) || actor, expect: one(flags.expect) || null, force: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
       if (sub === 'bind') return require('./core/pilot-claims').bind(ws, need(pid, 'tickets bind <project> --token T [--run R] [--ticket K]'), need(one(flags.token), '--token'), { run_id: one(flags.run) || null, ticket_id: one(flags.ticket) || null });
@@ -960,7 +971,7 @@ async function run(argv) {
       }
       if (sub === 'pilot') {
         const r = tk.setPilot(ws, need(pid, 'tickets pilot <project> --on|--off'), !flags.off, { by: actor });
-        return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
+        return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(r.exit_quote ? { exit_quote: r.exit_quote } : {}), ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
       throw Object.assign(new Error('tickets view|queue|claim|bind|release|reconcile|exit-matrix|candidates|digest|batch-gate|decide-gates|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
@@ -1100,18 +1111,31 @@ async function run(argv) {
       const A = require('./core/arm-desk');
       const S = require('./server');
       const desk = one(flags.desk) || 'local';
-      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...]'), { code: 'USAGE' });
+      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on] [--mandate-days=N | --mandate-off] [--print-schedule]'), { code: 'USAGE' });
+      if (flags.print_schedule) return { _text: `${A.scheduleText(path.join(__dirname, '..'))}\n` };
       const whole = (v, name) => {
         if (v === undefined) return undefined;
         if (!/^\d+$/.test(String(v))) throw Object.assign(new Error(`--${name} takes a whole number`), { code: 'USAGE' });
         return Number(v);
       };
       const allow = list(flags.allow).flatMap((s) => String(s).split(',')).map((s) => s.trim()).filter(Boolean);
-      const patch = A.armPatch({ dailyCu: whole(one(flags.daily_cu), 'daily-cu'), monthlyCu: whole(one(flags.monthly_cu), 'monthly-cu'), allow });
+      const life = whole(one(flags.intent_life), 'intent-life');
+      const days = whole(one(flags.mandate_days), 'mandate-days');
+      const patch = A.armPatch({
+        dailyCu: whole(one(flags.daily_cu), 'daily-cu'),
+        monthlyCu: whole(one(flags.monthly_cu), 'monthly-cu'),
+        allow,
+        ...(life !== undefined ? { intentLife: life } : {}),
+        contractsOn: Boolean(flags.contracts_on),
+        mandateDays: days,
+        mandateOff: Boolean(flags.mandate_off),
+        settings: desk === 'local' ? ws.settings : null,
+      });
       const checked = S.validateSettingsPatch(patch, ws);
       if (desk === 'online') {
-        const script = A.onlineScript(patch);
-        return process.argv.includes('--json') ? { desk: 'online', valid: true, patch, script } : { _text: `${script}\n` };
+        const left = A.leftOpen(patch, null);
+        const script = A.onlineScript(patch, { left });
+        return process.argv.includes('--json') ? { desk: 'online', valid: true, patch, script, left_for_you: left } : { _text: `${script}\n` };
       }
       const presets = require('./core/contract-presets').plan(ws.settings);
       const left = A.leftOpen(patch, ws.settings);

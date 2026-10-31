@@ -1147,18 +1147,12 @@ function autoExitQuotePlan(ws) {
   const a = (ws.settings && ws.settings.automation) || {};
   if (a.exit_quotes_auto !== true || a.paused === true) return { add: [], over_budget: [] };
   const T = require('./tickets');
-  const cfg = monitorCfg(ws);
-  const sizes = (prefsOf(ws).exit_sizes_usd || []).length || 1;
-  const per = sizes * Math.round((24 / (cfg.quote_interval_hours || 12)) * 30);
-  let used = 0;
-  for (const p of require('./projects').listProjects(ws)) {
-    if (p.broken || p.status === 'archived') continue;
-    used += (readProfile(ws, p.project_id).targets.exit_quotes || []).length * per;
-  }
+  const { per, budget } = quoteBudgetOf(ws);
+  let { used } = quoteBudgetOf(ws);
   const out = { add: [], over_budget: [] };
   for (const x of exitQuotePlan(ws).add) {
     if (!T.readTicketProfile(ws, x.project_id).pilot) continue;
-    if (used + per > cfg.monthly_request_budget) { out.over_budget.push(x); continue; }
+    if (used + per > budget) { out.over_budget.push(x); continue; }
     used += per;
     out.add.push(x);
   }
@@ -1178,6 +1172,47 @@ function autoExitQuotes(ws) {
     }
   }
   return out;
+}
+
+// The monitor's monthly request estimate per approved exit-quote target (one
+// request per exit size per quote interval, 30 days), and what the targets
+// already approved on unarchived projects use of the budget.
+function quoteBudgetOf(ws) {
+  const cfg = monitorCfg(ws);
+  const sizes = (prefsOf(ws).exit_sizes_usd || []).length || 1;
+  const per = sizes * Math.round((24 / (cfg.quote_interval_hours || 12)) * 30);
+  let used = 0;
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    used += (readProfile(ws, p.project_id).targets.exit_quotes || []).length * per;
+  }
+  return { per, used, budget: cfg.monthly_request_budget };
+}
+
+// Pilot enrollment's exit target (autonomous paper playbook, Stage 3): the
+// project's primary exit-quote chain, approved exactly as the plan's own
+// approval does, so the next ticket can freeze an exit reading. One project
+// only, never the whole plan. `kept` when a target is already approved;
+// `none` with the reason when there is nothing to quote or Eric's own
+// monitoring choices stand; `paused` while automation is paused;
+// `over_budget` when the estimate would pass the monitor's monthly budget.
+function approvePrimaryExitQuote(ws, pid, { by = null } = {}) {
+  const plan = exitQuotePlan(ws);
+  const row = { project_id: pid };
+  const kept = plan.kept.find((x) => x.project_id === pid);
+  if (kept && kept.quoted) return { ...row, status: 'kept', words: 'An exit-quote target is already approved for this project.' };
+  if (kept) return { ...row, status: 'none', reason: 'Your own monitoring choices for this project stand (no exit-quote target among them); nothing was added.' };
+  const none = plan.none.find((x) => x.project_id === pid);
+  if (none) return { ...row, status: 'none', reason: none.reason };
+  const x = plan.add.find((y) => y.project_id === pid);
+  if (!x) return { ...row, status: 'none', reason: 'Not in the exit-quote plan: archived, unreadable, or its identity is not verified.' };
+  const a = (ws.settings && ws.settings.automation) || {};
+  if (a.paused === true) return { ...row, status: 'paused', reason: 'Automation is paused: no exit-quote target is approved by itself.' };
+  const b = quoteBudgetOf(ws);
+  if (b.used + b.per > b.budget) return { ...row, status: 'over_budget', reason: `About ${b.per} more requests a month would pass the monitor's budget (${b.used} of ${b.budget} already planned).`, needed: b.per, used: b.used, budget: b.budget };
+  const r = setMonitoring(ws, pid, { enabled: true, approve_quotes: [x.key], by });
+  if (r.result && r.result.added && r.result.added.length) return { ...row, status: 'approved', chain: x.chain, source: x.source };
+  return { ...row, status: 'none', reason: (r.result && r.result.refused && r.result.refused[0] && r.result.refused[0].reason) || 'Not approved.' };
 }
 
 // A monitor observation: appended once, with its own SHA-256 over its fields
@@ -1925,6 +1960,8 @@ module.exports = {
   approveAllExitQuotes,
   autoExitQuotePlan,
   autoExitQuotes,
+  quoteBudgetOf,
+  approvePrimaryExitQuote,
   appendObservation,
   readingsFor,
   taxIndex,

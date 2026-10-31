@@ -206,7 +206,7 @@ test('an unmapped project gets no fundamentals and says so; nothing is fetched a
   assert.equal(fundamentals.isDue(ws, NOW), false);
   const run = research.createRun(ws, { project_id: id, providers: ['claude'] });
   const packet = readJson(path.join(root, run.run.evidence_packet.path));
-  assert.equal(packet.schema_version, 'cr.evidence-packet.v2');
+  assert.equal(packet.schema_version, 'cr.evidence-packet.v3');
   assert.equal(packet.fundamentals.state, 'unmapped');
   assert.equal(run.run.evidence_packet.fundamentals_state, 'unmapped');
 });
@@ -590,8 +590,8 @@ test('research: a new run freezes the fundamentals in its v2 packet and prompt; 
   const packetBytes = fs.readFileSync(packetFile);
   const promptBytes = fs.readFileSync(promptFile);
   const p1 = JSON.parse(packetBytes.toString('utf8'));
-  assert.equal(p1.schema_version, 'cr.evidence-packet.v2');
-  assert.equal(r1.run.evidence_packet.schema_version, 'cr.evidence-packet.v2');
+  assert.equal(p1.schema_version, 'cr.evidence-packet.v3');
+  assert.equal(r1.run.evidence_packet.schema_version, 'cr.evidence-packet.v3');
   assert.equal(r1.run.evidence_packet.fundamentals_state, 'fresh');
   assert.deepEqual([p1.fundamentals.state, p1.fundamentals.fees_30d_usd, p1.fundamentals.binding.slug], ['fresh', 300, 'example-lend']);
   assert.equal(Object.keys(p1.fundamentals.metrics.fees.daily).length, 30, 'every reported day is frozen');
@@ -668,7 +668,7 @@ test('a run frozen under packet v1 stays as it was: its packet and prompt are by
   // A new run is v2.
   cancelOpenJobs(ws, id);
   const next = research.createRun(ws, { project_id: id, providers: ['claude'], force_new: true });
-  assert.equal(readJson(path.join(root, next.run.evidence_packet.path)).schema_version, 'cr.evidence-packet.v2');
+  assert.equal(readJson(path.join(root, next.run.evidence_packet.path)).schema_version, 'cr.evidence-packet.v3');
 });
 
 // The connector's update_project_identity, called as an assistant would.

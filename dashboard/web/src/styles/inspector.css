@@ -641,6 +641,11 @@ html.has-drawer { overflow: hidden; }
 .v3-ticket a:not(.btn) { color: var(--cr-live-on-dark); }
 .v3-ticket .badge { background: var(--cr-dark-fill); color: var(--cr-paper-secondary); box-shadow: none; }
 
+/* Who recorded the decision: the paper mandate's grant, its re-open, or its latch */
+.pm-provenance { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--fs-sm); line-height: 1.45; color: var(--cr-paper-secondary); }
+.pm-provenance-k { font-weight: 500; color: var(--cr-paper); }
+.pm-provenance[data-kind="mandate_latched"] .pm-provenance-k { font-weight: 400; color: var(--cr-paper-secondary); }
+
 /* The gate in force: in words, in place of a grant */
 .v3-gated { margin: 0; padding: 14px 16px; border-radius: var(--r-v3-banner); background: var(--cr-gated-bg); font-size: var(--fs-sm); line-height: 1.45; color: var(--cr-gated-ink); }
 

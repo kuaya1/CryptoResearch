@@ -7,7 +7,7 @@ Last updated 2026-10-28. This page covers the PM trade ticket pipeline and the c
 Two tracks run on this desk:
 
 - **Track 1, the self-building codebase.** Retired 2026-10-27 (`docs/CONSTITUTION.md`): work is one supervised task, one branch, one pull request and Eric's merge. Its backlog is frozen in `docs/history/autonomous-build-backlog.md` (PR-B 5b, 2026-10-28).
-- **Track 2, the autonomous Junior Trader desk.** Agent 1 researches, the desk measures exits, Agent 2 prosecutes and structures a trade plan (`entry_zone`, `upside_target`, `invalidation_trigger`), and the desk sizes it by Eric's rules. Eric sits in the PM seat for a few minutes a day: Approve Risk ($500), Halve ($250), Veto or Pass.
+- **Track 2, the autonomous Junior Trader desk.** Agent 1 researches, the desk measures exits, Agent 2 prosecutes and structures a trade plan (`entry_zone`, `upside_target`, `invalidation_trigger`), and the desk sizes it by Eric's rules. Eric sits in the PM seat for a few minutes a day: Approve Risk ($500), Halve ($250), Veto or Pass. Under an active paper mandate (`automation.autonomous_paper_loop`, which always expires), the desk may grant Prosecutor tickets on the Trader Sim book alone, within the mandate's caps. A mandate grant is recorded as the mandate's, never as Eric's, never opens a PM Cohort position, and Eric's Undo or Veto latches the ticket off.
 
 Track 1 exists to serve Track 2. Every backlog item must directly improve one of four things:
 
@@ -50,7 +50,27 @@ No paid API key is needed. Both agents run on Eric's Claude subscription, throug
 | Grade under 55, not held | no new entry, $0 |
 | Held, any grade | TRIM_EXIT is always allowed (it takes no new risk) |
 | Native L1, $10B+ market cap (`@2`) | passes the exit check without a DEX quote (`exit_basis: native_l1_liquid`); the grade floors still apply |
+| Floor for a new entry | 55 by default; `arm-desk` sets it to 50 (settings `tickets.sizing.min_grade_new_entry`), so a grade from 50 sizes $500 when its exit is proven |
+| Paper mandate, grade 50 to under 55 | Halve, 0.5R ($250), tier `exploratory_50_54` |
+| Paper mandate, grade 55 and above | Approve, 1.0R ($500), tier `standard_55_plus` |
+| Paper mandate, grade under 50 | never granted, whatever the floor in settings |
 
+- **The paper mandate** (`cr-paper-mandate@1`, `tickets.js` `mandateSweep`, run first in every `trader` job tick):
+  - **When it grants.** Only while `automation.autonomous_paper_loop` is on, automation is not paused, `automation.mandate.expires_at` is in the future and at most 30 days ahead, and this is not a restored copy.
+  - **What it grants.** Only on pilot projects, and only the latest Prosecutor's ticket.
+  - **Every condition.**
+    - The ticket has no decision of any kind on record. Any decision of Eric's latches it off for good.
+    - The exit evidence is current, complete and within the limit.
+    - The exit chain is in `automation.mandate.allowed_chains`.
+    - The packet carried a contract attestation, and the contract verdict now neither blocks nor holds. A live observation is needed.
+    - The identity is unchanged since the save, and no sell-tax spike has appeared.
+    - The pair prices this token: no ticker twin, and no candle binding to another token.
+    - A native L1 coin is never granted; it stays Eric's.
+  - **Caps.** `max_grants_per_day` (1, New York day) and `max_open_grants` (2), each 1 to 5. The highest grade goes first.
+  - **Re-open.** It also re-opens a ticket that froze no exit once a fresh, complete exit reading within the limit arrives, at most once per Claude report.
+  - **The record.** A grant is a `decide()` line with `decided_by: mandate:cr-paper-mandate@1` and its `mandate` block (tier, grade used, expiry, settings hash), with `effects.paper: null`. Only the Trader Sim book acts on it.
+  - **At opening.** The trader reads the contract again: a block, a gone observation or a changed identity opens nothing, and a hold waits.
+  - **On the card.** The PM card says "Granted by paper mandate (0.5R, $250)" or "(1.0R, $500)", the tier and the expiry. After an Undo it says the mandate will not grant the ticket again.
 - The grade is the desk's calculated grade of Claude's current report. A range is read by its low end; a withheld grade means no grade.
 - A proposal the rules don't allow is capped to WATCH_ONLY at $0. The model's own type is kept beside the capped one, with the reason.
 - Eric edits them in Preferences > Screening ("Your ticket sizing"), saved as settings `tickets.sizing`. Since `@4` the exit position, exit sizes and exit-cost limit are Screening's own (`forensics.preferences`: $500, $100/$500/$2,000 and 5% by default), the same values the Forensics tab reads; `tickets.sizing` no longer holds them. Each ticket freezes the values it was made under.
@@ -167,8 +187,11 @@ The commands:
 
 ```
 node dashboard/cli.js arm-desk --dry-run [--daily-cu=5000 --monthly-cu=100000] [--allow=SYM/USDC,...]
+         [--intent-life=1440] [--contracts-on] [--mandate-days=N | --mandate-off]
 node dashboard/cli.js arm-desk [...]                this folder's desk: the settings and the contract defaults
 node dashboard/cli.js arm-desk --desk=online [...]  prints a script for the signed-in online desk's browser console
+node dashboard/cli.js arm-desk --print-schedule     prints the Task Scheduler line for the pilot (never runs it)
+npm run pilot -- --pilot-all --desk=online [--max-agents=2] [--dry-run]
 node dashboard/cli.js contracts init-defaults [--dry-run]
 node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the active projects need that is not probed
 ```
@@ -181,12 +204,53 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
 | Lead thresholds | Market cap at least $5M, 24h volume at least $250K, sell tax at most 5%, eligibility 48 h |
 | `automation.exit_quotes_auto` | true |
 | `trader.book` | $25,000 at a fee of 0.001 |
-| `trader.rules` | Stop at least 0.03 of entry and 0.5 ATR, notional at most 0.20 of NAV, intents valid 240 minutes |
+| `trader.rules` | Stop at least 0.03 of entry and 0.5 ATR, notional at most 0.20 of NAV, intents valid 1,440 minutes (`--intent-life`, 1 to 10,080), so a LIMIT_TRAP below the market does not spend its one attempt in 4 hours |
+| `tickets.sizing.min_grade_new_entry` | 50 |
 | Contract caps | Written only when named |
+| `contracts.enabled` | true with `--contracts-on`, which is refused without both caps |
+| The paper mandate | On until N days ahead with `--mandate-days=N` (1 to 30), the other limits at their defaults; off with `--mandate-off`; untouched otherwise |
 
-- `contracts.enabled` and the contract gate's mode are left as they are.
-- The allowlist holds only the pairs Eric names. While it is unset, every intent waits.
-- Online, the script reads the session token, then posts to `/api/settings` and to `/api/contracts/init-defaults`.
+- The contract gate's mode is left as it is.
+- The saved allowlist holds only the pairs Eric names. The trader also trades the pairs of grants in force and of positions it holds (Invariant 3).
+- Online, the script reads the session token, then posts in this order:
+  1. `/api/settings`
+  2. `/api/forensics/exit-quotes/auto`, for the pilot projects' exit-quote targets
+  3. `/api/contracts/init-defaults`
+
+  What is still Eric's comes first, as comment lines.
+- **Left for Eric.**
+  - `ALCHEMY_API_KEY` on Render, with each chain probed, before contract observations count.
+  - The mandate's expiry.
+  - `CR_PILOT_POLL_TOKEN_SHA256` on Render for the pilot's pre-poll.
+
+**Pilot enrollment approves the exit target** (`forensics.js` `approvePrimaryExitQuote`):
+
+- **What is approved.** Turning the pilot on for a project also approves exit quotes on its primary chain, within the standing policy's quote budget.
+- **What is said.** The answer's `exit_quote` is one of `approved`, `kept`, `none` (with why), `paused` or `over_budget`.
+- **Failure.** A failure there never undoes the enrollment.
+
+**The multi-project runner** (`npm run pilot -- --pilot-all`, `scripts/pilot.js`):
+
+- **One run at a time.** It holds `<temp>/cr-pilot/pilot-all.lock`. A lock older than 3 hours is taken over.
+- **Zero-token pre-poll.** It polls first, before any agent:
+  - Locally, `tickets queue`, which now also gives `paused` and each project's claim state.
+  - Online, `GET /api/pilot/queue` with `Authorization: Bearer <pilot_poll_token>`. The token is read from `%USERPROFILE%\.cryptoresearch\secrets.json` and never printed.
+- **Dispatch.**
+  - Paused: nothing is dispatched.
+  - Order: `ticket`, `ticket_failed`, `gate_closed`, then `research`, each through the per-project path and its claim.
+  - At most `--max-agents` `claude -p` sessions per run.
+  - Online, the first session is the role the polled step needs.
+  - A project held by another runner, or whose one correction is used, is skipped.
+- **Needs Eric.** An expired dispatch with no known outcome (`reconcile`) is listed for Eric and the run exits 3. It is never released by the runner.
+- **The log.** One JSON line per run in `%USERPROFILE%\.cryptoresearch\pilot-all.jsonl`.
+- **Exit codes.** 0 done or nothing to do; 3 needs Eric; 1 an error.
+
+**The poll route** (`core/pilot-poll.js`, answered in `frontdoor.js` before the sign-in and the session token):
+
+- **Off by default.** It answers 404 unless `CR_PILOT_POLL_TOKEN_SHA256` (hex) is set in the desk's environment.
+- **The bearer.** Its SHA-256 is compared with `timingSafeEqual`.
+- **Rate.** 60 requests an hour, refused ones included.
+- **Read only.** It returns `{ format: 'cr-pilot-poll@1', paused, steps: [{ project_id, step, ticket_id, run_id, receipt_id, claim }] }`: no prompt, report text, settings or reasons.
 
 **`contracts init-defaults`** (`core/contract-presets.js`; `POST /api/contracts/init-defaults` on the desk, `{ "dry_run": true }` for the plan) adds:
 
@@ -235,7 +299,7 @@ Eric, 2026-10-27. The contract for the autonomous trader still to be built, so t
 
 1. **Separation of proposal and execution.** The LLM agent is an analyst only. It never holds execution API keys and never signs a transaction. It emits a typed `TradeIntent` (below). An out-of-band deterministic engine intercepts, validates and routes it; while invariant 5 holds, it routes only to the Paper Book.
 2. **Stateless shift work.** The trader runs in discrete, stateless evaluation cycles during the target market's liquidity windows. Each tick re-derives its state from disk only (`DESK_STATE.md`, open position records, fill journals) and exits. No long-lived chat memory.
-3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book's NAV (`cr-paper@2`, below) at risk per trade; a stop-loss on every trade, no nearer the entry than the minimum stop distance; an asset allowlist; and a hard ceiling on drawdown of 4% of NAV in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them. The engine (`dashboard/core/trade-risk.js`), both Paper Books (`dashboard/core/paper.js`, `paper-trader.js`) and the exact arithmetic they compute with (`dashboard/core/decimal.js`) are protected files.
+3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book's NAV (`cr-paper@2`, below) at risk per trade; a stop-loss on every trade, no nearer the entry than the minimum stop distance; an asset allowlist (the pairs Eric names, plus the pairs of grants in force and of open exposure, derived on every step and never written to settings by the desk: `trader-desk.js` `allowlistOf`); and a hard ceiling on drawdown of 4% of NAV in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them. The engine (`dashboard/core/trade-risk.js`), both Paper Books (`dashboard/core/paper.js`, `paper-trader.js`) and the exact arithmetic they compute with (`dashboard/core/decimal.js`) are protected files.
 4. **Reconciliation and nonce guard.** The Paper Book's journal is a hash-chained, append-only record written under the workspace lock, and every action is reserved before it is sent. Its records carry no MAC: the trader holds no key (Eric, 2026-10-28; D9). An order never times out to `lost` (pipeline review, 2026-10-27), and since the red-team review the same day no clock settles a build either (`agent-ledger.js` `settleOpen`).
    - **States.** `INTENT` → `RESERVED` (the `intent_id` and the `client_order_id` derived from it, recorded before anything is sent) → `SENT` → `ACKED`, `REJECTED` or `UNKNOWN`; then `ACKED` → `PARTIAL` → `FILLED`, `CANCELLED` or `EXPIRED`.
    - **Unknown stays unknown.** A timeout, a dropped broker WebSocket or an answer that does not read makes the order `UNKNOWN`. It stays `UNKNOWN` until the engine has asked the venue for that `client_order_id` and recorded the venue's answer. It becomes `NOT_FOUND` only when the venue, asked for that `client_order_id`, has no record of it and the venue's duplicate-order window has passed. For the simulated venue, whose record is complete by construction, that window is 60 minutes from the send, on the engine's clock (`paper-trader.js` `VENUE_DUPLICATE_WINDOW_MINUTES`). A real venue would need its own explicit "unknown order" answer, and its own documented window, before `NOT_FOUND`; nothing connects to one. The clock alone never settles an order: it only gates `NOT_FOUND` once the venue has been asked.
