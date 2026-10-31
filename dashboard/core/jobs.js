@@ -200,9 +200,16 @@ async function runJobBody(ws, name, trigger) {
       return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'trader': {
+      // The paper mandate's sweep first (its own lease; off unless Eric turned
+      // it on), so a grant's pair is wanted by the same tick's candle read. It
+      // never fails the trader job.
+      let m = null;
+      try { m = require('./tickets').mandateSweep(ws, { now: Date.now() }); } catch (err) { m = { status: 'failed', why: String(err && err.message || err).slice(0, 200) }; }
+      const said = m && m.status === 'ok' ? m.message : m && m.status === 'failed' ? `Paper mandate sweep failed: ${m.why}` : m && m.status === 'busy' ? m.message : null;
       // Its own lease, gate, backoff and request budget are inside refresh().
       const r = await require('./trader-candles').refresh(ws, { trigger });
-      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
+      const summary = [said, r.message].filter(Boolean).join(' ');
+      return { status: r.status === 'held' ? 'skipped' : r.status, summary, error: r.status === 'failed' ? r.message : null, ...(m ? { mandate: { status: m.status, granted: (m.granted || []).length, reopened: (m.reopened || []).length, skipped: (m.skipped || []).length } } : {}) };
     }
     case 'leads': {
       // Its own lease and turn; CoinGecko's and GoPlus's gates and budgets are shared.
