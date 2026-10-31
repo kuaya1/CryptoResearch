@@ -30,6 +30,21 @@
 // ledger that does not read stops every new session (unknown is never zero).
 // claim() refuses a step that needs a session when none is left today;
 // bind() is what reserves one.
+//
+// One launch per attempt (worker boundary PR, 2026-10-31): a claim moves
+// claimed → dispatched once. The online worker's prepare goes through
+// "preparing" first (beginPreparation, one locked transition), so of two
+// overlapping prepare calls on one claim only the first opens the record and
+// can bind; the other is told the attempt is already being prepared and
+// changes nothing. bind() accepts only the state it is given (claimed for the
+// local runner, preparing for the worker) and refuses a claim already
+// dispatched (ALREADY_BOUND), so no attempt hands out its prompt twice. A
+// preparing claim never handed out a prompt (only bind's caller does that,
+// after the bind), so when it expires (a desk restart, a runner that went
+// away) it is not a dispatch to reconcile: claim() takes the step again with
+// a new attempt. A preparation that outlives its claim is refused at bind:
+// the token, the state, the expiry and the pause are checked there again,
+// against the time of the bind.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -181,6 +196,41 @@ function held(ws, pid, token) {
   return cur;
 }
 
+// The worker's prepare, before anything is opened or asked: inside the lock,
+// the claim is this token's, still "claimed", live and not paused, and the
+// desk's next step is still the claimed one; it becomes "preparing". A claim
+// already preparing or dispatched is returned as it is ({ status: 'already' })
+// and nothing is written: that request authorizes no session. A step that
+// moved on lets the claim go ('changed'), as before.
+function beginPreparation(ws, pid, token, { now = Date.now() } = {}) {
+  return withLock(ws, `pilot prepare ${pid}`, () => {
+    const cur = held(ws, pid, token);
+    if (cur.state !== 'claimed') return { status: 'already', claim: cur };
+    if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was prepared.`);
+    if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was prepared.');
+    const step = require('./tickets').pilotQueue(ws, { project: pid, now })[0] || null;
+    if (!step || transitionKey(step) !== cur.key) {
+      const rec = { ...cur, released: true, released_at: new Date(now).toISOString(), outcome: 'changed' };
+      write(ws, pid, rec);
+      return { status: 'changed', step, claim: rec };
+    }
+    const rec = { ...cur, state: 'preparing', preparing_at: new Date(now).toISOString() };
+    write(ws, pid, rec);
+    return { status: 'preparing', step, claim: rec };
+  });
+}
+
+// Read-only, between the worker's network step and its bind: the claim is
+// still this token's, preparing, live and not paused. Saves opening a ticket
+// for a preparation that can no longer bind; bind() is what decides.
+function assertPreparing(ws, pid, token, { now = Date.now() } = {}) {
+  const cur = held(ws, pid, token);
+  if (cur.state !== 'preparing') throw new OpError('ALREADY_BOUND', `Attempt ${cur.attempt_id} is ${cur.state}, not being prepared by this request; nothing more is opened.`);
+  if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at} while it was being prepared; nothing was dispatched.`);
+  if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused while the claim was being prepared; nothing was dispatched.');
+  return cur;
+}
+
 // The run or ticket the agent will work on, written before it runs. Refused
 // when the claim has expired (another runner may take it over) or automation
 // was paused since the claim; nothing is dispatched then. The claim keeps its
@@ -188,10 +238,15 @@ function held(ws, pid, token) {
 // Binding reserves the attempt's agent session in the ledger first (once per
 // attempt): refused when today's ceiling is used or the ledger does not read.
 // `extra` (role, prompt_sha256) is kept on the claim for the worker's
-// complete step (pilot-worker.js).
-function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now(), extra = null } = {}) {
+// complete step (pilot-worker.js). `from` is the state the caller holds the
+// claim in (claimed: the local runner; preparing: the worker's prepare); any
+// other state is refused, a claim already dispatched with ALREADY_BOUND, so an
+// attempt is bound, and its prompt handed out, at most once.
+function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now(), extra = null, from = 'claimed' } = {}) {
   return withLock(ws, `pilot bind ${pid}`, () => {
     const cur = held(ws, pid, token);
+    if (cur.state === 'dispatched') throw new OpError('ALREADY_BOUND', `Attempt ${cur.attempt_id} was already bound to ${cur.run_id || cur.ticket_id || 'its record'} at ${cur.dispatched_at}; its session is not authorized twice.`);
+    if (cur.state !== from) throw new OpError('ALREADY_BOUND', `Attempt ${cur.attempt_id} is ${cur.state}, not ${from}; nothing was dispatched.`);
     if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was dispatched.`);
     if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was dispatched.');
     const bound = { run_id: run_id || cur.run_id, ticket_id: ticket_id || cur.ticket_id };
@@ -222,4 +277,4 @@ function release(ws, pid, { token = null, reconciled = false, outcome = null, no
   });
 }
 
-module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, transitionKey, claim, bind, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };
+module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, transitionKey, claim, beginPreparation, assertPreparing, bind, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };
