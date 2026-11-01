@@ -24,6 +24,42 @@ function valid(id, now, { month_count = 3, day_count = 1, extra = {} } = {}) {
   return { schema_version: m.schema, state: 'ok', calls, ...extra };
 }
 
+// The state a meter's writers leave before its first reserved request, for the
+// two meters that have one (no `calls`; call-accounting.js). Exit quotes:
+// forensic-monitor.js refresh()'s one end-of-run write, every request counter
+// 0, `last_result` in the current writer's fields (a64e21a). Candles:
+// trader-candles.js, a pool choice that failed before asking (pool_attempts)
+// and the end-of-run write (cdcab9c's fields).
+function initialShape(id) {
+  const m = A.METERS[id];
+  if (id === 'exit_quotes') {
+    return {
+      schema_version: m.schema,
+      state: 'never_run',
+      last_run_at: '2026-10-22T12:00:00.000Z',
+      last_trigger: 'server',
+      last_result: { checks: 0, reads: 0, failed: 0, not_checkable: 0, incomplete: 0, quotes: 0, quotes_answered: 0, no_route: 0, quote_errors: 0, quote_waits: {}, budget: false, rate_limited: null, resolutions: 0, corrections: 0 },
+      last_resolutions_day: '2026-10-22',
+      consecutive_failures: 0,
+      next_allowed_at: null,
+    };
+  }
+  if (id === 'candles') {
+    return {
+      schema_version: m.schema,
+      state: 'never_run',
+      pool_attempts: { 'FICT/USDC': { at: '2026-10-29T12:00:00.000Z', why: 'No CoinGecko price stored for FICTIONAL in the last 24 hours.' } },
+      last_run_at: '2026-10-29T12:00:00.000Z',
+      last_trigger: 'server',
+      last_result: { pairs: 1, requests: 0, sources: 0, hours: 0, unchanged: 0, refused: 0, budget: false, accounting_unknown: null, wait_until: null, waits: [], problems: [{ pair: 'FICT/USDC', words: 'No CoinGecko price stored for FICTIONAL in the last 24 hours.' }], step: { done: 0, problems: 0 } },
+    };
+  }
+  return null;
+}
+// The initial shape with `last_result` (or the top level) patched.
+const result = (id, patch) => { const s = initialShape(id); s.last_result = { ...s.last_result, ...patch }; return s; };
+const top = (id, patch) => ({ ...initialShape(id), ...patch });
+
 const text = (v) => `${JSON.stringify(v, null, 2)}\n`;
 // A counter JSON can carry that JSON.stringify cannot write.
 const raw = (id, now, key, literal) => text(valid(id, now)).replace(`"${key}": ${valid(id, now).calls[key]}`, `"${key}": ${literal}`);
@@ -80,6 +116,72 @@ function invalidCases(id, now) {
   if (id === 'exit_quotes') cases.push({ name: 'no calls, yet quotes recorded', text: text({ schema_version: m.schema, state: 'ok', last_result: { quotes: 2 } }) });
   if (id === 'candles') cases.push({ name: 'no calls, yet requests recorded', text: text({ schema_version: m.schema, state: 'ok', last_result: { requests: 3 } }) });
   if (!m.initial) cases.push({ name: 'no calls at all', text: text(without(v, 'calls')) });
+  // No `calls`: anything but the writer's own initial shape is unknown. The
+  // first three of each are the audit's reproduced cases (a request counter
+  // that is not a positive number was taken for zero).
+  if (id === 'exit_quotes') {
+    const s = initialShape(id);
+    cases.push(
+      { name: 'no calls, quotes "7"', text: text(result(id, { quotes: '7' })) },
+      { name: 'no calls, quotes -7', text: text(result(id, { quotes: -7 })) },
+      { name: 'no calls, quotes true', text: text(result(id, { quotes: true })) },
+      { name: 'no calls, checks "1"', text: text(result(id, { checks: '1' })) },
+      { name: 'no calls, quotes_answered null', text: text(result(id, { quotes_answered: null })) },
+      { name: 'no calls, reads 0.5', text: text(result(id, { reads: 0.5 })) },
+      { name: 'no calls, quote_errors 1', text: text(result(id, { quote_errors: 1 })) },
+      { name: 'no calls, resolutions "2"', text: text(result(id, { resolutions: '2' })) },
+      { name: 'no calls, a quote wait recorded', text: text(result(id, { quote_waits: { kyberswap: '2026-10-22T12:10:00.000Z' } })) },
+      { name: 'no calls, quote_waits a list', text: text(result(id, { quote_waits: [] })) },
+      { name: 'no calls, budget true', text: text(result(id, { budget: true })) },
+      { name: 'no calls, budget "false"', text: text(result(id, { budget: 'false' })) },
+      { name: 'no calls, a GitHub rate limit recorded', text: text(result(id, { rate_limited: '2026-10-22T12:10:00.000Z' })) },
+      { name: 'no calls, last_result missing a writer field', text: text({ ...s, last_result: without(s.last_result, 'quotes') }) },
+      { name: 'no calls, last_result with a field no writer records', text: text(result(id, { requests: 0 })) },
+      { name: 'no calls, last_result a list', text: text(top(id, { last_result: [0, 0] })) },
+      { name: 'no calls, last_result a string', text: text(top(id, { last_result: '0' })) },
+      { name: 'no calls, last_result null', text: text(top(id, { last_result: null })) },
+      { name: 'no calls, state ok', text: text(top(id, { state: 'ok' })) },
+      { name: 'no calls, a failure counted', text: text(top(id, { consecutive_failures: 1 })) },
+      { name: 'no calls, a backoff set', text: text(top(id, { next_allowed_at: '2026-10-22T13:00:00.000Z' })) },
+      { name: 'no calls, a quote provider\'s gate', text: text(top(id, { quote_gates: {} })) },
+      { name: 'no calls, a GitHub wait', text: text(top(id, { github_retry_after_until: '2026-10-22T13:00:00.000Z' })) },
+      { name: 'no calls, a key no writer records', text: text(top(id, { note: 'x' })) },
+      { name: 'no calls, no last_run_at', text: text(without(s, 'last_run_at')) },
+      { name: 'no calls, last_run_at not a time', text: text(top(id, { last_run_at: 'yesterday' })) },
+      { name: 'no calls, an impossible resolutions day', text: text(top(id, { last_resolutions_day: '2026-02-30' })) },
+      { name: 'no calls, last_trigger a number', text: text(top(id, { last_trigger: 1 })) },
+    );
+  }
+  if (id === 'candles') {
+    const s = initialShape(id);
+    cases.push(
+      { name: 'no calls, requests "7"', text: text(result(id, { requests: '7' })) },
+      { name: 'no calls, requests -7', text: text(result(id, { requests: -7 })) },
+      { name: 'no calls, requests true', text: text(result(id, { requests: true })) },
+      { name: 'no calls, requests null', text: text(result(id, { requests: null })) },
+      { name: 'no calls, a pool chosen', text: text(result(id, { sources: 1 })) },
+      { name: 'no calls, hours applied', text: text(result(id, { hours: 2 })) },
+      { name: 'no calls, unchanged "0"', text: text(result(id, { unchanged: '0' })) },
+      { name: 'no calls, budget true', text: text(result(id, { budget: true })) },
+      { name: 'no calls, a GeckoTerminal wait recorded', text: text(result(id, { wait_until: '2026-10-29T12:10:00.000Z' })) },
+      { name: 'no calls, an unknown count recorded', text: text(result(id, { accounting_unknown: 'it could not be read' })) },
+      { name: 'no calls, pairs "1"', text: text(result(id, { pairs: '1' })) },
+      { name: 'no calls, waits an object', text: text(result(id, { waits: {} })) },
+      { name: 'no calls, problems a string', text: text(result(id, { problems: 'none' })) },
+      { name: 'no calls, a problem that is not an object', text: text(result(id, { problems: ['none'] })) },
+      { name: 'no calls, step counts as strings', text: text(result(id, { step: { done: '1', problems: 0 } })) },
+      { name: 'no calls, step a list', text: text(result(id, { step: [] })) },
+      { name: 'no calls, last_result missing a writer field', text: text({ ...s, last_result: without(s.last_result, 'step') }) },
+      { name: 'no calls, last_result a list', text: text(top(id, { last_result: [] })) },
+      { name: 'no calls, a run without its result', text: text(without(s, 'last_result')) },
+      { name: 'no calls, state ok', text: text(top(id, { state: 'ok' })) },
+      { name: 'no calls, a GeckoTerminal gate', text: text(top(id, { gate: { failures: 0 } })) },
+      { name: 'no calls, a pair recorded as asked', text: text(top(id, { pairs: { 'FICT/USDC': { last_hour_received: '2026-10-29T10:00:00.000Z' } } })) },
+      { name: 'no calls, pool_attempts a list', text: text(top(id, { pool_attempts: [] })) },
+      { name: 'no calls, a pool attempt without its time', text: text(top(id, { pool_attempts: { 'FICT/USDC': { why: 'x' } } })) },
+      { name: 'no calls, a key no writer records', text: text(top(id, { note: 'x' })) },
+    );
+  }
   return cases;
 }
 
@@ -98,7 +200,27 @@ function validCases(id, now) {
     { name: 'an ended day', text: withCalls(id, now, { month: earlier.slice(0, 7), day: earlier }), month: sameMonthEarlier ? 3 : 0, day: 0 },
   ];
   if (m.answered === 'optional') cases.push({ name: 'legacy: no answered counts', text: text({ ...v, calls: without(v.calls, 'month_answered', 'day_answered') }), month: 3, day: 1 });
-  if (m.initial) cases.push({ name: 'legacy: no calls and nothing sent', text: text({ schema_version: m.schema, state: 'ok', last_run_at: '2026-10-22T12:00:00.000Z', last_result: {} }), month: 0, day: 0 });
+  // No `calls`: the writers' own initial shapes, each read as zero.
+  if (id === 'exit_quotes') {
+    const s = initialShape(id);
+    const v1 = { checks: 0, reads: 0, failed: 0, not_checkable: 0, budget: false, rate_limited: null, resolutions: 0 };
+    const v2 = { ...v1, quotes: 0, quotes_answered: 0, no_route: 0, quote_errors: 0, quote_waits: {} };
+    cases.push(
+      { name: 'initial: no calls, a run that sent nothing (the current writer, as on the online desk 2026-10-22..31)', text: text(s), month: 0, day: 0 },
+      { name: 'initial: no calls, local resolutions and corrections only', text: text(result(id, { resolutions: 2, corrections: 1 })), month: 0, day: 0 },
+      { name: 'initial: no calls, the first writer\'s fields (3640e23)', text: text(top(id, { last_result: v1 })), month: 0, day: 0 },
+      { name: 'initial: no calls, the exit-quote writer\'s fields (cde3637)', text: text(top(id, { last_result: v2 })), month: 0, day: 0 },
+    );
+  }
+  if (id === 'candles') {
+    const s = initialShape(id);
+    cases.push(
+      { name: 'initial: no calls, a pool choice that failed before asking', text: text({ schema_version: s.schema_version, state: 'never_run', pool_attempts: s.pool_attempts }), month: 0, day: 0 },
+      { name: 'initial: no calls, a run that sent nothing (the current writer)', text: text(s), month: 0, day: 0 },
+      { name: 'initial: no calls, a run that sent nothing (1739acf, before accounting_unknown)', text: text(without(top(id, { last_result: without(s.last_result, 'accounting_unknown') }), 'pool_attempts')), month: 0, day: 0 },
+      { name: 'initial: no calls, the book\'s step problems and no step', text: text(result(id, { problems: [{ step: 'open', code: null, words: 'Waiting for an hour.' }], waits: [{ pair: 'FICT/USDC', words: 'Waiting.' }], step: null })), month: 0, day: 0 },
+    );
+  }
   return cases;
 }
 
