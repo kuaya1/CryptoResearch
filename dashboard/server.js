@@ -195,6 +195,12 @@ function validateSettingsPatch(patch, ws = null) {
       if (unknown.length) throw new OpError('INVALID', `automation.mandate has no setting ${unknown.join(', ')}.`);
       out.automation.mandate = o;
     }
+    // Automatic admission of scout leads (core/lead-admission.js): its own
+    // block, outside automation.mandate, so writing it never touches the
+    // mandate's authority or grants. Its authority is the desk's to record.
+    if (a.lead_admission !== undefined) {
+      out.automation.lead_admission = require('./core/lead-admission').validatePatch(a.lead_admission, (ws && ws.settings && ws.settings.automation) || {});
+    }
     // Cross-field, against the merged result: turning the mandate on, or
     // moving its expiry while it is on, needs a future expiry.
     const saved = (ws && ws.settings && ws.settings.automation) || {};
@@ -502,8 +508,13 @@ function applySettings(ws, body, summary = 'Update dashboard settings') {
     // automation revokes the generation in force. A client never sends it.
     const au = require('./core/mandate-authority').authorityNext(cur, patch, merged, { now: Date.now(), actor: ws.actor || null });
     if (au) merged.automation = { ...(merged.automation || {}), mandate: { ...((merged.automation || {}).mandate || {}), authority: au } };
+    // Automatic admission's authority (core/lead-admission.js), the same way:
+    // a write of its block that leaves it live arms a new generation; one that
+    // leaves it off, zero or paused revokes it. Resuming never re-arms it.
+    const la = require('./core/lead-admission').authorityNext(cur, patch, merged, { now: Date.now(), actor: ws.actor || null });
+    if (la) merged.automation = { ...(merged.automation || {}), lead_admission: { ...((merged.automation || {}).lead_admission || {}), authority: la } };
     op.writeJson('config/settings.json', merged);
-    return { mandate_authority: au };
+    return { mandate_authority: au, admission_authority: la };
   });
   ws.reloadSettings();
   return { patch, out };

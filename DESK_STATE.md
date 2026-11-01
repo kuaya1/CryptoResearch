@@ -170,7 +170,13 @@ npm run pilot -- --check-isolation                the session launch check alone
 - **Customizations:** `--restricted` (no user, project or local settings file: their permissions, hooks, MCP and model), `--safe-mode` (no `CLAUDE.md`, skills, plugins, hooks, MCP, custom agents or commands), `--settings {"disableAllHooks":true,"disableClaudeAiConnectors":true}`, `--disable-slash-commands`, `--no-chrome`, `--no-session-persistence`.
 - **Sign-in and model:** Eric's Claude subscription, unchanged (never `--bare`, never an API key). The model and effort his Claude Code settings choose (`model`, `effortLevel` in `%USERPROFILE%\.claude\settings.json`) are passed as `--model` and `--effort`; `--model=` on the runner and `ANTHROPIC_MODEL` still come first.
 - **Environment:** the system, proxy and certificate variables and Claude Code's own sign-in and model variables only (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`). No `CR_*`, no keys, no `ANTHROPIC_API_KEY` (`-p` would bill it instead of the subscription), no parent-session variables. Each session runs in a new empty folder under `<temp>/cr-pilot/session/`.
-- **Checked before any claim, fail closed:** the installed CLI must list every flag above (`--help`); no managed Claude Code policy may be installed (`C:\Program Files\ClaudeCode\managed-settings.json` or `managed-mcp.json`, `HKLM`/`HKCU\SOFTWARE\Policies\ClaudeCode`: a policy can add hooks, allow rules or MCP servers no flag removes); and a probe must pass: the same command, run against a local stand-in for the model endpoint (127.0.0.1, a placeholder key, every request answered 400, nothing generated or billed), may offer the model `WebSearch` and `WebFetch` only, with no MCP tool named anywhere in the request (Claude Code's inert `DeferredToolPlaceholder`, no input, is allowed). Otherwise the runner exits 1 with the reason and claims nothing; a session is never started on a command line that was not checked in that run. After a Claude Code update, `npm run pilot -- --check-isolation` shows the result.
+- **Checked before any claim, fail closed:** otherwise the runner exits 1 with the reason and claims nothing; a session is never started on a command line that was not checked in that run. After a Claude Code update, `npm run pilot -- --check-isolation` shows the result.
+  - The installed CLI must list every flag above (`--help`).
+  - **No managed Claude Code policy, confirmed absent** (a policy can add hooks, allow rules or MCP servers no flag removes; readiness PR 2026-10-31):
+    - Files: `managed-settings.json`, `managed-mcp.json` and a `managed-settings.d` folder under `C:\Program Files\ClaudeCode` and `C:\ProgramData\ClaudeCode` (`/etc/claude-code`, `/Library/Application Support/ClaudeCode` elsewhere). Only "does not exist" is an absence; a file present or one that cannot be read (`EACCES`, …) refuses.
+    - Registry: `HKLM` and `HKCU\SOFTWARE\Policies\ClaudeCode`, in the 64- and 32-bit views, read through the .NET registry API by a PowerShell child (`cr-policy-registry@1`), never `reg.exe`: `reg.exe` exits 1 both for a missing key and for one the user may not read ("ERROR: Access is denied.", shown on this machine), and its words are localized. Each key answers absent, present, denied or error; only four "absent" answers in exactly that shape pass. A key present (whatever it holds), access denied, a timeout, PowerShell missing, another exit code, other output, or a key not answered exactly once refuses.
+  - **The probe** runs the same command against a local stand-in for the model endpoint (127.0.0.1, a placeholder key, every request answered 400, nothing generated or billed). Every request may offer the model only search and fetch, in Claude Code's client form (`WebSearch`, `WebFetch`) or the API's server form (`web_search_<date>`, `web_fetch_<date>`), and Claude Code's inert `DeferredToolPlaceholder` (no input), with no MCP tool or server named anywhere. **The session's request must offer both search and fetch** (readiness PR): an empty, missing, placeholder-only or partial tool list refuses, since it is not the session this runner checks.
+  - Opt-in checks on this machine, both non-billable: `CR_TEST_REAL_CLAUDE=1 node --test dashboard/tests/pilot-launch-real.test.js` (the installed CLI under a hostile configuration, against the local stand-in endpoint) and, with `CR_TEST_REAL_REGISTRY=1` as well, the registry read against a FICTIONAL `HKCU\Software\CR-FICTIONAL-policy-probe` key that denies reading (created and removed by the test).
 - **What it is not:** this bounds what the model can call. It is not an operating-system sandbox: the `claude` process runs as Eric, and his files are reachable to that process, not to the model. The claude.ai connectors are excluded by four documented controls; the probe, signed in with a placeholder key, cannot fetch them, so their exclusion under the subscription sign-in is documented, not observed.
 
 ## How the OLAS pilot chain runs
@@ -208,9 +214,11 @@ The commands:
 ```
 node dashboard/cli.js arm-desk --dry-run [--daily-cu=5000 --monthly-cu=100000] [--allow=SYM/USDC,...]
          [--intent-life=1440] [--contracts-on] [--mandate-days=N | --mandate-off]
+         [--admission-days=N [--admission-daily=N] | --admission-off]
 node dashboard/cli.js arm-desk [...]                this folder's desk: the settings and the contract defaults
 node dashboard/cli.js arm-desk --desk=online [...]  prints a script for the signed-in online desk's browser console
-node dashboard/cli.js arm-desk --print-schedule     prints the Task Scheduler line for the pilot (never runs it)
+node dashboard/cli.js arm-desk --print-schedule     prints the pilot-task.ps1 commands for the pilot's task (never runs them)
+node dashboard/cli.js scout leads auto              automatic admission: authority, today's capacity, what holds it, its admissions
 npm run pilot -- --pilot-all --desk=online [--max-agents=2] [--dry-run]
 node dashboard/cli.js contracts init-defaults [--dry-run]
 node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the active projects need that is not probed
@@ -229,6 +237,7 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
 | Contract caps | Written only when named |
 | `contracts.enabled` | true with `--contracts-on`, which is refused without both caps |
 | The paper mandate | On until N days ahead with `--mandate-days=N` (1 to 30), the other limits at their defaults; off with `--mandate-off`; untouched otherwise |
+| Automatic admission of scout leads | On until N days ahead with `--admission-days=N` (1 to 30), `--admission-daily=N` a New York day (0 to 3, default 1); off with `--admission-off`; untouched otherwise. The mandate's flags never touch it |
 
 - The contract gate's mode is left as it is.
 - The saved allowlist holds only the pairs Eric names. The trader also trades the pairs of grants in force and of positions it holds (Invariant 3).
@@ -309,6 +318,117 @@ Every value was read back from the chain on 2026-10-30. Rows and ceilings alread
 - **Key check first:** a key refused (HTTP 401 or 403) closes the gate for every chain for 6 hours. Check `ALCHEMY_API_KEY` on Render before setting the caps.
 
 **Pause:** `automation.paused` now stops the online pilot too. The connector's `autonomous_pilot_queue` answers `paused` for every step, and `npm run pilot -- --desk=online` dispatches no further agent.
+
+## Automatic admission of scout leads (`cr-lead-admission@1`, 2026-10-31)
+
+`core/lead-admission.js`, run by the existing `leads` job (no new scheduler or queue). Off by default. When armed, it admits at most `daily_limit` ELIGIBLE leads a New York day, one pipeline at a time. **ELIGIBLE means eligible for research, never approved to trade.** An admission does what Eric's "Confirm and request research" does (the intake record, the project, a Claude run), then enrolls the project in the pilot and approves its exit-quote target. Every gate after that stands unchanged: the Prosecutor, the contract gate, the exit cost, the paper mandate (the only thing that grants paper execution), the trader's rules and the book.
+
+**Settings** (`automation.lead_admission`, checked by `validateSettingsPatch`):
+
+| Key | Values |
+|---|---|
+| `enabled` | `false` by default |
+| `daily_limit` | Whole number 0 to 3, default 1. 0 is off |
+| `expires_at` | Required to turn it on; at most 30 days ahead |
+| `authority` | Recorded by the desk on each arming write; a patch that sends it is refused |
+
+- **Its own block, outside `automation.mandate`.** Writing it never changes the mandate's hash, generation or grants, and arming the mandate never turns it on. Pausing automation revokes both, as pausing always did.
+- **Arming** (`authorityNext` in `server.applySettings`): a write of this block that leaves it live records a new generation, unless the same settings are already live. A write that leaves it off, at 0 or paused revokes the generation in force. Resuming automation never re-arms it.
+- **Arm it** with `arm-desk --admission-days=N [--admission-daily=N]`, or the patch `{"automation":{"lead_admission":{"enabled":true,"daily_limit":1,"expires_at":"<ISO>"}}}`. **Turn it off** with `--admission-off` or `{"automation":{"lead_admission":{"enabled":false}}}`.
+
+**What it admits.** Each check runs again inside the lock:
+
+- The receipt is checked as Eric's confirm checks it (`leads.rowCheck`): intact, unexpired, decided under the policy in force, and still ELIGIBLE by its rules.
+- No project holds the contract, active or archived (`knownProject`). Nothing matches it strongly (`findDuplicates`: name, CoinGecko ID, website, contract). No project trades its ticker.
+- `SYM/USDC` has no permanent candle binding to another contract, and the bindings file reads.
+- The chain is covered by every downstream evidence path: an exit-quote route, a contract read route that is not known unsupported (an unprobed chain is probed by the desk once the caps are set), and a candle source. In practice that is Ethereum, Base, Arbitrum, Optimism, Polygon and Solana.
+- CoinGecko names a coin, a ticker the book can use, and an official website, so the identity verifies.
+- Anything else is held, with the reason, and the lead stays ELIGIBLE for Eric's own confirm. Dismissed, archived and already-admitted leads are never candidates.
+
+**Capacity and recovery.**
+
+- **The slot is reserved first.** Under the workspace lock and at the lock's clock, before any effect, the admission is written create-only with its reservation (`reservation_id`, the New York day) and the lead becomes ADMITTED.
+- **What counts toward the day.** Every automatic reservation naming the day counts, whatever became of it: pending, failed, stopped, lapsed or complete. A slot is never recycled.
+- **No double reservation.** The admission ID derives from the eligibility receipt, so the same reading is never admitted twice. Concurrent sweeps in separate processes reserve one slot.
+- **Eric's confirms use no automatic slot.**
+- **Backlog.** A new automatic admission waits while an earlier one's pipeline is active:
+  - Active: its effects unfinished, or its project at `research`, `ticket`, `ticket_failed`, `exit_evidence` or `contract_evidence`.
+  - At rest: `gate_closed`, `pm_review`, `done` or `blocked`, archived, off the pilot, or suspended.
+  - Unreadable counts as active.
+- **The effects run after the lock,** in order, each under its own key: intake, project, research, pilot (`setPilot` by `auto-admission g<generation>`, then the exit target). A failed effect is tried again by the next `leads` turn until the 24-hour start deadline, then the admission lapses. What was done stays done.
+- **Authority before each further effect** (`leads.delegatedGate`). The same generation and settings must be in force: not paused, not expired, not revoked, not re-armed with other settings. The project must not be archived, suspended by an intervention, or taken off the pilot. Otherwise the remaining effects become `stopped` and never start. **Re-arming never revives a stopped admission.**
+- **An existing project is refused.** Before creating its project, an admission checks for one again. A project that turns out to exist already is never enrolled automatically. A ticker collision found at that point stops it.
+
+**Budgets.** Admission holds, with the reason, unless every downstream meter can be read, has its cap set, and is under 85% of it:
+
+- the pilot's daily session ceiling (at least 2: a Researcher and a Prosecutor);
+- the exit-quote monitor's monthly requests, both sent and planned (`quoteBudgetOf`; an approved exit target is not a reservation);
+- CoinGecko's monthly calls;
+- GoPlus's monthly requests;
+- the contract RPC's daily and monthly compute units (contract observations on, both caps set);
+- GeckoTerminal's candle calls.
+
+A meter that has never run reads as 0 used. One that cannot be read holds admission. The 15% headroom only adds to each meter's own reserve-before-send check at its dispatch boundary, which is still the enforcement. Research USD budgets do not apply: the route is the pilot worker on Eric's subscription.
+
+**The route.** The run's Claude job is opened in assistant mode (`intake.admitListing` → `research.createRun` with `assistant: 'claude'`): state `running`, mode `cowork`, for the pilot worker's research step. A configured API never changes it, and the research job never sends it.
+
+**Provenance.**
+
+- **The admission record** has `kind: 'delegated'`, `actor: 'auto-admission'`, `request_id: null`, `admission_policy` (version, values, hash), the frozen `authority`, the `reservation`, the eligibility receipt, and the source delivery IDs.
+- **The project's evidence** has `kind: 'delegated_admission'`. Its note says it was "admitted automatically … no person reviewed this lead".
+- **The intake record** has `confirmed.by: 'auto-admission'` and `scout_admission.kind: 'delegated'`.
+- **Never Eric's.** Nothing automatic says "confirmed by Eric" or writes `owner_confirmed`.
+- **Eric's confirm and its records are unchanged.** A "Request research again" on an automatic admission is Eric's, and is recorded as a confirmed admission.
+- **The scout's words stay on the lead.** They are never in a project, prompt, run or ticket.
+
+**Where to look.**
+
+- `node dashboard/cli.js scout leads auto` shows the authority, today's count, what holds admission, and the last ten automatic admissions with each pipeline's stage.
+- The `leads` job summary says what it admitted or why it held.
+- `reviewView` (Review > Imports > Scout leads) carries `auto_admission`.
+
+**Residual limits.**
+
+- **The pilot ignores an autonomy stop** (`pilot-claims.js`, unchanged). The stop halts an admission's remaining effects and every mandate grant. To stop agent sessions on a project, take it off the pilot or archive it.
+- **No Settings-page control yet.** Arm it from the CLI or the console patch.
+- **Held leads are not marked.** They are reported, not written on the lead.
+
+### Activation and rollback runbook (readiness PR, 2026-10-31)
+
+Each step is checked before the next. No step prints a credential: tokens are read from `%USERPROFILE%\.cryptoresearch\secrets.json` and only their SHA-256 leaves the PC.
+
+1. **Deploy.** Merge after CI passes on the final commit. Check Render's live deploy is the merge SHA and `/healthz` answers. The recurring scout and the pilot task stay off while this is checked.
+2. **Tokens.** `pilot_poll_token` and `pilot_worker_token` are separate tokens. Their SHA-256 (hex) go on Render as `CR_PILOT_POLL_TOKEN_SHA256` and `CR_PILOT_WORKER_TOKEN_SHA256`. Check:
+   - `GET /api/pilot/queue` with the poll bearer answers 200;
+   - the worker digest matches: the worker bearer on `POST /api/pilot/worker/release` with a malformed `project_id` gets 400 `BAD_ID`. Nothing is read or claimed. A 401 means the digest differs, and a 404 means it is unset.
+
+   The ingest key (`DESK_INGEST_KEY`) is checked without writing: `GET /api/ingest/scout-leads` with it answers 200 with today's count. It is never rotated blindly and never printed. The scout workflow (`scout-cron.yml`) runs on schedule only while the repository variable `SCOUT_ENABLED` is `true`, and asks for leads only while `SCOUT_LEADS` is `true`.
+3. **Windows task.** Run `powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\scripts\pilot-task.ps1 -Register -MaxAgents 1`.
+   - **What it registers.** The task is registered disabled, for the signed-in user whose `claude` login is the subscription. It runs the verified Node binary, `pilot.js --pilot-all --desk=online`, in the repository folder.
+   - **Its settings.** Every 30 minutes, IgnoreNew, a 3-hour limit, no window. A missed start runs once when the PC is available. The PC is never woken.
+   - **What it refuses.** It never replaces a task it did not register.
+   - **Check it.** `-Status` shows the principal, the action, the settings, the next run and the runner's last log line.
+   - **Stopping a run.** Stopping a run keeps an uncertain claim dispatched until Eric reconciles it. Nothing is run twice.
+4. **Canary** (auto-admission OFF).
+   - **The candidate.** Numeraire is the owner-selected candidate, under its recorded identity. It is never substituted or forced.
+   - **Arm the desk** with `arm-desk --desk=online` and only validated flags: the contract caps (5,000 CU a day, 100,000 a month), `--contracts-on`, `--mandate-days=7`, `--intent-life=4320`. A static `NMR/USDC` allowlist entry is not an identity and not an authorization.
+   - **Run once.** Enable the task for one run of at most one agent session.
+   - **Check the lineage:** run, report, ticket, receipt and grant.
+   - **Fills.** A paper fill is reported only if the real gates and market give one.
+   - **Exercise recovery.** Revoke or cancel, then restart. Re-arming never revives a cancelled grant.
+5. **Scout.**
+   - Check the scout's dry run.
+   - Enable the scout workflow only after its paid-call budget and ingest path are verified.
+   - Then arm automatic admission on its own: `arm-desk --desk=online --admission-days=N`, or the console patch above.
+   - Report the first genuine ELIGIBLE lead, or the exact hold. Never a fabricated one.
+6. **Rollback**, in order of reach:
+   1. `--admission-off`: automatic admission only.
+   2. `pilot-task.ps1 -Disable`: no agent sessions.
+   3. `--mandate-off`: no new grants.
+   4. Settings: Pause: every automated dispatch stops, and the mandate and admission authorities are revoked.
+   5. Revert the merge commit: the code.
+
+   **Records are kept.** Admissions, projects and their history stay. A stopped or lapsed admission is never resumed.
 
 ## UI files
 

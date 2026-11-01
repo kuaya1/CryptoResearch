@@ -75,3 +75,43 @@ test('the installed CLI: the launch before this PR offered the shell, files and 
   const v = await P.makeLauncher({ bin, env: h.env }).preflight({});
   assert.deepEqual(v.tools, ['WebFetch', 'WebSearch']);
 });
+
+// The Windows registry itself (readiness PR, 2026-10-31). Opt-in:
+// CR_TEST_REAL_REGISTRY=1 on Windows. It creates a FICTIONAL key under
+// HKCU\Software\CR-FICTIONAL-policy-probe (one that denies the user reading it,
+// one that is present), judges each with the launcher's own PowerShell script
+// (only the subkey path substituted), compares reg.exe on the denied key, and
+// removes the keys. The machine's real policy keys are only read.
+const REG_ON = process.env.CR_TEST_REAL_REGISTRY === '1' && process.platform === 'win32';
+test('the Windows registry: reg.exe reads a key the user may not read as exit 1 (what the old check took for "absent"); the launcher\'s read says access denied and refuses', { skip: !REG_ON && 'set CR_TEST_REAL_REGISTRY=1 on Windows to run against this machine\'s registry' }, (t) => {
+  const { spawnSync } = require('child_process');
+  const sys = process.env.SystemRoot || 'C:\\Windows';
+  const ps = path.win32.join(sys, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const runPs = (script) => spawnSync(ps, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  const ROOT = 'Software\\CR-FICTIONAL-policy-probe';
+  const deny = "New-Object System.Security.AccessControl.RegistryAccessRule([System.Security.Principal.WindowsIdentity]::GetCurrent().User, 'QueryValues,EnumerateSubKeys', 'Deny')";
+  t.after(() => runPs([
+    `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${ROOT}\\Denied\\ClaudeCode', [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]'ChangePermissions,ReadPermissions')`,
+    `if ($null -ne $k) { $a = $k.GetAccessControl(); [void]$a.RemoveAccessRule((${deny})); $k.SetAccessControl($a); $k.Close() }`,
+    `Remove-Item -Path 'HKCU:\\${ROOT}' -Recurse -Force -ErrorAction SilentlyContinue`,
+  ].join('\n')));
+  const made = runPs([
+    "$ErrorActionPreference = 'Stop'",
+    `New-Item -Path 'HKCU:\\${ROOT}\\Denied\\ClaudeCode' -Force | Out-Null`,
+    `New-Item -Path 'HKCU:\\${ROOT}\\Present\\ClaudeCode' -Force | Out-Null`,
+    `New-ItemProperty -Path 'HKCU:\\${ROOT}\\Present\\ClaudeCode' -Name 'Settings' -Value '{"FICTIONAL":true}' -PropertyType String -Force | Out-Null`,
+    `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${ROOT}\\Denied\\ClaudeCode', [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]'ChangePermissions,ReadPermissions')`,
+    `$a = $k.GetAccessControl(); $a.AddAccessRule((${deny})); $k.SetAccessControl($a); $k.Close()`,
+    "'made'",
+  ].join('\n'));
+  assert.equal(String(made.stdout).trim(), 'made', String(made.stderr).slice(0, 400));
+  const judged = (which) => P.readPolicyRegistry(runPs(P.REG_SCRIPT.split(P.POLICY_SUBKEY).join(`${ROOT}\\${which}\\ClaudeCode`)));
+  const denied = judged('Denied');
+  assert.ok(denied.some((x) => /HKCU.*access denied/.test(x)), denied.join('; '));
+  const present = judged('Present');
+  assert.ok(present.some((x) => /HKCU.*present, values 1/.test(x)), present.join('; '));
+  const old = spawnSync(path.win32.join(sys, 'System32', 'reg.exe'), ['query', `HKCU\\${ROOT}\\Denied\\ClaudeCode`], { encoding: 'utf8', windowsHide: true });
+  assert.equal(old.status, 1, 'reg.exe exits 1 on a key it may not read: the code the old check took for absent');
+  // This machine's own policy keys, read for real.
+  assert.deepEqual(P.readPolicyRegistry(P.regQuery(process.env)), [], 'no Claude Code policy key on this machine');
+});

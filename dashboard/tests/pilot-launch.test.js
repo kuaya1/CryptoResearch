@@ -51,7 +51,16 @@ function runnerEnv(extra = {}) {
   return { ...base, ...SECRETS, ...extra };
 }
 
-const launcherOf = (s, over = {}) => P.makeLauncher({ bin: s.bin, env: runnerEnv(over.env), settings: over.settings || { model: null, effort: null }, platform: over.platform || 'linux', exists: over.exists || (() => false), reg: over.reg || null, probeTimeoutMs: over.probeTimeoutMs || 20000 });
+// The Windows registry read's answer (cr-policy-registry@1), as the launcher's
+// PowerShell child prints it: every policy key absent unless `states` says
+// otherwise ('LocalMachine/Registry64': 'denied', …); `json` replaces it.
+const REG_ROWS = ['LocalMachine', 'CurrentUser'].flatMap((hive) => ['Registry64', 'Registry32'].map((view) => ({ hive, view })));
+const regAnswer = (states = {}, { json = null, status = 0, rows = null } = {}) => () => ({
+  status,
+  stdout: json !== null ? json : JSON.stringify({ format: P.REG_FORMAT, keys: (rows || REG_ROWS).map((r) => ({ ...r, state: states[`${r.hive}/${r.view}`] || 'absent', detail: states[`${r.hive}/${r.view}`] === 'present' ? 'values 3, subkeys 1' : '' })) }),
+  stderr: '#< CLIXML <Objs>progress (FICTIONAL)</Objs>',
+});
+const launcherOf = (s, over = {}) => P.makeLauncher({ bin: s.bin, env: runnerEnv(over.env), settings: over.settings || { model: null, effort: null }, platform: over.platform || 'linux', statFile: over.statFile || (() => 'absent'), reg: over.reg || regAnswer(), probeTimeoutMs: over.probeTimeoutMs || 20000 });
 const valueAfter = (argv, flag) => argv[argv.indexOf(flag) + 1];
 
 test('a session gets WebSearch and WebFetch only: the documented restriction flags, an empty MCP config, no settings files, a new empty folder', async (t) => {
@@ -208,10 +217,12 @@ test('an installed CLI or machine that cannot establish the boundary fails close
     ['a CLI whose --help fails', { help_fail: true }, {}, /--help did not run/],
     ['a CLI that never reaches the model endpoint', { no_request: true }, {}, /saw no model request/],
     ['a CLI that does not finish', { hang: true }, { probeTimeoutMs: 1500 }, /did not finish within/],
-    ['managed settings on Linux', {}, { exists: (f) => f === '/etc/claude-code/managed-settings.json' }, /managed Claude Code settings/],
-    ['a managed MCP file on Windows', {}, { platform: 'win32', exists: (f) => /ClaudeCode[\\/]managed-mcp\.json$/.test(f), reg: () => ({ status: 1 }) }, /managed-mcp\.json/],
-    ['a policy in the Windows registry', {}, { platform: 'win32', reg: (k) => ({ status: k.startsWith('HKLM') ? 0 : 1 }) }, /HKLM\\SOFTWARE\\Policies\\ClaudeCode/],
-    ['a registry that cannot be read', {}, { platform: 'win32', reg: () => ({ error: new Error('FICTIONAL') }) }, /could not be read/],
+    ['managed settings on Linux', {}, { statFile: (f) => (f === '/etc/claude-code/managed-settings.json' ? 'present' : 'absent') }, /managed Claude Code settings/],
+    ['a managed MCP file on Windows', {}, { platform: 'win32', statFile: (f) => (/ClaudeCode[\\/]managed-mcp\.json$/.test(f) ? 'present' : 'absent') }, /managed-mcp\.json/],
+    ['a policy in the Windows registry', {}, { platform: 'win32', reg: regAnswer({ 'LocalMachine/Registry64': 'present' }) }, /HKLM\\SOFTWARE\\Policies\\ClaudeCode \(64-bit view: present/],
+    ['a registry that cannot be read', {}, { platform: 'win32', reg: () => ({ error: Object.assign(new Error('FICTIONAL'), { code: 'EPERM' }) }) }, /could not be read/],
+    ['a registry key the runner may not read', {}, { platform: 'win32', reg: regAnswer({ 'CurrentUser/Registry64': 'denied' }) }, /HKCU\\SOFTWARE\\Policies\\ClaudeCode \(could not be read: 64-bit view, access denied\)/],
+    ['a CLI that offers no tools', { offer: [] }, {}, /did not offer both web capabilities/],
   ];
   for (const [name, config, over, words] of cases) {
     const s = standIn(t, config);
@@ -224,6 +235,110 @@ test('an installed CLI or machine that cannot establish the boundary fails close
     assert.throws(() => P.runLocal({ project: 'olas', desk: 'local' }, { call: (a) => { cliCalls.push(a); return {}; }, agent: launch }), (e) => e.code === 'ISOLATION', name);
     assert.deepEqual(cliCalls, [], `${name}: nothing asked of the desk`);
   }
-  // A Windows machine with no policy passes the policy check.
-  assert.deepEqual(P.managedPolicy({ platform: 'win32', env: {}, exists: () => false, reg: () => ({ status: 1 }) }), []);
+  // A Windows machine with no policy passes the policy check: every key
+  // confirmed absent (PowerShell's progress noise on stderr is not an answer).
+  assert.deepEqual(P.managedPolicy({ platform: 'win32', env: {}, statFile: () => 'absent', reg: regAnswer() }), []);
+});
+
+test('the Windows managed-policy check passes only a confirmed absence: access denied, a timeout, a spawn failure, an ambiguous or unfamiliar answer and a present key refuse', async (t) => {
+  const win = (reg, statFile = () => 'absent') => P.managedPolicy({ platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, statFile, reg });
+  // reg.exe's own exit 1 is what the old check read as "absent"; on this
+  // machine reg.exe exits 1 with "ERROR: Access is denied." for a key the
+  // user may not read (PR evidence). No exit code alone is an absence now.
+  const regExeDenied = () => ({ status: 1, stdout: '', stderr: 'ERROR: Access is denied.\r\n' });
+  const regExeMissing = () => ({ status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.\r\n' });
+  const cases = [
+    ['reg.exe-style exit 1, access denied', regExeDenied, /could not be read: PowerShell exit 1/],
+    ['reg.exe-style exit 1, not found (words are never parsed)', regExeMissing, /could not be read: PowerShell exit 1/],
+    ['access denied in the 64-bit view', regAnswer({ 'LocalMachine/Registry64': 'denied' }), /HKLM\\SOFTWARE\\Policies\\ClaudeCode \(could not be read: 64-bit view, access denied\)/],
+    ['access denied in the 32-bit view only', regAnswer({ 'CurrentUser/Registry32': 'denied' }), /HKCU\\SOFTWARE\\Policies\\ClaudeCode \(could not be read: 32-bit view, access denied\)/],
+    ['a key present, whatever it holds', regAnswer({ 'CurrentUser/Registry64': 'present' }), /HKCU\\SOFTWARE\\Policies\\ClaudeCode \(64-bit view: present, values 3, subkeys 1\)/],
+    ['a key whose read failed otherwise', regAnswer({ 'LocalMachine/Registry32': 'error' }), /could not be read: 32-bit view/],
+    ['an unfamiliar state', regAnswer({ 'LocalMachine/Registry64': 'redirected' }), /unknown state "redirected"/],
+    ['a timeout', () => ({ error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }), status: null }), /could not be read: timed out/],
+    ['PowerShell missing', () => ({ error: Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' }), status: null }), /could not be read: PowerShell did not run, ENOENT/],
+    ['stopped by a signal', () => ({ status: null, signal: 'SIGTERM', stdout: '' }), /stopped by SIGTERM/],
+    ['no answer', () => null, /could not be read: no answer/],
+    ['words instead of JSON', regAnswer({}, { json: 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\ClaudeCode' }), /not the expected JSON/],
+    ['an empty answer', regAnswer({}, { json: '' }), /not the expected JSON/],
+    ['another format', regAnswer({}, { json: JSON.stringify({ format: 'cr-policy-registry@0', keys: REG_ROWS.map((r) => ({ ...r, state: 'absent' })) }) }), /another shape/],
+    ['a key not answered', regAnswer({}, { rows: REG_ROWS.slice(0, 3) }), /another shape/],
+    ['a key answered twice', regAnswer({}, { rows: [...REG_ROWS.slice(0, 3), REG_ROWS[0]] }), /not answered once/],
+  ];
+  for (const [name, reg, words] of cases) {
+    const found = win(reg);
+    assert.ok(found.length > 0, `${name}: refused`);
+    assert.match(found.join('; '), words, name);
+  }
+  // Policy files: only "does not exist" is an absence.
+  const eacces = (f) => { if (/ProgramData/.test(f) && /managed-settings\.json$/.test(f)) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; } const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+  const fileState = (f) => { try { eacces(f); return 'present'; } catch (err) { return err.code === 'ENOENT' ? 'absent' : `could not be read (${err.code})`; } };
+  assert.match(win(regAnswer(), fileState).join('; '), /ProgramData.*managed-settings\.json \(could not be read \(EACCES\)\)/);
+  assert.match(win(regAnswer(), (f) => (/managed-settings\.d$/.test(f) ? 'present' : 'absent')).join('; '), /managed-settings\.d/);
+  assert.equal(P.policyFileState(path.join(os.tmpdir(), 'cr-FICTIONAL-no-such-policy-file.json')), 'absent');
+  assert.equal(P.policyFileState(__filename), 'present');
+  // The real read is PowerShell by absolute path, through .NET, both views.
+  const seen = [];
+  win((file, args) => { seen.push({ file, args }); return regAnswer()(); });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].file, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  const script = Buffer.from(seen[0].args[seen[0].args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
+  for (const s of ['OpenBaseKey', 'Registry64', 'Registry32', 'LocalMachine', 'CurrentUser', 'SOFTWARE\\Policies\\ClaudeCode', 'SecurityException', 'UnauthorizedAccessException']) assert.ok(script.includes(s), s);
+  assert.ok(!/reg(\.exe)?\s+query/i.test(script), 'not reg.exe');
+  // Through the launcher: refused before any claim.
+  const s = standIn(t);
+  const launch = launcherOf(s, { platform: 'win32', reg: regExeDenied });
+  await assert.rejects(launch.preflight({}), (e) => e.code === 'ISOLATION' && /managed Claude Code settings/.test(e.message) && /could not be read/.test(e.message));
+  assert.equal(s.records().length, 0, 'not even the probe ran');
+});
+
+test('the probe requires both web capabilities: an empty, missing, placeholder-only or incomplete inventory refuses; the client and server forms of search and fetch pass', async (t) => {
+  const req = (tools, extra = {}) => JSON.stringify({ model: 'x', ...(tools === undefined ? {} : { tools }), ...extra });
+  const ph = { name: 'DeferredToolPlaceholder', defer_loading: true, input_schema: { type: 'object', properties: {} } };
+  const refused = [
+    ['an empty tool list', [req([])]],
+    ['no tools key', [req(undefined)]],
+    ['the placeholder only', [req([ph])]],
+    ['WebSearch only', [req([{ name: 'WebSearch' }, ph])]],
+    ['WebFetch only', [req([{ name: 'WebFetch' }])]],
+    ['the server search tool only', [req([{ name: 'web_search', type: 'web_search_20250305' }])]],
+    ['search and fetch in different requests, never together', [req([{ name: 'WebSearch' }]), req([{ name: 'WebFetch' }])]],
+    ['a tool list that is not a list', [req({ WebSearch: {}, WebFetch: {} })]],
+    ['a request that is not an object', ['null']],
+    ['a server tool with the wrong name', [req([{ name: 'WebSearch', type: 'web_search_20250305' }, { name: 'WebFetch' }])]],
+  ];
+  for (const [name, bodies] of refused) {
+    const v = P.judgeProbe(bodies);
+    assert.equal(v.ok, false, name);
+  }
+  assert.match(P.judgeProbe([req([ph])]).words, /did not offer both web capabilities \(search and fetch\); it offered no web tool/);
+  const passed = [
+    ['the client tools', [req([{ name: 'WebFetch' }, ph, { name: 'WebSearch' }])], ['WebFetch', 'WebSearch']],
+    ['the server tools', [req([{ name: 'web_search', type: 'web_search_20250305' }, { name: 'web_fetch', type: 'web_fetch_20250910' }])], ['web_fetch', 'web_search']],
+    ['client search and server fetch', [req([{ name: 'WebSearch', type: 'custom' }, { name: 'web_fetch', type: 'web_fetch_20250910' }])], ['WebSearch', 'web_fetch']],
+    ['a side request without tools beside the session request', [req(undefined), req([{ name: 'WebSearch' }, { name: 'WebFetch' }])], ['WebFetch', 'WebSearch']],
+  ];
+  for (const [name, bodies, tools] of passed) {
+    const v = P.judgeProbe(bodies);
+    assert.equal(v.ok, true, `${name}: ${v.words || ''}`);
+    assert.deepEqual(v.tools, tools, name);
+  }
+  // Still refused: anything beyond, even with both web capabilities present.
+  assert.equal(P.judgeProbe([req([{ name: 'WebSearch' }, { name: 'WebFetch' }, { name: 'Bash' }])]).ok, false);
+  assert.equal(P.judgeProbe([req([{ name: 'WebSearch' }, { name: 'WebFetch' }], { system: 'mcp__desk__save' })]).ok, false);
+  // End to end through the launcher's probe and a stand-in CLI.
+  for (const [name, config] of [
+    ['an empty inventory', { offer: [] }],
+    ['no tools key', { no_tools: true }],
+    ['placeholder only', { offer: [ph] }],
+    ['WebSearch only', { offer: [{ name: 'WebSearch', input_schema: { type: 'object', properties: { q: { type: 'string' } } } }, ph] }],
+  ]) {
+    const s = standIn(t, config);
+    const launch = launcherOf(s);
+    await assert.rejects(launch.preflight({}), (e) => e.code === 'ISOLATION' && /did not offer both web capabilities/.test(e.message), name);
+    assert.equal(launch.ready({}), false, name);
+    assert.throws(() => launch(PROMPT, { tools: P.AGENT_TOOLS, timeoutMin: 1 }), (e) => e.code === 'ISOLATION', `${name}: no session`);
+  }
+  const s = standIn(t, { offer: [{ name: 'web_search', type: 'web_search_20250305' }, { name: 'web_fetch', type: 'web_fetch_20250910' }, ph] });
+  assert.deepEqual((await launcherOf(s).preflight({})).tools, ['web_fetch', 'web_search'], 'the server forms pass');
 });
