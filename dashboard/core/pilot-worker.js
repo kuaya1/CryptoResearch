@@ -164,7 +164,9 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
     return { format: FORMAT, status: 'prepared', role: 'researcher', project_id: pid, ...idsOf(b.claim), prompt: text, prompt_sha256: run.prompt.sha256, prompt_version: run.prompt.version || null, sessions: b.sessions };
   }
   if (step.step === 'ticket' || step.step === 'ticket_failed') {
-    const exit_quote = await tk.prepareExitQuote(ws, pid, { fetchImpl }).catch(() => null);
+    // A quote that throws is kept as the reason (the packet's
+    // exit_quote_attempt), never dropped as "no attempt".
+    const exit_quote = await tk.prepareExitQuote(ws, pid, { fetchImpl }).catch((err) => ({ size_usd: null, status: 'error', reason: `The exit quote could not be asked: ${String((err && err.message) || err).slice(0, 200)}`, asked_at: new Date(at()).toISOString() }));
     // The quote took time: the claim is read again, at the time now, before
     // anything is opened. The bind below is what decides.
     claims.assertPreparing(ws, pid, token, { now: at() });

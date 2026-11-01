@@ -1199,7 +1199,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('GET', '/api/projects/([^/]+)/tickets/receipts/([^/]+)/text', (m) => tickets.receiptText(ws, pid(m[1]), ticketReceipt(m[2])));
   route('POST', '/api/projects/([^/]+)/tickets', async (m, req, res, body) => {
     // The fixed-size quote is asked first (async, outside the idempotent save); a retry finds the reading and asks nothing.
-    const exit_quote = await tickets.prepareExitQuote(ws, pid(m[1])).catch(() => null);
+    const exit_quote = await tickets.prepareExitQuote(ws, pid(m[1])).catch((err) => ({ size_usd: null, status: 'error', reason: `The exit quote could not be asked: ${String((err && err.message) || err).slice(0, 200)}`, asked_at: new Date().toISOString() }));
     return once(body, () => after(tickets.createTicket(ws, { project_id: pid(m[1]), channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, refresh: body.refresh === true, force_prosecution: body.force_prosecution === true, exit_quote })));
   });
   route('POST', '/api/projects/([^/]+)/tickets/(tk_[^/]+)/import', (m, req, res, body) => after(tickets.saveTicket(ws, { project_id: pid(m[1]), ticket_id: ticketId(m[2]), text: String(body.text || ''), revision: body.revision && typeof body.revision === 'object' ? body.revision : null, channel: 'dashboard import' })));
@@ -1288,6 +1288,27 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/projects/([^/]+)/pilot-claim/release', (m, req, res, body) => {
     if (!(body && body.reconciled === true)) throw new HttpError(400, 'Release a pilot claim here only as reconciled ({"reconciled":true}), after you checked the desk.');
     return after(require('./core/pilot-claims').release(ws, pid(m[1]), { reconciled: true }));
+  });
+  // Eric cancels an open Prosecutor ticket (tickets.js cancelTicket): the
+  // online counterpart of "tickets cancel <project> <ticket_id>". The ticket
+  // and its frozen packet are kept, marked canceled with his reason; nothing
+  // is deleted or re-frozen. Refused while a pilot claim on the project is
+  // live or awaits reconciliation, so no session's answer is left without its
+  // ticket.
+  route('POST', '/api/projects/([^/]+)/tickets/(tk_[^/]+)/cancel', (m, req, res, body) => {
+    const id = pid(m[1]);
+    const tid = ticketId(m[2]);
+    const reason = body && typeof body.reason === 'string' ? body.reason.trim().slice(0, 300) : '';
+    if (!reason) throw new HttpError(400, 'Say why the ticket is canceled ({"reason":"…"}); the reason is kept on the ticket.');
+    const t = tickets.loadTicket(ws, id, tid);
+    if (!t) throw new HttpError(404, 'No such ticket');
+    const c = require('./core/pilot-claims').read(ws, id);
+    if (c && !c.released && (Date.parse(c.expires_at) > Date.now() || c.state === 'dispatched')) {
+      throw new HttpError(409, `Pilot attempt ${c.attempt_id} on ${id} is ${Date.parse(c.expires_at) > Date.now() ? 'live' : 'waiting to be reconciled'} (${c.state}); nothing was canceled. Release it first.`);
+    }
+    const r = tickets.cancelTicket(ws, id, tid, `Eric: ${reason}`);
+    const now = tickets.loadTicket(ws, id, tid);
+    return after({ status: r && (r.noop || (r.result && r.result.noop)) ? 'unchanged' : 'canceled', project_id: id, ticket_id: tid, state: now && now.job ? now.job.state : null, cancel_reason: now && now.job ? now.job.cancel_reason || null : null });
   });
   route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => {
     const out = tickets.setPilot(ws, pid(m[1]), Boolean(body && body.on === true), { by: 'dashboard' });
