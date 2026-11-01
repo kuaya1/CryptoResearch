@@ -2495,9 +2495,20 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   if (refused) return { ...base, step: 'ticket_failed', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, refused_field: refused.field || null, refused_at: refused.at, why: `Prosecutor: save refused${refused.field ? `, ${refused.field}` : ''}: ${refused.message} Run the Prosecutor again on ticket ${open.ticket_id} (start_ticket resumes it with its draft), then save_ticket.` };
   if (open) return { ...base, step: 'ticket', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, why: `Ticket ${open.ticket_id} is open: write the Prosecutor's ticket (Agent 2).` };
   const v = view(ws, pid, { now });
-  if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `${v.ticket.decision && typeof v.ticket.decision.decided_by === 'string' && v.ticket.decision.decided_by.startsWith('mandate:') ? 'The paper mandate' : 'Eric'} re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
   const sizing = sizingOf(ws);
   const enforce = sizing.version === SIZING_V5;
+  if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) {
+    // A re-opened ticket freezes a new packet, so it waits for the same
+    // contract and exit evidence a first ticket waits for (OP-1, 2026-11-01:
+    // a re-open taken while the exit quote was still out froze a packet with
+    // no exit reading at any size). The old receipt is kept either way.
+    const held = heldOf(ws, pid, now, heldSet);
+    const cv = enforce && held === false ? contractVerdictNow(ws, project, sizing, now) : null;
+    if (cv && (cv.tier === 'block' || cv.tier === 'hold')) return { ...base, step: 'contract_evidence', ticket_id: null, report_id: r.report_id, reopen: true, findings: cv.findings.filter((f) => f.tier === cv.tier), why: `Ticket ${v.ticket.receipt_id} was re-opened, but the contract gate ${cv.tier === 'block' ? 'blocks' : 'holds'} on ${project.name}: ${cv.words} No Prosecutor runs until the desk observes the contract with nothing ${cv.tier === 'block' ? 'blocking' : 'holding'} it (contracts observe).` };
+    const wait = held === false ? exitWaitOf(ws, project, sizing, now) : null;
+    if (wait) return { ...base, step: 'exit_evidence', ticket_id: null, report_id: r.report_id, reopen: true, exit: wait.exit, why: `Ticket ${v.ticket.receipt_id} was re-opened. ${wait.why}` };
+    return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `${v.ticket.decision && typeof v.ticket.decision.decided_by === 'string' && v.ticket.decision.decided_by.startsWith('mandate:') ? 'The paper mandate' : 'Eric'} re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
+  }
   let onCurrent = Boolean(v.ticket && v.ticket.researcher_report_id === r.report_id);
   // A contract block's gate on this report no longer stands once the
   // contract's identity changed: the report gets its ticket.
