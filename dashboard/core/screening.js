@@ -60,7 +60,9 @@
 //                                             recent alert transitions
 
 const crypto = require('crypto');
+const fs = require('fs');
 const { readJson, jsonText, sha256 } = require('./fsx');
+const A = require('./call-accounting');
 const { withLock, replaceFile } = require('./ops');
 const { acquireLease, releaseLease } = require('./leases');
 const { isProjectId } = require('./ids');
@@ -72,6 +74,8 @@ const ORIGIN = 'https://api.gopluslabs.io';
 const TOKEN_PATH = '/api/v1/token';
 const DIR = 'market-data/screening';
 const STATUS_REL = `${DIR}/status.json`;
+const STATUS_SCHEMA = 'cr.screening-status.v1';
+const METER = 'goplus';
 const LEASE = 'screening';
 const RATE_LIMIT_DEFAULT_MS = 10 * 60000;
 const RATE_LIMIT_MIN_MS = 60000;
@@ -415,14 +419,15 @@ function forCredential(status) {
   };
 }
 
+// The status, validated before anything reads its counts or the credential
+// rule rewrites its gates (call-accounting.js): a file never written is a
+// meter never run; one whose accounting cannot be used is returned with
+// `unreadable` and `accounting_unknown` (its other fields kept for a view),
+// and no writer replaces it.
 function readStatus(ws) {
-  let st;
-  try {
-    st = readJson(ws.abs(STATUS_REL), { state: 'never_run' });
-  } catch (_) {
-    st = { state: 'never_run', unreadable: true };
-  }
-  return forCredential(st);
+  const r = A.classify(METER, () => fs.readFileSync(ws.abs(STATUS_REL), 'utf8'));
+  if (r.unknown) return { ...(r.status || { state: 'never_run' }), unreadable: true, accounting_unknown: A.words(METER, r.unknown) };
+  return forCredential(r.absent ? A.initial({ state: 'never_run' }) : r.status);
 }
 
 function laterIso(iso, t) {
@@ -458,45 +463,59 @@ function backoffMs(cfg, failures) {
   return Math.max(base / 2, Math.round(raw + jitter));
 }
 
+// This month's and today's counts at `now` (New York), or { unknown: words }.
 function callCounts(status, now) {
-  const today = ymdInTz(new Date(now));
-  const month = today.slice(0, 7);
-  const c = status.calls && status.calls.month === month ? { ...status.calls } : { month, month_count: 0, month_answered: 0, day: today, day_count: 0, day_answered: 0 };
-  if (c.day !== today) {
-    c.day = today;
-    c.day_count = 0;
-    c.day_answered = 0;
-  }
-  return c;
+  if (status.unreadable) return { unknown: status.accounting_unknown || A.words(METER, 'it could not be read') };
+  const c = A.countsOf(METER, status, now);
+  return c.unknown ? { unknown: A.words(METER, c.unknown) } : c;
 }
 
 function addCalls(c, sent, answered) {
   return { ...c, month_count: (c.month_count || 0) + sent, day_count: (c.day_count || 0) + sent, month_answered: (c.month_answered || 0) + answered, day_answered: (c.day_answered || 0) + answered };
 }
 
-function updateStatus(ws, fn) {
-  withLock(ws, 'screening_status', () => {
+// Rewrites the status under its lock, or returns null and writes nothing when
+// the stored accounting cannot be used at `now` (it is kept for inspection,
+// also when it went bad while a request was out) or the result would not be.
+function updateStatus(ws, fn, now = null) {
+  return withLock(ws, 'screening_status', () => {
     const cur = readStatus(ws);
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...fn(cur), schema_version: 'cr.screening-status.v1', provider: 'goplus', credential: credential() }));
+    if (cur.unreadable || (now !== null && callCounts(cur, now).unknown)) return null;
+    const next = { ...fn(cur), schema_version: STATUS_SCHEMA, provider: 'goplus', credential: credential() };
+    if (A.problemOf(METER, next)) return null;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
+    return next;
   });
 }
 
 // Reserves one request in this month's count before it is sent, under the
 // save lock, so the count is on disk even if the process stops mid-request
 // and no runner sends past the monthly budget. False when the budget is used
-// up (nothing is counted then).
+// up, or when the stored accounting cannot be used (nothing is counted or
+// rewritten then; accountingHold says which).
 function reserveRequest(ws, cfg, now) {
   return withLock(ws, 'screening_status', () => {
     const cur = readStatus(ws);
     const c = callCounts(cur, now);
-    if (cfg.monthly_request_budget && (c.month_count || 0) >= cfg.monthly_request_budget) return false;
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...cur, calls: addCalls(c, 1, 0), schema_version: 'cr.screening-status.v1', provider: 'goplus', credential: credential() }));
+    if (c.unknown) return false;
+    if (cfg.monthly_request_budget && c.month_count >= cfg.monthly_request_budget) return false;
+    const next = { ...cur, calls: addCalls(c, 1, 0), schema_version: STATUS_SCHEMA, provider: 'goplus', credential: credential() };
+    if (A.problemOf(METER, next)) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
     return true;
   });
 }
 
+// The words when GoPlus's request count cannot be used now, else null.
+function accountingHold(ws, now) {
+  return callCounts(readStatus(ws), now).unknown || null;
+}
+
 function blockedBy(status, now, { force = false } = {}) {
   const clock = require('./market').clock;
+  // Unknown accounting holds every caller, forced or not (unknown is never 0).
+  const unknown = callCounts(status, now).unknown;
+  if (unknown) return { status: 'held', rate_limited: false, retry_at: null, accounting_unknown: true, message: `Contracts not screened: ${unknown}` };
   const gate = gateOf(status, now);
   if (!gate.open) return { status: 'backoff', rate_limited: true, retry_at: gate.until, message: `Contracts not screened: GoPlus asked this server to wait; next try ${clock(gate.until, now)}.` };
   if (!force && status.next_allowed_at && Date.parse(status.next_allowed_at) > now) {
@@ -590,7 +609,7 @@ async function screenAddress(ws, chain, address, { turn, fetchImpl = fetch, now 
     const settle = (limited) => updateStatus(ws, (cur) => {
       const next = { ...cur, calls: addCalls(callCounts(cur, now), 0, counts.answered) };
       return limited ? { ...next, ...rateLimitFields(cfg, cur, limited.retry_after_ms, now) } : next;
-    });
+    }, now);
     if (r && r.kind === 'rate_limited') {
       settle(r);
       return { kind: 'rate_limited', retry_at: gateOf(readStatus(ws), now).until, error: 'GoPlus rate-limited the request' };
@@ -598,7 +617,10 @@ async function screenAddress(ws, chain, address, { turn, fetchImpl = fetch, now 
     settle(null);
     if (turnOut) return { kind: 'turn', error: 'the turn\'s request budget or time ran out' };
     if (!r) return { kind: 'failed', error: 'no attempt was made' };
-    if (r.kind === 'budget') return { kind: 'budget', error: `the monthly GoPlus request budget (${cfg.monthly_request_budget}) is used up` };
+    if (r.kind === 'budget') {
+      const unknown = accountingHold(ws, now);
+      return unknown ? { kind: 'blocked', retry_at: null, error: unknown } : { kind: 'budget', error: `the monthly GoPlus request budget (${cfg.monthly_request_budget}) is used up` };
+    }
     if (r.kind === 'failed' || r.kind === 'refused') return { kind: r.kind, error: r.error, http_status: r.http_status || null };
     const answer = { http_status: r.http_status || null, goplus_code: r.goplus_code ?? null, raw_sha256: rawText === null ? null : sha256(rawText), endpoint: screenUrl(c) };
     if (r.kind === 'not_found') return { kind: 'not_found', ...answer };
@@ -650,7 +672,9 @@ async function refresh(ws, opts = {}) {
   }
   // Fit the run to the per-run cap and the month's budget, whole projects only.
   const budget = cfg.monthly_request_budget || null;
-  const used = callCounts(readStatus(ws), now0).month_count;
+  const counted = callCounts(readStatus(ws), now0);
+  if (counted.unknown) return { status: 'held', accounting_unknown: true, message: `Contracts not screened: ${counted.unknown}` };
+  const used = counted.month_count;
   let room = Math.max(1, cfg.max_contracts_per_run || 1);
   if (budget) {
     if (budget - used <= 0) return { status: 'budget_paused', message: `Monthly GoPlus request budget reached (${used} of ${budget}). Saved screens stay as they are.` };
@@ -769,7 +793,10 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
   const now = clock();
   const ok = results.filter((r) => r.outcome === 'ok');
   const transient = results.filter((r) => ['failed', 'rate_limited', 'not_attempted', 'budget_paused'].includes(r.outcome));
-  const status = exhausted && !ok.length ? 'budget_paused' : transient.length ? (ok.length ? 'partial' : 'failed') : 'ok';
+  // A reservation refused because the count went bad mid-run reads as the
+  // budget to the request path; it is said as what it is.
+  const unknownNow = accountingHold(ws, now);
+  const status = unknownNow ? 'held' : exhausted && !ok.length ? 'budget_paused' : transient.length ? (ok.length ? 'partial' : 'failed') : 'ok';
   const offline = !ok.length && results.some((r) => r.outcome === 'failed');
   const alerts = ok.reduce((a, r) => a + (r.alerts || 0), 0);
   // Which credential the run used, in words that never carry the key.
@@ -779,10 +806,10 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
     `Contract screening: ${ok.length} of ${results.length} project(s) screened.`,
     alerts ? `${alerts} new alert(s).` : '',
     transient.length ? `Not screened: ${transient.map((r) => `${r.project_id} (${r.error})`).join('; ')}.` : '',
-    exhausted ? `Monthly GoPlus request budget reached (${cfg.monthly_request_budget}); saved screens stay as they are.` : '',
+    unknownNow || (exhausted ? `Monthly GoPlus request budget reached (${cfg.monthly_request_budget}); saved screens stay as they are.` : ''),
     authWhy ? `GoPlus credential: ${authWhy}.` : '',
   ].filter(Boolean).join(' ');
-  updateStatus(ws, (cur) => {
+  const recorded = updateStatus(ws, (cur) => {
     const failures = offline ? (cur.consecutive_failures || 0) + 1 : ok.length ? 0 : cur.consecutive_failures || 0;
     const next = {
       ...cur,
@@ -796,11 +823,12 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
       calls: addCalls(callCounts(cur, now), 0, counts.answered),
     };
     return limited ? { ...next, ...rateLimitFields(cfg, cur, limited.retry_after_ms, now) } : next;
-  });
+  }, now);
   const gate = gateOf(readStatus(ws), now);
   return {
     status,
-    message,
+    message: recorded ? message : `${message} The run's answers were not recorded: ${accountingHold(ws, now) || 'the request count could not be updated'}`,
+    ...(unknownNow || !recorded ? { accounting_unknown: true } : {}),
     screened: ok.map((r) => r.project_id),
     not_screened: transient.map((r) => ({ project_id: r.project_id, outcome: r.outcome, error: r.error })),
     alerts,
@@ -955,6 +983,7 @@ function overview(ws, now = Date.now()) {
     rate_limited: !gate.open,
     retry_at: gate.until || (st.next_allowed_at && Date.parse(st.next_allowed_at) > now ? st.next_allowed_at : null),
     calls: callCounts(st, now),
+    accounting_unknown: callCounts(st, now).unknown || null,
     budget_monthly: cfg.monthly_request_budget || null,
     refresh_hours: cfg.refresh_hours,
     packet_mode: cfg.packet_mode,
@@ -981,6 +1010,9 @@ module.exports = {
   screenUrl,
   transitionsBetween,
   readStatus,
+  callCounts,
+  accountingHold,
+  reserveRequest,
   readProjectDoc,
   credential,
   isDue,

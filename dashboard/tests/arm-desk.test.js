@@ -246,7 +246,256 @@ test('pilot-task.ps1 registers disabled, refuses a task it did not make, and run
   assert.match(text, /New-ScheduledTaskPrincipal -UserId \$user -LogonType Interactive -RunLevel Limited/);
   assert.match(text, /if \(\$t -and \$t\.Description -ne \$Mark\) \{ throw/);
   assert.match(text, /if \(\$t\) \{ Assert-Ours \$t; throw/, '-Register refuses while any task of that name exists');
-  assert.match(text, /--headless "\{0\}" "\{1\}" --pilot-all --desk=online --max-agents=\{2\}/);
+  // The launcher is the job wrapper, never conhost (A4: measured under Task
+  // Scheduler, conhost lost every exit code and left the runner's processes alive).
+  assert.match(text, /New-ScheduledTaskAction -Execute \$PowerShellExe -Argument \('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "\{0\}" "\{1\}" --pilot-all --desk=online --max-agents=\{2\}' -f \$Wrapper, \$node\.Path, \$MaxAgents\) -WorkingDirectory \$Root/);
+  assert.doesNotMatch(text, /-Execute \$Conhost|--headless "\{0\}"/);
   assert.match(text, /Volta shim/);
   assert.doesNotMatch(text, /-Force|schtasks|WakeToRun \$true/);
+  // -Status reads only: no start, stop, change or removal, no lock or claim
+  // touched, and the action's arguments are never printed.
+  const status = text.slice(text.indexOf('function Get-Facts'), text.indexOf('$t = Get-Task'));
+  assert.doesNotMatch(status, /Start-ScheduledTask|Stop-ScheduledTask|Set-ScheduledTask|Enable-ScheduledTask|Disable-ScheduledTask|Unregister|Remove-Item|Set-Content|Out-File|release/);
+  assert.doesNotMatch(status, /arguments\s*=/);
+});
+
+test('pilot-task-run.ps1 holds the runner in a kill-on-close job before starting it, runs pilot.js from the repository and returns its exit code', () => {
+  const text = fs.readFileSync(require('path').join(__dirname, '..', 'scripts', 'pilot-task-run.ps1'), 'utf8');
+  assert.doesNotMatch(text, /^\s*param\(/m, 'no param() block: --desk=online is passed on as it is');
+  assert.match(text, /e\.Basic\.LimitFlags = 0x2000; \/\/ JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
+  assert.match(text, /AssignProcessToJobObject\(Handle, GetCurrentProcess\(\)\)/);
+  const job = text.indexOf('[CrPilotJob]::Setup()');
+  const run = text.indexOf('& $node $pilot @rest');
+  assert.ok(job > 0 && run > job, 'the job is made before the runner starts');
+  assert.match(text, /if \(\$jobError -ne 0\) \{ exit 94 \}/);
+  assert.match(text, /\} catch \{\s*exit 93\s*\}/, 'no job, nothing started');
+  assert.match(text, /\$pilot = Join-Path \$root 'dashboard\\scripts\\pilot\.js'/);
+  assert.match(text, /Set-Location -LiteralPath \$root/);
+  assert.match(text, /if \(\$null -eq \$LASTEXITCODE\) \{ exit 91 \}\s*exit \$LASTEXITCODE\s*$/);
+  const code = text.slice(text.indexOf('#>'));
+  assert.doesNotMatch(code, /Stop-Process|taskkill|release|Remove-Item|tickets/, 'it ends nothing by name and touches no claim');
+});
+
+// --- Off-only controls (bounded paper readiness A5, 2026-11-01).
+// --mandate-off and --admission-off, alone or together, are exactly
+//   {"automation":{"autonomous_paper_loop":false}}
+//   {"automation":{"lead_admission":{"enabled":false}}}
+// plus the authority revocation and operation receipt the settings write
+// records; nothing else is written or asked, and nothing beside them is taken.
+
+const vm = require('vm');
+const { applySettings } = require('../server');
+const LA = require('../core/lead-admission');
+const MT = require('../core/tickets');
+
+const OFF_BOTH = { automation: { autonomous_paper_loop: false, lead_admission: { enabled: false } } };
+const settingsOf = (w) => JSON.parse(fs.readFileSync(path.join(w.root, 'config', 'settings.json'), 'utf8'));
+const changed = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]).map((k) => k.split(path.sep).join('/')).sort();
+// The settings write's own records (ops.js): its line in the operation log,
+// the workspace's write generation and the earlier settings' version copy.
+const OP_RECORD = /^(logs\/operations\.jsonl|\.cr\/generation\.json|backups\/versions\/config\/settings\.json@[0-9TZ-]+)$/;
+
+// An armed desk with Eric's own values where a baseline arm-desk would reset
+// them: the mandate and admission each at generation 1, his Paper Book, exit
+// quotes and the lead policy off, no pool factories (so contract defaults, if
+// asked, would show).
+async function armedDesk(t) {
+  const w = temp(t);
+  const out = await run(['arm-desk', '--mandate-days=7', '--admission-days=5', '--allow=XFIC/USDC', '--intent-life=4320', '--daily-cu=5000', '--monthly-cu=100000', '--workspace', w.root]);
+  assert.equal(out.status, 'saved');
+  applySettings(reopen(w), { automation: { exit_quotes_auto: false }, leads: { enabled: false }, trader: { book: { cash_usd: '40000', fee_rate: '0.002' } }, contracts: { pool_factories: [] } }, 'FICTIONAL: own values');
+  const s = settingsOf(w);
+  assert.equal(s.automation.mandate.authority.generation, 1);
+  assert.equal(s.automation.lead_admission.authority.generation, 1);
+  assert.equal(s.automation.mandate.authority.revoked_at, undefined);
+  assert.equal(MT.mandateOf(reopen(w)).on, true);
+  assert.equal(LA.authorityOf(reopen(w)).on, true);
+  return w;
+}
+
+// What the off write may change: the two switches and the authorities' revocation.
+function expectOff(before, after, { mandate = true, admission = true } = {}) {
+  const want = JSON.parse(JSON.stringify(before));
+  if (mandate) {
+    want.automation.autonomous_paper_loop = false;
+    const au = after.automation.mandate.authority;
+    assert.match(String(au.revoked_at), /^\d{4}-\d{2}-\d{2}T/);
+    want.automation.mandate.authority = { ...before.automation.mandate.authority, revoked_at: au.revoked_at, revoked_by: au.revoked_by, revoked_because: 'loop_off' };
+  }
+  if (admission) {
+    want.automation.lead_admission.enabled = false;
+    const au = after.automation.lead_admission.authority;
+    assert.match(String(au.revoked_at), /^\d{4}-\d{2}-\d{2}T/);
+    want.automation.lead_admission.authority = { ...before.automation.lead_admission.authority, revoked_at: au.revoked_at, revoked_by: au.revoked_by, revoked_because: 'off' };
+  }
+  assert.deepEqual(after, want, 'only the switches and the revocations changed; every other setting is identical');
+}
+
+test('off-only: --mandate-off and --admission-off are exactly their switches (dry run and local, alone and together), revoke the authority in force, and leave every other setting as it was', async (t) => {
+  const w = await armedDesk(t);
+  const tree0 = hashTree(w.root);
+  // Dry run: the exact patch, nothing written, no contract defaults planned.
+  const dry = await run(['arm-desk', '--dry-run', '--mandate-off', '--admission-off', '--workspace', w.root]);
+  assert.deepEqual([dry.status, dry.mode, dry.valid], ['planned', 'off_only', true]);
+  assert.deepEqual(dry.patch, OFF_BOTH);
+  assert.equal('contract_defaults' in dry, false, 'no contract defaults planned');
+  assert.deepEqual((await run(['arm-desk', '--dry-run', '--mandate-off', '--workspace', w.root])).patch, { automation: { autonomous_paper_loop: false } });
+  assert.deepEqual((await run(['arm-desk', '--dry-run', '--admission-off', '--workspace', w.root])).patch, { automation: { lead_admission: { enabled: false } } });
+  assert.deepEqual(A.armPatch({ mandateOff: true, admissionOff: true }), OFF_BOTH);
+  assert.ok(dry.left_for_you.some((l) => /Nothing else is written/.test(l)));
+  assert.ok(dry.left_for_you.some((l) => /pilot-all task is not touched/.test(l)));
+  assert.ok(!dry.left_for_you.some((l) => /allowlist is unset|caps are unset|CR_PILOT_POLL_TOKEN/.test(l)), 'no baseline assumptions');
+  assert.deepEqual(hashTree(w.root), tree0, 'the dry runs wrote nothing');
+  // Both, locally: the switches, the revocations and the operation's own record.
+  const before = settingsOf(w);
+  const out = await run(['arm-desk', '--mandate-off', '--admission-off', '--workspace', w.root]);
+  assert.deepEqual([out.status, out.verified, out.mode], ['saved', true, 'off_only']);
+  assert.deepEqual(out.applied, OFF_BOTH);
+  assert.equal('contract_defaults' in out, false);
+  const after = settingsOf(w);
+  expectOff(before, after);
+  assert.deepEqual(after.contracts.pool_factories, [], 'contract defaults were not added');
+  assert.deepEqual(after.trader.book, { cash_usd: '40000', fee_rate: '0.002' }, 'the Paper Book was not reset');
+  assert.equal(after.automation.exit_quotes_auto, false, 'exit quotes not turned on');
+  assert.equal(after.leads.enabled, false, 'leads not turned on');
+  assert.deepEqual([out.readback.mandate_on, out.readback.admission_on], [false, false]);
+  assert.deepEqual(out.readback.mandate_authority, { generation: 1, revoked_at: after.automation.mandate.authority.revoked_at, revoked_because: 'loop_off' });
+  assert.deepEqual(out.readback.admission_authority, { generation: 1, revoked_at: after.automation.lead_admission.authority.revoked_at, revoked_because: 'off' });
+  const files = changed(tree0, hashTree(w.root));
+  assert.ok(files.includes('config/settings.json'));
+  const others = files.filter((f) => f !== 'config/settings.json');
+  assert.ok(others.every((f) => OP_RECORD.test(f)), `only the settings and the write's own operation records changed: ${others.join(', ')}`);
+  const ws = reopen(w);
+  assert.equal(MT.mandateOf(ws).on, false);
+  assert.equal(LA.authorityOf(ws).on, false);
+  // Again: the same switches, nothing new revoked or armed.
+  const again = await run(['arm-desk', '--mandate-off', '--admission-off', '--workspace', w.root]);
+  assert.equal(again.verified, true);
+  assert.deepEqual(settingsOf(w).automation, after.automation, 'the revocations stand as first recorded');
+});
+
+test('off-only: the mandate off alone leaves admission armed, and admission off alone leaves the mandate armed', async (t) => {
+  const w = await armedDesk(t);
+  let before = settingsOf(w);
+  await run(['arm-desk', '--mandate-off', '--workspace', w.root]);
+  expectOff(before, settingsOf(w), { admission: false });
+  assert.equal(LA.authorityOf(reopen(w)).on, true, 'admission still armed, generation 1');
+  const w2 = await armedDesk(t);
+  before = settingsOf(w2);
+  await run(['arm-desk', '--admission-off', '--workspace', w2.root]);
+  expectOff(before, settingsOf(w2), { mandate: false });
+  assert.equal(MT.mandateOf(reopen(w2)).on, true, 'the mandate still armed, generation 1');
+});
+
+test('off-only: resuming automation or a baseline arm-desk never rearms a revoked generation; an explicit arming is a new one', async (t) => {
+  const w = await armedDesk(t);
+  // Paused, then off, then resumed.
+  applySettings(reopen(w), { automation: { paused: true } }, 'FICTIONAL: pause');
+  await run(['arm-desk', '--mandate-off', '--admission-off', '--workspace', w.root]);
+  applySettings(reopen(w), { automation: { paused: false } }, 'FICTIONAL: resume');
+  let s = settingsOf(w);
+  assert.equal(s.automation.mandate.authority.generation, 1);
+  assert.ok(s.automation.mandate.authority.revoked_at);
+  assert.equal(s.automation.lead_admission.authority.generation, 1);
+  assert.ok(s.automation.lead_admission.authority.revoked_at);
+  assert.equal(MT.mandateOf(reopen(w)).on, false);
+  assert.equal(LA.authorityOf(reopen(w)).on, false);
+  // A baseline arm-desk (no mandate or admission flag) arms neither.
+  await run(['arm-desk', '--workspace', w.root]);
+  s = settingsOf(w);
+  assert.deepEqual([s.automation.autonomous_paper_loop, s.automation.mandate.authority.generation, Boolean(s.automation.mandate.authority.revoked_at)], [false, 1, true]);
+  assert.deepEqual([s.automation.lead_admission.enabled, s.automation.lead_admission.authority.generation, Boolean(s.automation.lead_admission.authority.revoked_at)], [false, 1, true]);
+  // Only the explicit flags arm, each a new generation.
+  await run(['arm-desk', '--mandate-days=3', '--workspace', w.root]);
+  s = settingsOf(w);
+  assert.deepEqual([s.automation.mandate.authority.generation, s.automation.mandate.authority.revoked_at], [2, undefined]);
+  assert.equal(MT.mandateOf(reopen(w)).on, true);
+  assert.equal(LA.authorityOf(reopen(w)).on, false, 'the mandate\'s arming never arms admission');
+});
+
+test('off-only refuses every arming, baseline or collection flag beside it, locally and online, and never picks one', async (t) => {
+  const w = await armedDesk(t);
+  const tree0 = hashTree(w.root);
+  const others = [['--allow=XFIC/USDC'], ['--intent-life=60'], ['--daily-cu=5000'], ['--monthly-cu=100000'], ['--contracts-on'], ['--mandate-days=7'], ['--admission-days=3'], ['--admission-days=3', '--admission-daily=1'], ['--admission-daily=1'], ['--print-schedule']];
+  for (const off of [['--mandate-off'], ['--admission-off'], ['--mandate-off', '--admission-off']]) {
+    for (const extra of others) {
+      for (const desk of [[], ['--dry-run'], ['--desk=online']]) {
+        const args = ['arm-desk', ...desk, ...off, ...extra, '--workspace', w.root];
+        await assert.rejects(run(args), (e) => e.code === 'USAGE', args.join(' '));
+      }
+    }
+  }
+  await assert.rejects(run(['arm-desk', '--mandate-off', '--allow=XFIC/USDC', '--intent-life=60', '--workspace', w.root]), /--mandate-off only turns off; --allow, --intent-life arm or set something/);
+  await assert.rejects(run(['arm-desk', '--mandate-off', '--admission-off', '--contracts-on', '--workspace', w.root]), /--mandate-off and --admission-off only turn off; --contracts-on arms or sets something and cannot be given with them/);
+  assert.deepEqual(hashTree(w.root), tree0, 'nothing written by any refused mix');
+  // Ordinary arming is unchanged: the baseline with its flags still validates.
+  assert.equal(A.armPatch({ mandateDays: 7, admissionDays: 2, allow: ['XFIC/USDC'] }).trader.rules.max_validity_minutes, 1440);
+});
+
+// The online script, run against a FICTIONAL transport: a fetch that carries
+// the script's relative requests to a local desk on a temporary workspace
+// (same-origin, as in the signed-in page) and records each one.
+function fictionalTransport(port) {
+  const calls = [];
+  const fetchImpl = (p, opts = {}) => new Promise((resolve, reject) => {
+    const method = opts.method || 'GET';
+    calls.push([method, p]);
+    const headers = { host: `127.0.0.1:${port}`, ...(opts.headers || {}), ...(method === 'POST' ? { origin: `http://127.0.0.1:${port}` } : {}) };
+    const req = http.request({ host: '127.0.0.1', port, path: p, method, headers }, (res) => {
+      const c = [];
+      res.on('data', (d) => c.push(d));
+      res.on('end', () => { const body = Buffer.concat(c).toString(); resolve({ status: res.statusCode, json: async () => JSON.parse(body) }); });
+    });
+    req.on('error', reject);
+    req.end(opts.body);
+  });
+  return { calls, fetchImpl };
+}
+
+test('--desk=online off-only: the script makes the settings write and one read back only, revoking both authorities and nothing else', async (t) => {
+  const w = await armedDesk(t);
+  const tree0 = hashTree(w.root);
+  const out = await run(['arm-desk', '--desk=online', '--mandate-off', '--admission-off', '--workspace', w.root]);
+  const text = out._text;
+  assert.deepEqual(hashTree(w.root), tree0, 'printing the script wrote nothing');
+  const code = text.split('\n').filter((l) => !l.startsWith('//')).join('\n');
+  assert.doesNotMatch(code, /exit-quotes|init-defaults|pilot|enroll|contracts|forensics/i, 'no other endpoint in the code');
+  assert.doesNotMatch(text, /DESK_INGEST_KEY|XAI_API_KEY|ALCHEMY_API_KEY|passphrase/i);
+  assert.deepEqual(JSON.parse(text.match(/body: JSON\.stringify\((\{.*\})\) \}\);/)[1]), OFF_BOTH);
+  assert.match(text, /^\/\/ What this does: The paper mandate is off/m);
+  // The real command line's --json form (it reads process.argv).
+  const cli = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'cli.js'), 'arm-desk', '--desk=online', '--mandate-off', '--admission-off', '--json', '--workspace', w.root], { encoding: 'utf8', timeout: 60000 });
+  assert.equal(cli.status, 0, cli.stderr);
+  const json = JSON.parse(cli.stdout);
+  assert.deepEqual([json.mode, json.patch, json.script], ['off_only', OFF_BOTH, text.trimEnd()]);
+  assert.deepEqual(hashTree(w.root), tree0, 'the command line wrote nothing');
+  // Run it against the desk.
+  const ws = reopen(w);
+  const srv = await start(ws, { port: 47990 + Math.floor(Math.random() * 9), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  const before = settingsOf(w);
+  const tr = fictionalTransport(srv.port);
+  const logs = [];
+  await vm.runInNewContext(text, { fetch: tr.fetchImpl, console: { log: (...a) => logs.push(a) } });
+  assert.deepEqual(tr.calls, [['GET', '/api/session'], ['POST', '/api/settings'], ['GET', '/api/index']], 'no other endpoint is asked');
+  const [wrote, read] = logs;
+  assert.deepEqual([wrote[0], wrote[1].status, wrote[1].body.status], ['arm-desk off', 200, 'saved']);
+  const after = settingsOf(w);
+  expectOff(before, after);
+  assert.equal(read[0], 'read back');
+  assert.deepEqual(JSON.parse(JSON.stringify(read[1])), {
+    autonomous_paper_loop: false,
+    mandate_authority: { generation: 1, armed_at: before.automation.mandate.authority.armed_at, revoked_at: after.automation.mandate.authority.revoked_at, revoked_because: 'loop_off' },
+    lead_admission_enabled: false,
+    admission_authority: { generation: 1, armed_at: before.automation.lead_admission.authority.armed_at, revoked_at: after.automation.lead_admission.authority.revoked_at, revoked_because: 'off' },
+    paused: false,
+  });
+  assert.equal(MT.mandateOf(ws).on, false);
+  assert.equal(LA.authorityOf(ws).on, false);
+  // A refused write reads nothing back.
+  const bad = fictionalTransport(srv.port);
+  const quiet = [];
+  await vm.runInNewContext(text.replace("'x-cr-token': s.token", "'x-cr-token': 'FICTIONAL-wrong'"), { fetch: bad.fetchImpl, console: { log: (...a) => quiet.push(a) } });
+  assert.deepEqual(bad.calls.map((c) => c[1]), ['/api/session', '/api/settings']);
+  assert.notEqual(quiet[0][1].status, 200);
 });

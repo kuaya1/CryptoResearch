@@ -35,9 +35,13 @@ const { withLock, replaceFile } = require('./ops');
 const { listProjects } = require('./projects');
 const { acquireLease, releaseLease } = require('./leases');
 const { ymdInTz, TZ } = require('./dates');
+const A = require('./call-accounting');
 
 const LATEST_REL = 'market-data/latest.json';
 const STATUS_REL = 'market-data/status.json';
+const STATUS_SCHEMA = 'cr.market-status.v2';
+const METER = 'coingecko';
+const STATUS_DEFAULTS = Object.freeze({ state: 'never_run', last_attempt_at: null, last_success_at: null, last_error: null, consecutive_failures: 0 });
 const LOGO_DIR = 'market-data/logos';
 const SOURCE_LABEL = 'CoinGecko /coins/markets';
 // A 429 without Retry-After closes the shared gate for two minutes, doubled for
@@ -52,9 +56,30 @@ function readLatest(ws) {
 }
 
 // The status as it applies to the credential in use now (forCredential), so
-// every reader and writer sees the same gate and backoff.
+// every reader and writer sees the same gate and backoff. Its accounting is
+// validated first (call-accounting.js), before the credential rule rewrites
+// anything: a file never written is a meter never run; one whose accounting
+// cannot be used is returned with `unreadable` and `accounting_unknown`, its
+// other fields (prices' times, the context block, a gate) kept for the views,
+// and no writer replaces it.
 function readStatus(ws) {
-  return forCredential(readJson(ws.abs(STATUS_REL), { state: 'never_run', last_attempt_at: null, last_success_at: null, last_error: null, consecutive_failures: 0 }));
+  const r = A.classify(METER, () => fs.readFileSync(ws.abs(STATUS_REL), 'utf8'));
+  if (r.unknown) return { ...STATUS_DEFAULTS, ...(r.status || {}), unreadable: true, accounting_unknown: A.words(METER, r.unknown) };
+  return forCredential(r.absent ? A.initial({ ...STATUS_DEFAULTS }) : r.status);
+}
+
+// Whether a status may be rewritten at `now`: its accounting reads, and the
+// rewrite would still read. Every writer of market-data/status.json (this
+// file, cycle.js, intake.js) asks this under its lock; on false it writes
+// nothing, so a malformed or future-dated count is kept for inspection.
+function writableStatus(ws, status, next, now = Date.now()) {
+  if (status.unreadable || callBudget(ws, status, now).unknown) return false;
+  return !A.problemOf(METER, next);
+}
+
+// The words when CoinGecko's request count cannot be used now, else null.
+function accountingHold(ws, now = Date.now()) {
+  return callBudget(ws, readStatus(ws), now).unknown || null;
 }
 
 // What CoinGecko sees this desk as: its Demo key, or no key. Only this word is
@@ -180,7 +205,10 @@ function rateLimitFields(ws, status, { retryAfterMs: header = null, source = 'pr
 function noteRateLimit(ws, { retryAfterMs: header = null, source = 'prices', httpStatus = 429 } = {}) {
   withLock(ws, 'market_status', () => {
     const status = readStatus(ws);
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), ...rateLimitFields(ws, status, { retryAfterMs: header, source, httpStatus }) }));
+    const counted = callBudget(ws, status);
+    if (counted.unknown) return; // kept as it is; nothing is sent while it reads so
+    const next = { ...status, schema_version: STATUS_SCHEMA, credential: credential(), calls: status.calls !== undefined ? status.calls : addCalls(counted, 0, 0), ...rateLimitFields(ws, status, { retryAfterMs: header, source, httpStatus }) };
+    if (writableStatus(ws, status, next)) replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
   });
   return rateLimitGate(ws);
 }
@@ -256,14 +284,18 @@ async function fetchMarkets(ids, settings, fetchImpl = fetch, reserve = () => tr
 // under the save lock, for every caller in this file and research intake: no
 // caller can send past the monthly budget while another's request is out,
 // and a request is counted even if the process stops while it is out. False
-// when the budget is used up (nothing is counted then). The answer is added
-// afterwards (addCalls with 0 sent).
-function reserveCall(ws) {
+// when the budget is used up, or when the stored count cannot be used
+// (nothing is counted or rewritten then; accountingHold says which). The
+// answer is added afterwards (addCalls with 0 sent).
+function reserveCall(ws, now = Date.now()) {
   return withLock(ws, 'market_status', () => {
     const status = readStatus(ws);
-    const c = callBudget(ws, status);
+    const c = callBudget(ws, status, now);
+    if (c.unknown) return false;
     if (c.budget_monthly && c.month_count + 1 > c.budget_monthly) return false;
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), calls: addCalls(c, 1, 0) }));
+    const next = { ...status, schema_version: STATUS_SCHEMA, credential: credential(), calls: addCalls(c, 1, 0) };
+    if (!writableStatus(ws, status, next, now)) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
     return true;
   });
 }
@@ -279,6 +311,7 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   if (!gate.open) return { status: 'backoff', message: `Not searched: ${gate.note}.`, rate_limited: true, retry_at: gate.until, candidates: [] };
   if (!reserveCall(ws)) {
     const budget = callBudget(ws, readStatus(ws));
+    if (budget.unknown) return { status: 'held', accounting_unknown: true, message: budget.unknown, candidates: [] };
     return { status: 'budget_paused', message: `Monthly CoinGecko call budget reached (${budget.month_count} of ${budget.budget_monthly}).`, candidates: [] };
   }
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
@@ -298,9 +331,12 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   }
   withLock(ws, 'market_status', () => {
     const status = readStatus(ws);
-    const calls = addCalls(callBudget(ws, status), 0, body ? 1 : 0); // sent: counted by reserveCall
+    const counted = callBudget(ws, status);
+    if (counted.unknown) return; // kept as it is (it went bad while the request was out)
+    const calls = addCalls(counted, 0, body ? 1 : 0); // sent: counted by reserveCall
     // A 429 here closes the shared gate for prices and market context too.
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) }));
+    const next = { ...status, schema_version: STATUS_SCHEMA, credential: credential(), calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) };
+    if (writableStatus(ws, status, next)) replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
   });
   if (limited) {
     const g = rateLimitGate(ws);
@@ -394,17 +430,13 @@ function monthKey(d = new Date()) {
 // are requests sent (whatever came back): the monthly budget counts these.
 // month_answered and day_answered are the requests that came back with a
 // usable answer. A month that was already under way when answers started to
-// be counted says since when (answered_counted_since).
-function callBudget(ws, status) {
+// be counted says since when (answered_counted_since). Read at `now` (New
+// York) after call-accounting's checks: counts that cannot be used come back
+// as { unknown: words } with null counts, never as 0.
+function callBudget(ws, status, now = Date.now()) {
   const cap = ws.settings.market_data.monthly_call_budget || null;
-  const month = monthKey();
-  const day = ymdInTz();
-  const c = status.calls && status.calls.month === month ? { ...status.calls } : { month, month_count: 0, day, day_count: 0, month_answered: 0, day_answered: 0 };
-  if (c.day !== day) {
-    c.day = day;
-    c.day_count = 0;
-    c.day_answered = 0;
-  }
+  const c = status.unreadable ? { unknown: status.accounting_unknown || A.words(METER, 'it could not be read') } : A.countsOf(METER, status, now);
+  if (c.unknown) return { unknown: status.unreadable ? c.unknown : A.words(METER, c.unknown), month_count: null, day_count: null, budget_monthly: cap, remaining: null };
   return { ...c, budget_monthly: cap, remaining: cap ? Math.max(0, cap - c.month_count) : null };
 }
 
@@ -458,6 +490,7 @@ async function refresh(ws, { trigger = 'manual', fetchImpl, force = false } = {}
     return { status: 'backoff', message: `Prices not refreshed: ${gate.reason}; next try ${clock(gate.until)}.`, rate_limited: gate.rate_limited, retry_at: gate.until, next_allowed_at: gate.until };
   }
   const budget = callBudget(ws, status0);
+  if (budget.unknown) return { status: 'held', accounting_unknown: true, message: `Prices not refreshed: ${budget.unknown} Prices stay at their last valid values.` };
   const needed = Math.ceil(ids.length / Math.min(250, md.max_ids_per_call || 250));
   if (budget.budget_monthly && budget.month_count + needed > budget.budget_monthly) {
     return { status: 'budget_paused', message: `Monthly call budget reached (${budget.month_count} of ${budget.budget_monthly}). Prices stay at their last valid values until next month or until you raise the budget in settings.` };
@@ -486,11 +519,13 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     let gate = null;
     withLock(ws, 'market_status', () => {
       const status = readStatus(ws);
+      const counted = callBudget(ws, status);
+      if (counted.unknown) return; // kept as it is (it went bad while a request was out)
       const failures = (status.consecutive_failures || 0) + 1;
       const wait = backoffMs(ws, failures);
       // Every request this refresh sent, the failed one included (V2-007),
       // was counted when it was reserved; the answers are added here.
-      const calls = addCalls(callBudget(ws, status), 0, Number.isInteger(err.answered) ? err.answered : 0);
+      const calls = addCalls(counted, 0, Number.isInteger(err.answered) ? err.answered : 0);
       const next = {
         ...status,
         schema_version: 'cr.market-status.v2',
@@ -509,7 +544,8 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       // A 429 (or any answer that names a Retry-After) closes the shared gate
       // for every caller, this refresh's next manual retry included.
       const limited = err.httpStatus === 429 || typeof err.retryAfterMs === 'number';
-      replaceFile(ws, ws.abs(STATUS_REL), jsonText(limited ? { ...next, ...rateLimitFields(ws, next, { retryAfterMs: err.retryAfterMs, source: 'prices', httpStatus: err.httpStatus }) } : next));
+      const written = limited ? { ...next, ...rateLimitFields(ws, next, { retryAfterMs: err.retryAfterMs, source: 'prices', httpStatus: err.httpStatus }) } : next;
+      if (writableStatus(ws, status, written)) replaceFile(ws, ws.abs(STATUS_REL), jsonText(written));
       gate = limited ? gateOf(readStatus(ws)) : null;
     });
     if (gate && !gate.open) return { status: 'failed', message: `${message}; next try ${clock(gate.until)}.`, tracked: ids.length, rate_limited: true, retry_at: gate.until };
@@ -518,6 +554,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
   // Another caller used the last of the budget before this refresh sent anything.
   if (data.budget_stopped && !data.calls) {
     const b = callBudget(ws, readStatus(ws));
+    if (b.unknown) return { status: 'held', accounting_unknown: true, message: `Prices not refreshed: ${b.unknown} Prices stay at their last valid values.` };
     return { status: 'budget_paused', message: `Monthly call budget reached (${b.month_count} of ${b.budget_monthly}). Prices stay at their last valid values until next month or until you raise the budget in settings.` };
   }
   const now = Date.now();
@@ -536,6 +573,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
   const missing = ids.filter((id) => !returned.has(id) && !unrequested.has(id));
   let observationWritten = false;
   let nothingUsable = null;
+  let unrecorded = null;
   const skippedOlder = [];
   const updated = [];
   withLock(ws, 'market_write', () => {
@@ -569,7 +607,14 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       appendLine(ws.abs(`market-data/observations/${fetchedAt.slice(0, 7)}.jsonl`), { fetched_at: fetchedAt, provider: 'coingecko', trigger, assets: valid.filter((o) => updated.includes(o.id)).map((o) => ({ ...o, sparkline_7d: undefined })) });
       observationWritten = true;
     }
-    const calls = addCalls(callBudget(ws, status), 0, data.answered); // sent: counted by reserveCall
+    const counted = callBudget(ws, status);
+    if (counted.unknown) {
+      // The prices are kept (they are data); the status is not rewritten.
+      unrecorded = counted.unknown;
+      if (!updated.length) nothingUsable = `CoinGecko answered, but none of the ${ids.length} tracked prices could be used. ${unrecorded}`;
+      return;
+    }
+    const calls = addCalls(counted, 0, data.answered); // sent: counted by reserveCall
     const rows = { tracked_ids: ids, missing_ids: missing, not_requested_ids: [...unrequested], invalid_rows: invalid.slice(0, 50), skipped_older: skippedOlder, coverage: { tracked: ids.length, updated: updated.length, kept_prior: ids.length - updated.length } };
     if (!updated.length) {
       // An answer that updates no price is a failed refresh, not a success:
@@ -577,7 +622,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       // while every price is old, and the usual failure backoff applies.
       const failures = (status.consecutive_failures || 0) + 1;
       nothingUsable = `CoinGecko answered, but none of the ${ids.length} tracked prices could be used (${invalid.length} invalid row(s), ${missing.length} not returned${skippedOlder.length ? `, ${skippedOlder.length} older than the stored price` : ''}). Prices keep their previous values.`;
-      replaceFile(ws, ws.abs(STATUS_REL), jsonText({
+      writeIfWritable(ws, status, {
         ...status,
         schema_version: 'cr.market-status.v2',
         credential: credential(),
@@ -591,7 +636,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
         ...rows,
         calls,
         note: 'Last valid prices in latest.json are kept and shown with their age.',
-      }));
+      });
       return;
     }
     const partial = invalid.length > 0 || missing.length > 0 || unrequested.size > 0;
@@ -601,7 +646,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     const { note: failureNote, ...kept } = status; // eslint-disable-line no-unused-vars
     // A rate limit another caller noted while this request was out stays in force.
     const limitedSince = Boolean(status.rate_limit && Date.parse(status.rate_limit.at) >= Date.parse(attemptAt));
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({
+    writeIfWritable(ws, status, {
       ...kept,
       schema_version: 'cr.market-status.v2',
       credential: credential(),
@@ -616,7 +661,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       ...rows,
       calls,
       last_observation_at: observationWritten ? fetchedAt : status.last_observation_at || null,
-    }));
+    });
   });
   if (nothingUsable) {
     return { status: 'failed', message: nothingUsable, tracked: ids.length, updated: 0, missing, invalid, calls: data.calls, observation_written: false };
@@ -625,8 +670,9 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     try { await cacheLogos(ws, valid); } catch (_) { /* logos are optional */ }
   }
   return {
-    status: invalid.length || missing.length || unrequested.size ? 'partial' : 'ok',
-    message: `Updated ${updated.length} of ${ids.length} tracked assets${missing.length ? `; not returned: ${missing.join(', ')}` : ''}${invalid.length ? `; invalid rows kept their previous values: ${invalid.map((x) => x.id || '?').join(', ')}` : ''}${skippedOlder.length ? `; older responses ignored: ${skippedOlder.join(', ')}` : ''}${unrequested.size ? `; not requested, the monthly call budget ran out: ${[...unrequested].join(', ')}` : ''}.`,
+    status: unrecorded ? 'held' : invalid.length || missing.length || unrequested.size ? 'partial' : 'ok',
+    ...(unrecorded ? { accounting_unknown: true } : {}),
+    message: `${unrecorded ? `${unrecorded} ` : ''}Updated ${updated.length} of ${ids.length} tracked assets${missing.length ? `; not returned: ${missing.join(', ')}` : ''}${invalid.length ? `; invalid rows kept their previous values: ${invalid.map((x) => x.id || '?').join(', ')}` : ''}${skippedOlder.length ? `; older responses ignored: ${skippedOlder.join(', ')}` : ''}${unrequested.size ? `; not requested, the monthly call budget ran out: ${[...unrequested].join(', ')}` : ''}.`,
     tracked: ids.length,
     updated: updated.length,
     missing,
@@ -661,6 +707,10 @@ async function cacheLogos(ws, observations, fetchImpl = fetch) {
   }
 }
 
+function writeIfWritable(ws, status, next) {
+  if (writableStatus(ws, status, next)) replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
+}
+
 function logoFile(ws, id) {
   if (!/^[a-z0-9][a-z0-9-]{0,100}$/.test(id)) return null;
   const files = listDir(ws.abs(LOGO_DIR), { dirs: false });
@@ -689,12 +739,14 @@ function freshness(ws, now = Date.now()) {
   const next = retryAt ? `; next try ${clock(retryAt, now)}` : '';
   const cov = status.coverage || {};
   let note = null;
-  if (!gate.open) note = `${gate.reason}; ${shown}${next}`;
+  const calls = callBudget(ws, status, now);
+  if (calls.unknown) note = `${calls.unknown} ${shown[0].toUpperCase()}${shown.slice(1)}.`;
+  else if (!gate.open) note = `${gate.reason}; ${shown}${next}`;
   else if (status.state === 'failed') note = `The last price refresh failed; ${shown}${next}`;
   else if (state === 'stale') note = `Prices are from ${clock(status.last_success_at, now)}, older than ${staleAfter} minutes`;
   else if (state === 'fresh_partial' && cov.tracked) note = `Prices updated ${clock(status.last_success_at, now)} for ${cov.updated} of ${cov.tracked} tracked assets`;
   else if (state === 'never_run') note = ws.settings.market_data && ws.settings.market_data.enabled === false ? 'Market data is turned off in settings' : 'No prices fetched yet';
-  return { ...status, freshness: state, age_minutes: ageMin, stale_after_minutes: staleAfter, calls: callBudget(ws, status), rate_limited: !gate.open, retry_at: retryAt, note };
+  return { ...status, freshness: state, age_minutes: ageMin, stale_after_minutes: staleAfter, calls, accounting_unknown: calls.unknown || null, rate_limited: !gate.open, retry_at: retryAt, note };
 }
 
 // One month of the price history (observations/YYYY-MM.jsonl), parsed and
@@ -787,4 +839,4 @@ function volumeChange24h(ws, id, current, { history = null } = {}) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, monthPoints, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, monthPoints, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, writableStatus, accountingHold, LATEST_REL, STATUS_REL, STATUS_SCHEMA, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };

@@ -57,7 +57,9 @@ const projects = require('./projects');
 const research = require('./research');
 const { readBodyBounded } = require('./netguard');
 const { chainInfo, addressFits, addressKey } = require('./chains');
+const fs = require('fs');
 const { readJson, readText, jsonText, appendLine } = require('./fsx');
+const A = require('./call-accounting');
 const { withLock, replaceFile } = require('./ops');
 const { acquireLease, releaseLease } = require('./leases');
 const { ymdInTz } = require('./dates');
@@ -67,6 +69,8 @@ const ORIGIN = 'https://api.geckoterminal.com';
 const API = '/api/v2';
 const SOURCES_REL = 'paper/candles/sources.jsonl';
 const STATUS_REL = 'market-data/trader/candles-status.json';
+const STATUS_SCHEMA = 'cr.trader-candles-status.v1';
+const METER = 'candles';
 const LEASE = 'trader-candles';
 const HOUR = 3600000;
 const MIN = 60000;
@@ -227,37 +231,54 @@ function saveSource(ws, rec) {
 // ---------------------------------------------------------------------------
 // The status file: gate, backoff, counts, when each pair was last asked
 
+// The status, validated before anything reads its counts (call-accounting.js):
+// a file never written is a read never run; one whose accounting cannot be
+// used is returned with `unreadable` and `accounting_unknown` (its gate and
+// pairs kept, so a closed gate stays closed), and no writer replaces it.
 function readStatus(ws) {
-  try {
-    return readJson(ws.abs(STATUS_REL), { state: 'never_run' });
-  } catch (_) {
-    return { state: 'never_run', unreadable: true };
-  }
+  const r = A.classify(METER, () => fs.readFileSync(ws.abs(STATUS_REL), 'utf8'));
+  if (r.unknown) return { ...(r.status || { state: 'never_run' }), unreadable: true, accounting_unknown: A.words(METER, r.unknown) };
+  return r.absent ? A.initial({ state: 'never_run' }) : r.status;
 }
-function updateStatus(ws, fn) {
+// Rewrites the status under its lock, or returns null and writes nothing when
+// the stored accounting cannot be used (at `now` when given; kept for
+// inspection, also when it went bad while a request was out) or the result
+// would not be.
+function updateStatus(ws, fn, now = null) {
   return withLock(ws, 'trader_candles_status', () => {
-    const next = { ...fn(readStatus(ws)), schema_version: 'cr.trader-candles-status.v1' };
+    const cur = readStatus(ws);
+    if (cur.unreadable || (now !== null && callCounts(cur, now).unknown)) return null;
+    const next = { ...fn(cur), schema_version: STATUS_SCHEMA };
+    if (A.problemOf(METER, next)) return null;
     replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
     return next;
   });
 }
 
+// This month's and today's counts at `now` (New York), or { unknown: words }.
 function callCounts(status, now) {
-  const day = ymdInTz(new Date(now));
-  const month = day.slice(0, 7);
-  const c = status.calls && status.calls.month === month ? { ...status.calls } : { month, month_count: 0, day, day_count: 0 };
-  if (c.day !== day) { c.day = day; c.day_count = 0; }
-  return c;
+  if (status.unreadable) return { unknown: status.accounting_unknown || A.words(METER, 'it could not be read') };
+  const c = A.countsOf(METER, status, now);
+  return c.unknown ? { unknown: A.words(METER, c.unknown) } : c;
 }
 
-// Counts one request before it is sent; false when the day's or the month's
-// budget is used.
+// The words when the candle read's request count cannot be used now, else null.
+function accountingHold(ws, now) {
+  return callCounts(readStatus(ws), now).unknown || null;
+}
+
+// Counts one request before it is sent; false, with nothing counted or
+// rewritten, when the day's or the month's budget is used or the count
+// cannot be used.
 function reserve(ws, now) {
   return withLock(ws, 'trader_candles_status', () => {
     const cur = readStatus(ws);
     const c = callCounts(cur, now);
+    if (c.unknown) return false;
     if (c.day_count >= DAILY_BUDGET || c.month_count >= MONTHLY_BUDGET) return false;
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...cur, calls: { ...c, month_count: c.month_count + 1, day_count: c.day_count + 1 }, schema_version: 'cr.trader-candles-status.v1' }));
+    const next = { ...cur, calls: { ...c, month_count: c.month_count + 1, day_count: c.day_count + 1 }, schema_version: STATUS_SCHEMA };
+    if (A.problemOf(METER, next)) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
     return true;
   });
 }
@@ -326,7 +347,12 @@ async function getJson(path, { fetchImpl, sleep }) {
 // One request under the budget, the gate and the backoff. { res } or
 // { stop: 'budget' | 'gate' | 'failure' }.
 async function ask(ws, path, c) {
-  if (!reserve(ws, c.now())) { c.counts.budget = true; return { stop: 'budget' }; }
+  if (!reserve(ws, c.now())) {
+    const unknown = accountingHold(ws, c.now());
+    if (unknown) { c.counts.accounting_unknown = unknown; return { stop: 'accounting_unknown' }; }
+    c.counts.budget = true;
+    return { stop: 'budget' };
+  }
   c.counts.requests += 1;
   let res;
   try {
@@ -501,15 +527,20 @@ async function refresh(ws, opts = {}) {
   if (wait) return { status: 'backoff', message: `GeckoTerminal asked this desk to wait, or it is backing off, until ${wait}.` };
   const lease = acquireLease(ws, LEASE, 20 * MIN, { label: trigger });
   if (!lease) return { status: 'busy', message: 'Another run of the Paper Book\'s hourly read is in progress.' };
-  const counts = { pairs: 0, requests: 0, sources: 0, hours: 0, unchanged: 0, refused: 0, budget: false, wait_until: null, waits: [], problems: [], step: null };
+  const counts = { pairs: 0, requests: 0, sources: 0, hours: 0, unchanged: 0, refused: 0, budget: false, accounting_unknown: null, wait_until: null, waits: [], problems: [], step: null };
   const c = { now, fetchImpl, sleep, counts };
   try {
     const wanted = TD.wanted(ws, { now: iso(now()) });
     if (!wanted.length) return { status: 'noop', message: 'The Paper Book needs no hours (it is not funded, or nothing waits or is open).', counts };
     counts.pairs = wanted.length;
-    for (const w of wanted.slice(0, MAX_PAIRS_PER_RUN)) {
-      const r = await onePair(ws, w, c);
-      if (r.stop) break;
+    // Unknown accounting stops new candle requests, never the book's step on
+    // the hours already stored (cancellations, settlement, stops it can read).
+    counts.accounting_unknown = accountingHold(ws, now());
+    if (!counts.accounting_unknown) {
+      for (const w of wanted.slice(0, MAX_PAIRS_PER_RUN)) {
+        const r = await onePair(ws, w, c);
+        if (r.stop) break;
+      }
     }
     try {
       const s = TD.step(ws, { now: iso(now()) });
@@ -518,8 +549,19 @@ async function refresh(ws, opts = {}) {
     } catch (err) {
       counts.problems.push({ step: 'step', words: clean(err.message, 240) });
     }
-    updateStatus(ws, (s) => ({ ...s, last_run_at: iso(now()), last_trigger: trigger, last_result: { ...counts, problems: counts.problems.slice(0, 20), waits: counts.waits.slice(0, 20) } }));
+    updateStatus(ws, (s) => ({ ...s, last_run_at: iso(now()), last_trigger: trigger, last_result: { ...counts, problems: counts.problems.slice(0, 20), waits: counts.waits.slice(0, 20) } }), now());
     const did = counts.requests + counts.hours + (counts.step ? counts.step.done : 0);
+    if (counts.accounting_unknown) {
+      // Said as an impairment: no new hours means a stop or fill that needs a
+      // later hour cannot be evaluated until the count is repaired.
+      const stepWords = counts.step ? `${counts.step.done} done, ${counts.step.problems} problem${counts.step.problems === 1 ? '' : 's'}` : 'it did not run';
+      return {
+        status: 'held',
+        accounting_unknown: true,
+        message: `Candle collection stopped: ${counts.accounting_unknown} The book's step ran on the hours already stored (${stepWords}); a stop or fill that needs a newer hour cannot be evaluated until then.`,
+        counts,
+      };
+    }
     const words = [
       `${counts.hours} hour${counts.hours === 1 ? '' : 's'} applied for ${counts.pairs} pair${counts.pairs === 1 ? '' : 's'} from ${counts.requests} request${counts.requests === 1 ? '' : 's'}`,
       counts.sources ? `${counts.sources} pool${counts.sources === 1 ? '' : 's'} chosen` : null,
@@ -547,8 +589,10 @@ function statusView(ws, now = Date.now()) {
     version: VERSION,
     held: Boolean(heldCopy(ws)),
     wait_until: gateUntil(st, now),
-    requests_today: c.day_count,
-    requests_this_month: c.month_count,
+    // Unknown is said, never a 0 (the counts are then null).
+    accounting_unknown: c.unknown || null,
+    requests_today: c.unknown ? null : c.day_count,
+    requests_this_month: c.unknown ? null : c.month_count,
     daily_budget: DAILY_BUDGET,
     monthly_budget: MONTHLY_BUDGET,
     last_run_at: st.last_run_at || null,
@@ -562,4 +606,5 @@ function statusView(ws, now = Date.now()) {
 module.exports = {
   VERSION, ORIGIN, NETWORKS, SOURCES_REL, STATUS_REL, SETTLE_MINUTES, INITIAL_HOURS, DAILY_BUDGET, MONTHLY_BUDGET, PRICE_BAND, RULE,
   latestSettled, dec18, barsOf, targetOf, pickPool, readHours, poolsPath, hoursPath, readSources, isDue, refresh, statusView,
+  readStatus, callCounts, accountingHold, reserve,
 };

@@ -29,19 +29,47 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 // never rides on the mandate's: --admission-days=N arms it for N days (1 to
 // 30) with --admission-daily=N admissions a New York day (0 to 3, default 1),
 // --admission-off turns it off. Without them the patch leaves it as it is.
-function armPatch({ dailyCu, monthlyCu, allow = [], intentLife = INTENT_LIFE_DEFAULT, contractsOn = false, mandateDays, mandateOff = false, admissionDays, admissionDaily, admissionOff = false, settings = null, now = Date.now() } = {}) {
-  if (!Number.isInteger(intentLife) || intentLife < 1 || intentLife > 10080) throw fail('USAGE', '--intent-life takes whole minutes from 1 to 10080.');
+//
+// Off-only (bounded paper readiness A5, 2026-11-01): --mandate-off and
+// --admission-off are the whole patch, alone or together:
+//   {"automation":{"autonomous_paper_loop":false}}
+//   {"automation":{"lead_admission":{"enabled":false}}}
+// and nothing else: no lead policy, exit quotes, Paper Book, sizing,
+// allowlist, intent life, contract settings or defaults, exit-quote targets.
+// The settings write (server.js applySettings) adds the revocation of the
+// authority in force and its operation receipt. Any arming, baseline or
+// collection flag beside them is refused (OFF_CONFLICTS), never given a
+// precedence; arming is its own run.
+const OFF_CONFLICTS = Object.freeze([
+  ['dailyCu', '--daily-cu'], ['monthlyCu', '--monthly-cu'], ['allow', '--allow'], ['intentLife', '--intent-life'],
+  ['contractsOn', '--contracts-on'], ['mandateDays', '--mandate-days'], ['admissionDays', '--admission-days'], ['admissionDaily', '--admission-daily'],
+]);
+const offOnlyOf = (patch) => Boolean(patch && !patch.trader && !patch.leads && !patch.tickets && !patch.contracts && patch.automation
+  && Object.keys(patch.automation).length > 0
+  && Object.keys(patch.automation).every((k) => (k === 'autonomous_paper_loop' && patch.automation[k] === false) || (k === 'lead_admission' && JSON.stringify(patch.automation[k]) === '{"enabled":false}')));
+
+function armPatch({ dailyCu, monthlyCu, allow = [], intentLife, contractsOn = false, mandateDays, mandateOff = false, admissionDays, admissionDaily, admissionOff = false, settings = null, now = Date.now() } = {}) {
   if (mandateDays !== undefined && mandateOff) throw fail('USAGE', '--mandate-days and --mandate-off cannot both be given.');
-  if (mandateDays !== undefined && !(Number.isInteger(mandateDays) && mandateDays >= 1 && mandateDays <= 30)) throw fail('USAGE', '--mandate-days takes whole days from 1 to 30.');
   if (admissionDays !== undefined && admissionOff) throw fail('USAGE', '--admission-days and --admission-off cannot both be given.');
+  if (mandateOff || admissionOff) {
+    const given = { dailyCu: dailyCu !== undefined, monthlyCu: monthlyCu !== undefined, allow: Array.isArray(allow) && allow.length > 0, intentLife: intentLife !== undefined, contractsOn: contractsOn === true, mandateDays: mandateDays !== undefined, admissionDays: admissionDays !== undefined, admissionDaily: admissionDaily !== undefined };
+    const mixed = OFF_CONFLICTS.filter(([k]) => given[k]).map(([, flag]) => flag);
+    const off = [mandateOff && '--mandate-off', admissionOff && '--admission-off'].filter(Boolean).join(' and ');
+    if (mixed.length) throw fail('USAGE', `${off} only turn${mandateOff && admissionOff ? '' : 's'} off; ${mixed.join(', ')} ${mixed.length > 1 ? 'arm or set' : 'arms or sets'} something and cannot be given with ${mandateOff && admissionOff ? 'them' : 'it'}. Run the off and the arming as separate commands.`);
+    const automation = {};
+    if (mandateOff) automation.autonomous_paper_loop = false;
+    if (admissionOff) automation.lead_admission = { enabled: false };
+    return { automation };
+  }
+  if (intentLife === undefined) intentLife = INTENT_LIFE_DEFAULT;
+  if (!Number.isInteger(intentLife) || intentLife < 1 || intentLife > 10080) throw fail('USAGE', '--intent-life takes whole minutes from 1 to 10080.');
+  if (mandateDays !== undefined && !(Number.isInteger(mandateDays) && mandateDays >= 1 && mandateDays <= 30)) throw fail('USAGE', '--mandate-days takes whole days from 1 to 30.');
   if (admissionDays !== undefined && !(Number.isInteger(admissionDays) && admissionDays >= 1 && admissionDays <= 30)) throw fail('USAGE', '--admission-days takes whole days from 1 to 30.');
   if (admissionDaily !== undefined && !(Number.isInteger(admissionDaily) && admissionDaily >= 0 && admissionDaily <= 3)) throw fail('USAGE', '--admission-daily takes a whole number from 0 to 3.');
   if (admissionDaily !== undefined && admissionDays === undefined) throw fail('USAGE', '--admission-daily goes with --admission-days=N (automatic admission is armed only with an expiry).');
   const automation = { exit_quotes_auto: true };
   if (mandateDays !== undefined) Object.assign(automation, { autonomous_paper_loop: true, mandate: { expires_at: new Date(now + mandateDays * DAY).toISOString() } });
-  if (mandateOff) automation.autonomous_paper_loop = false;
   if (admissionDays !== undefined) automation.lead_admission = { enabled: true, daily_limit: admissionDaily === undefined ? 1 : admissionDaily, expires_at: new Date(now + admissionDays * DAY).toISOString() };
-  if (admissionOff) automation.lead_admission = { enabled: false };
   const patch = {
     leads: { enabled: true, chains: [...LEAD_CHAINS], min_market_cap_usd: 5000000, min_volume_24h_usd: 250000, max_sell_tax_pct: 5, eligibility_hours: 48 },
     automation,
@@ -64,8 +92,21 @@ function armPatch({ dailyCu, monthlyCu, allow = [], intentLife = INTENT_LIFE_DEF
   return patch;
 }
 
+// What an off-only patch does and does not reach, in words (the controls in
+// docs/engineering/BOUNDED_PAPER_READINESS.md).
+function offOnlyWords(patch) {
+  const a = patch.automation;
+  const out = [];
+  if (a.autonomous_paper_loop === false) out.push('The paper mandate is off: this write revokes the authority in force (its generation is kept, marked revoked), so it grants no new paper risk; a pending buy it granted is cancelled by the trader\'s next turn before an hour can fill it, and open positions keep their stops and closes (risk reduction goes on). Only an explicit arming (--mandate-days=N, or the mandate in Settings) arms it again, as a new generation; resuming automation or a baseline arm-desk never does.');
+  if (a.lead_admission && a.lead_admission.enabled === false) out.push('Automatic admission of scout leads is off: this write revokes its authority, so no new lead is admitted; admissions already made stay (their research requests, enrollment and records are not undone). Only an explicit arming (--admission-days=N, or admission in Settings) arms it again, as a new generation.');
+  out.push('Nothing else is written: the lead policy, automatic exit quotes, the Paper Book, sizing, the trader\'s rules and allowlist, contract settings and defaults and exit-quote targets are left as they are.');
+  out.push('This is a settings write only: the pilot-all task is not touched (pilot-task.ps1 -Disable stops later scheduled starts, not a run already going, nor the online desk\'s own jobs), and an uncertain dispatch stays for you to reconcile.');
+  return out;
+}
+
 // What the patch leaves for Eric, in words.
 function leftOpen(patch, settings) {
+  if (offOnlyOf(patch)) return offOnlyWords(patch);
   const c = (settings && settings.contracts) || {};
   const a = (settings && settings.automation) || {};
   const out = [];
@@ -94,7 +135,29 @@ function leftOpen(patch, settings) {
 // Then the pilot projects' exit-quote targets (POST /api/forensics/exit-quotes/auto,
 // under the standing policy the settings just turned on). `left`: what is
 // still Eric's, as comment lines on top.
+//
+// An off-only patch makes the settings write and one read back only: no
+// exit-quote targets, no contract defaults, nothing else asked. The read back
+// is the signed-in index's settings (GET /api/index, read only), and prints
+// only the switches and authorities the write touched.
 function onlineScript(patch, { url = 'https://cryptoresearch.onrender.com', left = [] } = {}) {
+  if (offOnlyOf(patch)) {
+    return [
+      `// Sign in at ${url}, open the browser console (F12) on that page, paste this, press Enter.`,
+      ...left.map((l) => `// What this does: ${l}`),
+      '(async () => {',
+      "  const s = await (await fetch('/api/session', { credentials: 'same-origin' })).json();",
+      "  const r = await fetch('/api/settings', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-cr-token': s.token }, body: JSON.stringify(PATCH) });".replace('PATCH', JSON.stringify(patch)),
+      "  console.log('arm-desk off', { status: r.status, body: await r.json() });",
+      '  if (r.status !== 200) return;',
+      "  const ix = await fetch('/api/index', { credentials: 'same-origin', headers: { 'x-cr-token': s.token } });",
+      "  if (ix.status !== 200) { console.log('read back failed', { status: ix.status }); return; }",
+      '  const a = (((await ix.json()).settings) || {}).automation || {};',
+      '  const au = (x) => (x && x.authority ? { generation: x.authority.generation, armed_at: x.authority.armed_at || null, revoked_at: x.authority.revoked_at || null, revoked_because: x.authority.revoked_because || null } : null);',
+      "  console.log('read back', { autonomous_paper_loop: a.autonomous_paper_loop, mandate_authority: au(a.mandate), lead_admission_enabled: a.lead_admission ? a.lead_admission.enabled : undefined, admission_authority: au(a.lead_admission), paused: a.paused });",
+      '})();',
+    ].join('\n');
+  }
   return [
     `// Sign in at ${url}, open the browser console (F12) on that page, paste this, press Enter.`,
     ...left.map((l) => `// Left for you: ${l}`),
@@ -111,8 +174,10 @@ function onlineScript(patch, { url = 'https://cryptoresearch.onrender.com', left
 // The Windows Task Scheduler task for --pilot-all every 30 minutes, through
 // dashboard/scripts/pilot-task.ps1 (readiness PR, 2026-10-31), printed and
 // never run: registered disabled for the signed-in user, the verified Node
-// binary and pilot.js in the repository folder, no window, IgnoreNew, a
-// 3-hour limit; it never replaces a task it did not make.
+// binary and pilot.js in the repository folder through the job launcher
+// (pilot-task-run.ps1; measured not windowless: a Terminal window shows
+// minimized while it runs), IgnoreNew, a 3-hour limit; it never replaces a
+// task it did not make.
 const TASK_NAME = 'CryptoResearch pilot-all';
 function scheduleText(root) {
   const ps = `powershell -NoProfile -ExecutionPolicy Bypass -File "${root}\\dashboard\\scripts\\pilot-task.ps1"`;
@@ -122,8 +187,10 @@ function scheduleText(root) {
     `${ps} -Status`,
     `${ps} -Enable`,
     'Only while you are signed in; if a run is still going the next is skipped; a missed start runs once when the PC is available; the PC is not woken. The runner\'s result is the last line of %USERPROFILE%\\.cryptoresearch\\pilot-all.jsonl (exit 3: a project needs you).',
-    `To stop it: ${ps} -Disable (or -Remove).`,
+    'Each run opens a Windows Terminal window that takes focus for about half a second, then stays minimized in the taskbar until the run ends (measured with Windows Terminal as the default terminal). Leave it open: closing it during a run was not measured.',
+    'A task registered before 2026-11-01 still starts conhost: -Disable, -Remove, then -Register it again (-Status names its launcher).',
+    `To stop it: ${ps} -Disable (or -Remove). Disabling stops later starts, not a run already going.`,
   ].join('\n');
 }
 
-module.exports = { LEAD_CHAINS, INTENT_LIFE_DEFAULT, TASK_NAME, armPatch, leftOpen, onlineScript, scheduleText };
+module.exports = { LEAD_CHAINS, INTENT_LIFE_DEFAULT, TASK_NAME, OFF_CONFLICTS, offOnlyOf, armPatch, leftOpen, onlineScript, scheduleText };

@@ -579,7 +579,7 @@ function healthLines(ws) {
       out.push(`Grade: ${p.project_id}/${r.report_id} (${r.meta.provider}, ${r.assessment.source_format || '?'}, rubric ${r.assessment.rubric_version || 'none'}) ${g.status}${g.coverage_pct !== null && g.coverage_pct !== undefined ? ` at ${g.coverage_pct}% of the weight` : ''}; ${comp.length ? comp.join('; ') : cut(g.reason || '', 120)}${ignored.length ? `; keys not in the rubric: ${ignored.join(', ')}` : ''}${errs.length ? `; errors: ${errs.join(' | ')}` : ''}.`);
     }
   }
-  out.push(`Prices: ${f.freshness}${f.note ? ` (${cut(f.note, 160)})` : ''}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.rate_limited ? `; rate-limited until ${f.retry_at}` : ''}; requests this month ${f.calls ? `${f.calls.month_count}${typeof f.calls.month_answered === 'number' ? ` (${f.calls.month_answered} answered)` : ''}` : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}; not returned ${notReturned.size ? [...notReturned].join(', ') : 'none'}.`);
+  out.push(`Prices: ${f.freshness}${f.note ? ` (${cut(f.note, 160)})` : ''}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.rate_limited ? `; rate-limited until ${f.retry_at}` : ''}; requests this month ${f.calls && f.calls.unknown ? 'unknown (the count cannot be used; nothing is sent)' : f.calls ? `${f.calls.month_count}${typeof f.calls.month_answered === 'number' ? ` (${f.calls.month_answered} answered)` : ''}` : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}; not returned ${notReturned.size ? [...notReturned].join(', ') : 'none'}.`);
   try {
     const fo = require('./core/fundamentals').overview(ws);
     const states = Object.entries(fo.states).filter(([s]) => s !== 'unmapped').map(([s, n]) => `${s} ${n}`).join(', ');
@@ -588,7 +588,7 @@ function healthLines(ws) {
   try {
     const so = require('./core/screening').overview(ws);
     const states = Object.entries(so.states).map(([s, n]) => `${s} ${n}`).join(', ');
-    out.push(`Contract screening: ${so.enabled ? `${so.screened} screened${states ? ` (${states})` : ''}; alerts ${so.alerts}; last run ${so.last_run ? `${so.last_run.at} ${so.last_run.status}` : 'never'}; requests this month ${so.calls.month_count}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; packets ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : `GoPlus keyless${so.credential_note ? ` (${so.credential_note})` : ''}`}` : 'turned off in settings'}.`);
+    out.push(`Contract screening: ${so.enabled ? `${so.screened} screened${states ? ` (${states})` : ''}; alerts ${so.alerts}; last run ${so.last_run ? `${so.last_run.at} ${so.last_run.status}` : 'never'}; requests this month ${so.accounting_unknown ? 'unknown (the count cannot be used; nothing is sent)' : so.calls.month_count}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; packets ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : `GoPlus keyless${so.credential_note ? ` (${so.credential_note})` : ''}`}` : 'turned off in settings'}.`);
   } catch (_) { /* screening module optional */ }
   try {
     // Tracked wallets: counts and states only, never an address or a label.

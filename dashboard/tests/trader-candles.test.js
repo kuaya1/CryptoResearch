@@ -14,6 +14,8 @@ const T = require('../core/tickets');
 const TD = require('../core/trader-desk');
 const PT = require('../core/paper-trader');
 const C = require('../core/trader-candles');
+const A = require('../core/call-accounting');
+const MC = require('./meter-cases');
 const { ymdInTz } = require('../core/dates');
 
 const H = 3600000;
@@ -279,7 +281,7 @@ test('an error backs off; the day\'s request budget stops the read before anythi
   assert.match(r.message, /did not answer \(FICTIONAL: socket closed\)/);
   assert.equal(C.isDue(s.ws, clock.t + M), false, 'a backoff of about 15 minutes');
   const day = ymdInTz(new Date(clock.t + H));
-  fs.writeFileSync(s.ws.abs(C.STATUS_REL), JSON.stringify({ calls: { month: day.slice(0, 7), month_count: C.DAILY_BUDGET, day, day_count: C.DAILY_BUDGET } }));
+  fs.writeFileSync(s.ws.abs(C.STATUS_REL), JSON.stringify({ schema_version: 'cr.trader-candles-status.v1', calls: { month: day.slice(0, 7), month_count: C.DAILY_BUDGET, day, day_count: C.DAILY_BUDGET } }));
   const g = gecko(clock);
   const b = await run(s.ws, { t: clock.t + H }, g);
   assert.equal(b.status, 'budget_paused');
@@ -305,6 +307,54 @@ test('nothing is asked until Eric funds the book, and a restored copy asks nothi
   t.after(() => { global.fetch = realFetch; });
   const j = await require('../core/jobs').runJob(s.ws, 'trader', { trigger: 'test' });
   assert.equal(j.status, 'skipped');
+});
+
+// Bounded paper readiness A2: the provider-meter matrix (tests/meter-cases.js,
+// call-accounting.test.js for the other three meters) through the hourly read.
+test('an unusable request count asks GeckoTerminal nothing and keeps the file as it is; the book still steps on stored hours and the impairment is said; a usable one asks', async (t) => {
+  const s = deskWith(t);
+  const clock = clockFrom();
+  const g = gecko(clock);
+  for (const c of MC.invalidCases('candles', clock.t)) {
+    MC.put(s.ws, C.STATUS_REL, c);
+    const before = MC.stored(s.ws, C.STATUS_REL);
+    const r = await run(s.ws, clock, g);
+    assert.equal(r.status, 'held', `${c.name}: ${r.message}`);
+    assert.equal(r.accounting_unknown, true);
+    assert.match(r.message, /^Candle collection stopped: GeckoTerminal's candle read's request count \(market-data\/trader\/candles-status\.json\) cannot be used: .+ The book's step ran on the hours already stored \(\d+ done, \d+ problems?\); a stop or fill that needs a newer hour cannot be evaluated until then\.$/);
+    assert.ok(r.counts.step, `${c.name}: the step ran`);
+    assert.equal(g.calls.length, 0, `${c.name}: nothing was sent`);
+    assert.equal(MC.stored(s.ws, C.STATUS_REL), before, `${c.name}: the file is kept as it is`);
+    const v = C.statusView(s.ws, clock.t);
+    assert.ok(v.accounting_unknown, `${c.name}: the view says so`);
+    assert.deepEqual([v.requests_today, v.requests_this_month], [null, null], `${c.name}: never shown as 0`);
+  }
+  assert.equal(PT.hours(s.ws).length, 0, 'no hour was taken while the count could not be used');
+  MC.put(s.ws, C.STATUS_REL, { absent: true });
+  const ok = await run(s.ws, clock, g);
+  assert.equal(ok.status, 'ok', ok.message);
+  assert.equal(g.calls.length, 2, 'the same desk asks with a count it can use');
+  const written = A.classify('candles', () => fs.readFileSync(s.ws.abs(C.STATUS_REL), 'utf8'));
+  assert.equal(written.unknown, null, 'the writer\'s output reads');
+  assert.deepEqual([written.status.calls.month_count, written.status.calls.day_count], [2, 2]);
+});
+
+test('a request count that goes bad while a candle request is out is kept as it is: no further request, and the run ends held', async (t) => {
+  const s = deskWith(t);
+  const clock = clockFrom();
+  const bad = '{"schema_version": "cr.trader-candles-status.v1", "calls": {"month": "2026-11", "month_count": 1e999}}\n';
+  const g = gecko(clock);
+  const fetchImpl = async (url, opts) => {
+    const res = await g.fetchImpl(url, opts);
+    fs.writeFileSync(s.ws.abs(C.STATUS_REL), bad);
+    return res;
+  };
+  const r = await run(s.ws, clock, { fetchImpl });
+  assert.equal(r.status, 'held', r.message);
+  assert.equal(g.calls.length, 1, 'the pools request was out; the hours were never asked');
+  assert.equal(fs.readFileSync(s.ws.abs(C.STATUS_REL), 'utf8'), bad, 'finalizing the run did not overwrite it');
+  assert.equal((await run(s.ws, clock, g)).status, 'held');
+  assert.equal(g.calls.length, 1);
 });
 
 test('the job runs on the desk\'s 30-minute timer, and the read reaches the trader only through the adapter and the network only at GeckoTerminal', () => {

@@ -36,9 +36,19 @@
 // boundary, which stays the enforcement): the pilot's daily sessions, the
 // exit-quote monitor's monthly requests (counted and planned), CoinGecko's
 // and GoPlus's monthly calls, the contract RPC's daily and monthly compute
-// units and GeckoTerminal's candle calls. A meter never run reads as 0 used;
-// one that cannot be read holds. An approved exit target is not a
+// units and GeckoTerminal's candle calls. Every count comes from its provider's
+// own validated reader (call-accounting.js, bounded paper readiness): a meter
+// never run reads as 0 used; one that cannot be read, is malformed or counts a
+// day after today holds, never 0. An approved exit target is not a
 // reservation, so its planned load is checked here too.
+//
+// Sessions (bounded paper readiness): a pipeline needs a Researcher and a
+// Prosecutor, so admission needs MIN_SESSIONS of today's sessions still LEFT,
+// not merely a ceiling that large. This is readiness only: no session is
+// reserved here (the worker's bind in pilot-claims.js stays the one place that
+// does), so another enrolled project may still use them after the admission,
+// and the worker then waits at its own ceiling. reserve() reads it all again
+// under the lock, at the lock's clock.
 //
 // Read only here, except reserve(), which writes the admission and the lead
 // in one verified operation; the effects run after the lock (leads.js).
@@ -167,42 +177,43 @@ function authorityOf(ws, now = Date.now()) {
 // [{ meter, code, why }], empty when nothing holds. Reads only.
 function budgetHolds(ws, now = Date.now()) {
   const out = [];
-  const hold = (meter, code, why) => out.push({ meter, code, why });
+  const hold = (meter, code, why, extra = {}) => out.push({ meter, code, why, ...extra });
   const over = (used, cap) => used > cap * (1 - HEADROOM);
-  const day = ymdInTz(new Date(now));
-  const month = day.slice(0, 7);
-  const countsIn = (st, m = month, d = day) => {
-    const c = st && isObj(st.calls) ? st.calls : null;
-    return { month: c && c.month === m ? Number(c.month_count) || 0 : 0, day: c && c.day === d ? Number(c.day_count) || 0 : 0 };
-  };
-  // The pilot's sessions: a pipeline needs a Researcher and a Prosecutor.
-  const s = require('./pilot-claims').sessionsView(ws, now);
-  if (s.unreadable) hold('sessions', 'unreadable', 'The pilot\'s session count for today could not be read.');
-  else if (!(s.ceiling >= MIN_SESSIONS)) hold('sessions', 'cap', `The pilot's daily session ceiling (${s.ceiling}) is below the ${MIN_SESSIONS} a pipeline needs.`);
+  // A provider's own validated reader, or why it cannot be used. A reader that
+  // throws is unknown too.
+  const counted = (fn) => { try { return fn(); } catch (err) { return { unknown: String((err && err.message) || err).slice(0, 200) }; } };
+  const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
+  // The pilot's sessions: a pipeline needs a Researcher and a Prosecutor, so
+  // MIN_SESSIONS must be LEFT today (not merely the ceiling).
+  const s = counted(() => require('./pilot-claims').sessionsView(ws, now));
+  if (s.unknown || s.unreadable) hold('sessions', 'unreadable', 'The pilot\'s session count for today could not be read.');
+  else if (!isCount(s.ceiling) || !isCount(s.used) || !isCount(s.left) || s.left !== Math.max(0, s.ceiling - s.used)) hold('sessions', 'unreadable', `The pilot's session count for today does not add up (used ${JSON.stringify(s.used)}, ceiling ${JSON.stringify(s.ceiling)}, left ${JSON.stringify(s.left)}).`);
+  else if (s.ceiling < MIN_SESSIONS) hold('sessions', 'cap', `The pilot's daily session ceiling (${s.ceiling}) is below the ${MIN_SESSIONS} a pipeline needs.`);
+  else if (s.left < MIN_SESSIONS) hold('sessions', 'capacity', `${s.used} of today's ${s.ceiling} pilot sessions are used (${s.day}, New York); ${s.left} left, and a pipeline needs ${MIN_SESSIONS} (a Researcher and a Prosecutor).`, { used: s.used, ceiling: s.ceiling, remaining: s.left, required: MIN_SESSIONS, day: s.day });
   // The exit-quote monitor: what was sent this month and what is planned.
-  const fm = require('./forensic-monitor').readStatus(ws);
+  const FM = require('./forensic-monitor');
+  const fm = counted(() => FM.callCounts(FM.readStatus(ws), now));
   const qb = require('./forensics').quoteBudgetOf(ws);
-  if (fm.unreadable) hold('exit_quotes', 'unreadable', 'The exit-quote monitor\'s request count could not be read.');
+  if (fm.unknown) hold('exit_quotes', 'unreadable', fm.unknown);
   else if (!(qb.budget > 0)) hold('exit_quotes', 'unset', 'The exit-quote monitor has no monthly request budget.');
   else {
-    const sent = countsIn(fm).month;
+    const sent = fm.month_count;
     if (over(sent, qb.budget)) hold('exit_quotes', 'headroom', `The exit-quote monitor sent ${sent} of ${qb.budget} requests this month, past 85%.`);
     else if (over(qb.used + qb.per, qb.budget)) hold('exit_quotes', 'headroom', `About ${qb.per} more exit-quote requests a month would bring the planned load to ${qb.used + qb.per} of ${qb.budget}, past 85%.`);
   }
   // CoinGecko (its own month key, as market.callBudget counts it).
   const market = require('./market');
-  let cg = null;
-  try { cg = market.callBudget(ws, market.readStatus(ws)); } catch (_) { cg = null; }
-  if (!cg) hold('coingecko', 'unreadable', 'CoinGecko\'s call count could not be read.');
+  const cg = counted(() => market.callBudget(ws, market.readStatus(ws), now));
+  if (cg.unknown) hold('coingecko', 'unreadable', cg.unknown);
   else if (!(cg.budget_monthly > 0)) hold('coingecko', 'unset', 'CoinGecko has no monthly call budget.');
   else if (over(cg.month_count, cg.budget_monthly)) hold('coingecko', 'headroom', `CoinGecko used ${cg.month_count} of ${cg.budget_monthly} calls this month, past 85%.`);
   // GoPlus.
   const screening = require('./screening');
-  const gp = screening.readStatus(ws);
+  const gp = counted(() => screening.callCounts(screening.readStatus(ws), now));
   const gpCap = { ...screening.DEFAULTS, ...((ws.settings && ws.settings.screening) || {}) }.monthly_request_budget;
-  if (gp.unreadable) hold('goplus', 'unreadable', 'GoPlus\'s request count could not be read.');
+  if (gp.unknown) hold('goplus', 'unreadable', gp.unknown);
   else if (!(gpCap > 0)) hold('goplus', 'unset', 'GoPlus has no monthly request budget.');
-  else if (over(countsIn(gp).month, gpCap)) hold('goplus', 'headroom', `GoPlus used ${countsIn(gp).month} of ${gpCap} requests this month, past 85%.`);
+  else if (over(gp.month_count, gpCap)) hold('goplus', 'headroom', `GoPlus used ${gp.month_count} of ${gpCap} requests this month, past 85%.`);
   // The contract RPC's compute units (the contract gate's evidence).
   const rpc = require('./contract-rpc');
   const c = (ws.settings && ws.settings.contracts) || {};
@@ -218,13 +229,9 @@ function budgetHolds(ws, now = Date.now()) {
   }
   // GeckoTerminal's candles (the book's hours).
   const tc = require('./trader-candles');
-  let cs = null;
-  try { cs = readJson(ws.abs(tc.STATUS_REL), { state: 'never_run' }); } catch (_) { cs = null; }
-  if (!cs) hold('candles', 'unreadable', 'GeckoTerminal\'s candle call count could not be read.');
-  else {
-    const k = countsIn(cs);
-    if (over(k.day, tc.DAILY_BUDGET) || over(k.month, tc.MONTHLY_BUDGET)) hold('candles', 'headroom', `GeckoTerminal candle calls: ${k.day} of ${tc.DAILY_BUDGET} today and ${k.month} of ${tc.MONTHLY_BUDGET} this month, past 85%.`);
-  }
+  const k = counted(() => tc.callCounts(tc.readStatus(ws), now));
+  if (k.unknown) hold('candles', 'unreadable', k.unknown);
+  else if (over(k.day_count, tc.DAILY_BUDGET) || over(k.month_count, tc.MONTHLY_BUDGET)) hold('candles', 'headroom', `GeckoTerminal candle calls: ${k.day_count} of ${tc.DAILY_BUDGET} today and ${k.month_count} of ${tc.MONTHLY_BUDGET} this month, past 85%.`);
   return out;
 }
 

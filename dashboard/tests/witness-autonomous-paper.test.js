@@ -43,6 +43,7 @@ const CW = require('./contract-world');
 const TF = require('./trader-fixture');
 const { stubGrade, noHoldings, CONSISTENT } = require('./mandate-fixture');
 const MA = require('../core/mandate-authority');
+const { ymdInTz } = require('../core/dates');
 
 const HR = 3600000;
 const MIN = 60000;
@@ -91,12 +92,24 @@ function exitReadings() {
   return () => { F.view = real; };
 }
 
+// The witness's start unless a test names its own: 10:20 in New York (14:20
+// UTC) on an ordinary autumn weekday, 20 minutes into an hour, so the path
+// never depends on the hour, the day or the season the suite runs in
+// (bounded paper readiness A3). It sits 13 days after the fixture reports'
+// analysis date (2026-09-24), inside the 90-day research freshness limit:
+// started from a real clock, the witness passed on 2026-11-20 and failed from
+// 2026-12-24 on (research due again, so no Prosecutor was claimed). Every
+// fixture below (prices, exit readings, the Prosecutor's answer, the
+// contract node's block, GeckoTerminal's hours, the mandate's expiry) is made
+// at the mocked clock.
+const EPOCH = Date.parse('2026-10-07T14:20:00Z');
+
 // A funded desk with one enrolled pilot project whose token is a contract on
 // Base, observed through the fictional node (a 72-hour timelock: a review,
 // never a block or a hold), the trader's rules and book and the mandate set
 // by settings writes. The clock starts 20 minutes into an hour (H0).
-async function witnessDesk(t, { expiresAt = null } = {}) {
-  const T0 = (Math.floor(Date.now() / HR) + 1) * HR + 20 * MIN;
+async function witnessDesk(t, { expiresAt = null, at = EPOCH } = {}) {
+  const T0 = at;
   t.mock.timers.enable({ apis: ['Date'], now: T0 });
   const w = H.tempWorkspace('witness', {
     contracts: { daily_cu_cap: 1000000, monthly_cu_cap: 10000000, pool_factories: [CW.ROW], max_log_blocks: 1000, network_fee_ceiling_usd: { 8453: 0.5 } },
@@ -242,7 +255,12 @@ test('witness: the scheduled path takes a pilot ticket to exactly one fill on th
   assert.deepEqual(opens(ws2).map((i) => i.intent_id), [intent.intent_id], 'one intended order, the same ID');
   assert.equal(PT.results(ws2, { now: iso(Date.now()) }).open_positions.length, 1, 'one position after the restart');
   assert.equal(decision.receipt_id, s.pros.receipt_id, 'the decision is on the worker\'s receipt');
-  assert.equal(PC.sessionsView(ws2).used, 1, 'one Prosecutor session counted');
+  // One Prosecutor session: the durable record is the worker's attempt, on
+  // the New York day it was bound, and that day's view at an explicit instant.
+  const ledger = fs.readFileSync(ws2.abs(PC.SESSIONS_REL), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const day = ymdInTz(new Date(s.T0));
+  assert.deepEqual(ledger.map((r) => [r.attempt_id, r.day, r.project_id, r.step]), [[s.pros.attempt_id, day, s.pid, 'ticket']]);
+  assert.deepEqual(PC.sessionsView(ws2, s.T0), { day, used: 1, ceiling: 6, left: 5, unreadable: false }, 'one Prosecutor session counted');
   // The status output names the next action, the authority and every ID.
   const [row] = MA.statusRows(ws2, T.pilotQueue(ws2), { sessions: PC.sessionsView(ws2) });
   assert.equal(row.blocker, null, JSON.stringify(row));
@@ -295,7 +313,7 @@ for (const [name, act] of INTERVENTIONS) {
 
 test('witness: the mandate expires inside the first eligible hour: that hour cancels the buy instead of filling it', async (t) => {
   // Armed to expire at H0 + 1h30m: H0's hour ends inside it, H0 + 1h's after.
-  const T0 = (Math.floor(Date.now() / HR) + 1) * HR + 20 * MIN;
+  const T0 = EPOCH;
   const s = await toOrder(t, { expiresAt: iso(Math.floor(T0 / HR) * HR + HR + 30 * MIN) });
   t.mock.timers.tick(HR);
   await tick(s.ws);

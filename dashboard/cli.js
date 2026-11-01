@@ -105,7 +105,9 @@ Contract state (read-only chain reads at a finalized block; nothing is read whil
                                          the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules,
                                          the floor for a new entry at 50); --contracts-on needs both caps; --mandate-days=N (1-30) turns the
                                          paper mandate on; --admission-days=N (1-30) arms automatic admission of ELIGIBLE scout leads
-                                         (--admission-daily 0-3 a day, default 1; the mandate flags never do); --desk=online prints what to
+                                         (--admission-daily 0-3 a day, default 1; the mandate flags never do); --mandate-off and
+                                         --admission-off are off-only, alone or together: they write only those switches (and revoke the
+                                         authority in force), nothing else, and refuse any other flag beside them; --desk=online prints what to
                                          paste into the signed-in desk's browser console;
                                          --print-schedule prints the pilot-task.ps1 commands that register pilot-all every 30 minutes (never runs them)
 
@@ -1127,6 +1129,7 @@ async function run(argv) {
       const S = require('./server');
       const desk = one(flags.desk) || 'local';
       if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...] [--intent-life=MIN] [--contracts-on] [--mandate-days=N | --mandate-off] [--admission-days=N [--admission-daily=N] | --admission-off] [--print-schedule]'), { code: 'USAGE' });
+      if (flags.print_schedule && (flags.mandate_off || flags.admission_off)) throw Object.assign(new Error('--print-schedule prints the task commands and writes nothing; --mandate-off and --admission-off are settings writes. Run them as separate commands.'), { code: 'USAGE' });
       if (flags.print_schedule) return { _text: `${A.scheduleText(path.join(__dirname, '..'))}\n` };
       const whole = (v, name) => {
         if (v === undefined) return undefined;
@@ -1150,10 +1153,31 @@ async function run(argv) {
         settings: desk === 'local' ? ws.settings : null,
       });
       const checked = S.validateSettingsPatch(patch, ws);
+      // Off-only (A5): only the requested switches, no contract defaults, no
+      // other endpoint; locally the write is read back.
+      const offOnly = A.offOnlyOf(patch);
       if (desk === 'online') {
         const left = A.leftOpen(patch, null);
         const script = A.onlineScript(patch, { left });
-        return process.argv.includes('--json') ? { desk: 'online', valid: true, patch, script, left_for_you: left } : { _text: `${script}\n` };
+        return process.argv.includes('--json') ? { desk: 'online', valid: true, ...(offOnly ? { mode: 'off_only' } : {}), patch, script, left_for_you: left } : { _text: `${script}\n` };
+      }
+      if (offOnly) {
+        const left = A.leftOpen(patch, ws.settings);
+        if (flags.dry_run) return { status: 'planned', dry_run: true, desk: 'local', mode: 'off_only', valid: true, patch: checked, left_for_you: left };
+        const { out } = S.applySettings(ws, patch, 'Turn off (arm-desk off-only)');
+        const a = ws.settings.automation || {};
+        const au = (x) => (x && x.authority ? { generation: x.authority.generation, revoked_at: x.authority.revoked_at || null, revoked_because: x.authority.revoked_because || null } : null);
+        const readback = {
+          autonomous_paper_loop: a.autonomous_paper_loop,
+          mandate_on: require('./core/tickets').mandateOf(ws).on,
+          mandate_authority: au(a.mandate),
+          lead_admission_enabled: a.lead_admission ? a.lead_admission.enabled : undefined,
+          admission_on: require('./core/lead-admission').authorityOf(ws).on,
+          admission_authority: au(a.lead_admission),
+        };
+        const held = (patch.automation.autonomous_paper_loop !== false || (readback.autonomous_paper_loop === false && readback.mandate_on === false))
+          && (!patch.automation.lead_admission || (readback.lead_admission_enabled === false && readback.admission_on === false));
+        return { status: 'saved', verified: Boolean(out.verified && held), desk: 'local', mode: 'off_only', applied: checked, readback, left_for_you: left };
       }
       const presets = require('./core/contract-presets').plan(ws.settings);
       const left = A.leftOpen(patch, ws.settings);

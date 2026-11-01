@@ -80,11 +80,40 @@ function exitReadings() {
   return () => { F.view = real; };
 }
 
+// The mocked start of every desk unless a test names its own instant: 10:20
+// in New York (15:20 UTC) on an ordinary winter day, 20 minutes into an hour,
+// so no test depends on the hour, the day or the season it runs in
+// (bounded paper readiness A3).
+const EPOCH = Date.parse('2027-01-15T15:20:00Z');
+
+// The first instant of the New York day after `ms`'s (its midnight), found on
+// the calendar, never as "+24 hours": a day there is 23 hours at spring
+// forward and 25 at fall back.
+function nextNyMidnight(ms) {
+  const day = ymdInTz(new Date(ms));
+  let lo = ms;
+  let hi = ms + 26 * HR;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (ymdInTz(new Date(mid)) === day) lo = mid; else hi = mid;
+  }
+  return hi;
+}
+
+// Session records as the pilot worker's bind writes them (pilot-claims.js),
+// for other FICTIONAL projects' attempts on `day`.
+function spendSessions(ws, n, day, tag = 'other') {
+  const abs = ws.abs(PC.SESSIONS_REL);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  for (let i = 0; i < n; i++) fs.appendFileSync(abs, `${JSON.stringify({ format: PC.SESSION_FORMAT, day, at: iso(Date.now()), project_id: `${tag}-fictional`, attempt_id: `pa_${tag}_${day}_${i}`, step: 'research', run_id: null, ticket_id: null, owner: 'test' })}\n`);
+}
+const sessionLines = (ws) => (fs.existsSync(ws.abs(PC.SESSIONS_REL)) ? fs.readFileSync(ws.abs(PC.SESSIONS_REL), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+
 // A desk with Eric's lead policy, contract observations on with caps, the
 // gates as the witness sets them, and every network refused unless a test
-// routes it. `at` is the mocked start (default: 20 minutes into an hour).
+// routes it. `at` is the mocked start (default: EPOCH).
 function desk(t, { at = null, settings = {} } = {}) {
-  const T0 = at || (Math.floor(Date.now() / HR) + 1) * HR + 20 * MIN;
+  const T0 = at || EPOCH;
   t.mock.timers.enable({ apis: ['Date'], now: T0 });
   const w = H.tempWorkspace('auto-admit', {
     leads: POLICY,
@@ -264,7 +293,11 @@ test('witness: one Grok lead becomes one project, one enrollment, one Claude run
   assert.equal(research.listRuns(ws2, pid).length, 1);
   assert.equal(T.listReceipts(ws2, pid).length, 1);
   assert.equal(PT.intents(ws2).filter((i) => i.side === 'OPEN_LONG').length, 1);
-  assert.equal(PC.sessionsView(ws2).used, 2, 'a Researcher and a Prosecutor session');
+  // The two sessions as durable records, each its attempt's, on the New York
+  // day they were bound; and the day's view at an explicit instant.
+  const day = ymdInTz(new Date(s.T0));
+  assert.deepEqual(sessionLines(ws2).map((r) => [r.attempt_id, r.day, r.project_id, r.step]), [[c1.attempt_id, day, pid, 'research'], [c2.attempt_id, day, pid, 'ticket']]);
+  assert.deepEqual(PC.sessionsView(ws2, s.T0), { day, used: 2, ceiling: 6, left: 4, unreadable: false }, 'a Researcher and a Prosecutor session');
 });
 
 test('the due check finds admission work while GoPlus\'s gate is closed; admitting sends no provider request', async (t) => {
@@ -288,6 +321,9 @@ test('the due check finds admission work while GoPlus\'s gate is closed; admitti
 });
 
 test('concurrent sweeps in four processes and a repeated delivery reserve one slot and one admission', async (t) => {
+  // The real clock on purpose: the four processes cannot share a mocked one,
+  // and what is under test (one reservation, the rest "backlog") holds at any
+  // hour, a New York midnight between them included.
   const s = desk(t, { at: Date.now() });
   await xmplLead(s.ws);
   await otherLead(s.ws, 7);
@@ -399,8 +435,10 @@ test('a reservation counts for its day whatever becomes of it, a failed one hold
   await tick(s.ws);
   assert.equal(delegated(s.ws).length, 1, 'the second lead waits');
   // Past the start deadline the next tick lapses it (what was done stays)
-  // and the backlog clears; the lapsed one still counts for its own day.
-  t.mock.timers.tick(DAY + MIN);
+  // and the backlog clears; the lapsed one still counts for its own day. The
+  // next day is reached on the calendar (New York's midnight), not by adding
+  // 24 hours, and past the 24-hour start deadline.
+  t.mock.timers.tick(Math.max(nextNyMidnight(Date.now()), s.T0 + DAY) + MIN - Date.now());
   m.mock.restore();
   await tick(s.ws);
   const again = L.readAdmission(s.ws, a.admission_id);
@@ -528,6 +566,207 @@ test('the day is New York\'s: 23:50 there is still the same day after UTC midnig
   assert.equal(all.find((x) => x.admission_id !== a.admission_id).reservation.day, '2027-01-16');
 });
 
+// One daily allowance per New York calendar day, whatever its length: three
+// leads, the pipeline rested (archived) after each admission, ticks at the
+// instants named. `steps` are [ISO instant, the expected count of delegated
+// admissions after a tick there, the New York day of the newest].
+async function calendarDay(t, at, steps) {
+  const s = desk(t, { at: Date.parse(at) });
+  await xmplLead(s.ws);
+  await otherLead(s.ws, 21);
+  await otherLead(s.ws, 22);
+  arm(s.ws, { days: 4 });
+  for (const [when, count, day] of steps) {
+    t.mock.timers.tick(Date.parse(when) - Date.now());
+    await tick(s.ws);
+    const all = delegated(s.ws).sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
+    assert.equal(all.length, count, `${when} (${ymdInTz(new Date(Date.parse(when)))} in New York): ${LA.plan(s.ws).why}`);
+    assert.equal(all[all.length - 1].reservation.day, day, `${when}: the newest reservation's day`);
+    for (const a of all) if (projects.getProject(s.ws, a.project_id).status !== 'archived') projects.archiveProject(s.ws, a.project_id, 'FICTIONAL: rest the pipeline');
+  }
+  return s;
+}
+
+test('spring forward (2027-03-14): the 23-hour New York day has one daily allowance across the missing hour and both of its midnights', async (t) => {
+  assert.equal(nextNyMidnight(Date.parse('2027-03-14T05:10:00Z')) - Date.parse('2027-03-14T05:00:00Z'), 23 * HR, 'a 23-hour day');
+  await calendarDay(t, '2027-03-14T04:50:00Z', [
+    ['2027-03-14T04:50:00Z', 1, '2027-03-13'], // 23:50 EST on the 13th
+    ['2027-03-14T05:10:00Z', 2, '2027-03-14'], // 00:10 EST: the 14th
+    ['2027-03-14T07:10:00Z', 2, '2027-03-14'], // 03:10 EDT: after the missing hour, the same day
+    ['2027-03-15T03:50:00Z', 2, '2027-03-14'], // 23:50 EDT: still the 14th, 22h40m after its start
+    ['2027-03-15T04:10:00Z', 3, '2027-03-15'], // 00:10 EDT: the 15th
+  ]);
+});
+
+test('fall back (2027-11-07): the 25-hour New York day has one daily allowance across both 01:30s and both of its midnights; 24 hours later is still that day', async (t) => {
+  assert.equal(nextNyMidnight(Date.parse('2027-11-07T04:10:00Z')) - Date.parse('2027-11-07T04:00:00Z'), 25 * HR, 'a 25-hour day');
+  // The assumption the old tests made, shown false on this day: 24 hours
+  // after 00:10 is 23:10 the same day, not tomorrow.
+  assert.equal(ymdInTz(new Date(Date.parse('2027-11-07T04:10:00Z') + DAY)), '2027-11-07');
+  await calendarDay(t, '2027-11-07T03:50:00Z', [
+    ['2027-11-07T03:50:00Z', 1, '2027-11-06'], // 23:50 EDT on the 6th
+    ['2027-11-07T04:10:00Z', 2, '2027-11-07'], // 00:10 EDT: the 7th
+    ['2027-11-07T05:30:00Z', 2, '2027-11-07'], // 01:30 EDT
+    ['2027-11-07T06:30:00Z', 2, '2027-11-07'], // 01:30 EST, the hour again
+    ['2027-11-08T04:11:00Z', 2, '2027-11-07'], // 23:11 EST: 24h01m later, the same day
+    ['2027-11-08T05:10:00Z', 3, '2027-11-08'], // 00:10 EST: the 8th
+  ]);
+});
+
+test('a pending admission recovered after New York\'s midnight keeps its day and ID: no second slot, no second effect, no session charged by it', async (t) => {
+  // 23:50 in New York on the 15th (04:50 UTC on the 16th).
+  const s = desk(t, { at: Date.parse('2027-01-16T04:50:00Z') });
+  await xmplLead(s.ws);
+  await otherLead(s.ws, 23);
+  arm(s.ws, { daily: 1 });
+  const m = t.mock.method(research, 'createRun', () => { throw new Error('FICTIONAL: the run is refused before midnight'); });
+  await tick(s.ws);
+  m.mock.restore();
+  const [a] = delegated(s.ws);
+  assert.deepEqual([a.reservation.day, a.effects.project, a.effects.research], ['2027-01-15', 'done', 'failed']);
+  // Across midnight, after a restart: the same admission finishes.
+  t.mock.timers.tick(Date.parse('2027-01-16T05:10:00Z') - Date.now());
+  const ws2 = openWorkspace({ root: s.root, actor: 'test' });
+  await tick(ws2);
+  await tick(ws2);
+  const all = delegated(ws2);
+  assert.equal(all.length, 1, 'no second admission for the new day while it is active');
+  const b = all[0];
+  assert.equal(b.state, 'complete', b.words);
+  assert.deepEqual([b.admission_id, b.reservation.reservation_id, b.reservation.day], [a.admission_id, a.reservation.reservation_id, '2027-01-15'], 'its own day and ID');
+  assert.equal(research.listRuns(ws2, b.project_id).length, 1, 'one run');
+  assert.equal(live(ws2).length, 1, 'one project');
+  assert.equal(LA.plan(ws2).code, 'backlog', 'the recovered pipeline is the active one');
+  assert.deepEqual(sessionLines(ws2), [], 'admission charges no session');
+  // The Researcher's dispatch after midnight is charged once, to the 16th.
+  H.freshPrice(ws2, 'example-xmpl-fictional', 0.85);
+  const c = PW.claimStep(ws2, b.project_id, { owner: 'test' });
+  assert.deepEqual([c.status, c.step], ['claimed_now', 'research'], c.words);
+  const p = await PW.prepare(ws2, b.project_id, c.token, { fetchImpl: async () => { throw new Error('FICTIONAL: no network'); } });
+  assert.equal(p.status, 'prepared', p.words);
+  assert.deepEqual(sessionLines(ws2).map((r) => [r.attempt_id, r.day]), [[c.attempt_id, '2027-01-16']]);
+  assert.throws(() => PC.bind(ws2, b.project_id, c.token, { run_id: b.run_id }), (e) => e.code === 'ALREADY_BOUND', 'a dispatched attempt is never charged twice');
+  assert.equal(sessionLines(ws2).length, 1);
+  assert.deepEqual([PC.sessionsView(ws2, Date.parse('2027-01-16T05:10:00Z')).used, PC.sessionsView(ws2, Date.parse('2027-01-16T04:50:00Z')).used], [1, 0], 'each New York day counts its own');
+});
+
+test('valid old counts stay on file after midnight and count zero for the new day; a count dated after today holds instead of resetting', async (t) => {
+  const s = desk(t, { at: Date.parse('2027-01-16T04:50:00Z') });
+  await xmplLead(s.ws);
+  arm(s.ws);
+  const sc = require('../core/screening');
+  const file = s.ws.abs(sc.STATUS_REL);
+  const yesterday = JSON.stringify({ schema_version: 'cr.screening-status.v1', state: 'ok', calls: { month: '2027-01', month_count: 1400, month_answered: 1400, day: '2027-01-15', day_count: 900, day_answered: 900 } });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, yesterday);
+  // 23:50 on the 15th: GoPlus is past 85% of its month.
+  assert.match(LA.plan(s.ws).why, /GoPlus used 1400 of 1500/);
+  // 00:10 on the 16th: the same month, so still held; the day's count is the
+  // new day's (0) and the file is as it was.
+  t.mock.timers.tick(20 * MIN);
+  assert.match(LA.plan(s.ws).why, /GoPlus used 1400 of 1500/);
+  assert.equal(sc.callCounts(sc.readStatus(s.ws), Date.now()).day_count, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), yesterday, 'the old record is kept');
+  // A count for the 17th, read on the 16th: unknown, held, never reset.
+  const tomorrow = yesterday.replace(/2027-01-15/g, '2027-01-17').replace('"month_count":1400', '"month_count":10').replace('"month_answered":1400', '"month_answered":10').replace(/"day_count":900/, '"day_count":5').replace(/"day_answered":900/, '"day_answered":5');
+  fs.writeFileSync(file, tomorrow);
+  const p = LA.plan(s.ws);
+  assert.equal(p.code, 'budget');
+  assert.match(p.why, /GoPlus's request count \(market-data\/screening\/status\.json\) cannot be used: it counts 2027-01-17, after today \(2027-01-16\) in New York/);
+  await tick(s.ws);
+  assert.equal(delegated(s.ws).length, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), tomorrow, 'kept as it is');
+});
+
+// ---------------------------------------------------------------------------
+// Sessions: what is left today, not the ceiling (bounded paper readiness A1)
+
+test('admission needs two of today\'s sessions left, not a ceiling of two: with none or one left nothing is admitted or enrolled; with exactly two it is', async (t) => {
+  const s = desk(t);
+  await xmplLead(s.ws);
+  arm(s.ws);
+  const day = ymdInTz(new Date(s.T0));
+  const ledger = s.ws.abs(PC.SESSIONS_REL);
+  for (const used of [6, 5]) {
+    fs.rmSync(ledger, { force: true });
+    spendSessions(s.ws, used, day);
+    const p = LA.plan(s.ws);
+    assert.deepEqual([p.status, p.code], ['held', 'budget'], p.why);
+    const h = p.budget.find((b) => b.meter === 'sessions');
+    assert.deepEqual(h && [h.code, h.used, h.ceiling, h.remaining, h.required, h.day], ['capacity', used, 6, 6 - used, 2, day], JSON.stringify(p.budget));
+    assert.match(h.why, new RegExp(`^${used} of today's 6 pilot sessions are used \\(${day}, New York\\); ${6 - used} left, and a pipeline needs 2 \\(a Researcher and a Prosecutor\\)\\.$`));
+    assert.equal(LA.reserve(s.ws).status, 'held');
+    await tick(s.ws);
+    assert.equal(delegated(s.ws).length, 0, `${used} used: nothing admitted`);
+    assert.equal(live(s.ws).length, 0, `${used} used: no project, no enrollment`);
+    assert.equal(sessionLines(s.ws).length, used, 'nothing charged');
+  }
+  // A ledger that does not read holds too.
+  fs.writeFileSync(ledger, 'not a session record\n');
+  const u = LA.plan(s.ws);
+  assert.deepEqual([u.code, u.budget.find((b) => b.meter === 'sessions').code], ['budget', 'unreadable']);
+  // Yesterday's six are kept and count nothing today; four used today leaves two.
+  fs.rmSync(ledger, { force: true });
+  spendSessions(s.ws, 6, '2027-01-14');
+  spendSessions(s.ws, 4, day);
+  assert.equal(LA.plan(s.ws).status, 'ready', LA.plan(s.ws).why);
+  await tick(s.ws);
+  const [a] = delegated(s.ws);
+  assert.equal(a && a.state, 'complete', a && a.words);
+  assert.equal(T.readTicketProfile(s.ws, a.project_id).pilot, true, 'enrolled');
+  assert.equal(sessionLines(s.ws).length, 10, 'admission reserves no session (the worker\'s bind does)');
+  assert.deepEqual(PC.sessionsView(s.ws, s.T0), { day, used: 4, ceiling: 6, left: 2, unreadable: false });
+});
+
+test('the locked recheck: sessions spent between the plan and the lock hold the admission', async (t) => {
+  const s = desk(t);
+  await xmplLead(s.ws);
+  arm(s.ws);
+  const day = ymdInTz(new Date(s.T0));
+  spendSessions(s.ws, 4, day);
+  // The first read sees two left; before the lock is taken, another project's
+  // worker binds one more.
+  const real = PC.sessionsView;
+  let reads = 0;
+  t.mock.method(PC, 'sessionsView', (ws, now) => {
+    reads += 1;
+    const v = real(ws, now);
+    if (reads === 1) spendSessions(ws, 1, day, 'racer');
+    return v;
+  });
+  const r = LA.reserve(s.ws);
+  assert.ok(reads >= 2, 'read again under the lock');
+  assert.deepEqual([r.status, r.plan.code], ['held', 'budget'], r.plan.why);
+  const h = r.plan.budget.find((b) => b.meter === 'sessions');
+  assert.deepEqual([h.code, h.remaining], ['capacity', 1]);
+  assert.equal(delegated(s.ws).length, 0, 'nothing reserved');
+  assert.equal(live(s.ws).length, 0);
+});
+
+test('capacity spent after an admission: its worker waits at its own ceiling, nothing is overspent, and nothing is admitted twice', async (t) => {
+  const s = desk(t);
+  await xmplLead(s.ws);
+  await otherLead(s.ws, 24);
+  arm(s.ws, { daily: 3 });
+  const day = ymdInTz(new Date(s.T0));
+  spendSessions(s.ws, 4, day);
+  await tick(s.ws);
+  const [a] = delegated(s.ws);
+  assert.equal(a && a.state, 'complete', a && a.words);
+  // Another enrolled project's worker uses the last two.
+  spendSessions(s.ws, 2, day, 'later');
+  H.freshPrice(s.ws, 'example-xmpl-fictional', 0.85);
+  const c = PW.claimStep(s.ws, a.project_id, { owner: 'test' });
+  assert.notEqual(c.status, 'claimed_now', 'no Researcher is claimed');
+  assert.match(String(c.words), /agent sessions are used \(6 reserved on 2027-01-15/);
+  assert.equal(sessionLines(s.ws).length, 6, 'nothing overspent');
+  await tick(s.ws);
+  await tick(s.ws);
+  assert.equal(delegated(s.ws).length, 1, 'never a second admission');
+  assert.equal(live(s.ws).length, 1);
+  assert.equal(research.listRuns(s.ws, a.project_id).length, 1);
+});
+
 test('admission holds, with the reason, on an unreadable or exhausted meter, an archived or dismissed lead, and a ticker or candle-source collision', async (t) => {
   const s = desk(t);
   const { ids: [lead] } = await xmplLead(s.ws);
@@ -556,9 +795,9 @@ test('admission holds, with the reason, on an unreadable or exhausted meter, an 
   const remove = (pid) => fs.rmSync(s.ws.abs(`projects/${pid}`), { recursive: true, force: true });
   const month = ymdInTz(new Date()).slice(0, 7);
   const day = ymdInTz(new Date());
-  await holdsWith('budget', /exit-quote monitor's request count could not be read/, file('market-data/forensics/status.json', '{not json'));
-  await holdsWith('budget', /GoPlus used 1300 of 1500/, file(require('../core/screening').STATUS_REL, JSON.stringify({ calls: { month, month_count: 1300, day, day_count: 0 } })));
-  await holdsWith('budget', /candle call count could not be read/, file(require('../core/trader-candles').STATUS_REL, '{not json'));
+  await holdsWith('budget', /exit-quote monitor's request count \(market-data\/forensics\/status\.json\) cannot be used: it is not JSON/, file('market-data/forensics/status.json', '{not json'));
+  await holdsWith('budget', /GoPlus used 1300 of 1500/, file(require('../core/screening').STATUS_REL, JSON.stringify({ schema_version: 'cr.screening-status.v1', calls: { month, month_count: 1300, month_answered: 1300, day, day_count: 0, day_answered: 0 } })));
+  await holdsWith('budget', /candle read's request count \(market-data\/trader\/candles-status\.json\) cannot be used: it is not JSON/, file(require('../core/trader-candles').STATUS_REL, '{not json'));
   await holdsWith('budget', /contract RPC budget state/, file(require('../core/contract-rpc').STATE_REL, '{not json'));
   await holdsWith('budget', /Contract observations are off/, setting((x) => { x.contracts.enabled = false; }));
   await holdsWith('budget', /compute-unit caps/, setting((x) => { x.contracts.daily_cu_cap = null; }));

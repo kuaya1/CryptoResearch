@@ -218,8 +218,11 @@ function countCalls(ws, n, answered = 0) {
   const market = require('./market');
   withLock(ws, 'market_status', () => {
     const status = market.readStatus(ws);
-    const calls = market.addCalls(market.callBudget(ws, status), n, answered);
-    replaceFile(ws, ws.abs(market.STATUS_REL), jsonText({ ...status, schema_version: status.schema_version || 'cr.market-status.v2', calls }));
+    const counted = market.callBudget(ws, status);
+    // A count that cannot be used is kept as it is (call-accounting.js).
+    if (counted.unknown) return;
+    const next = { ...status, schema_version: market.STATUS_SCHEMA, calls: market.addCalls(counted, n, answered) };
+    if (market.writableStatus(ws, status, next)) replaceFile(ws, ws.abs(market.STATUS_REL), jsonText(next));
   });
 }
 
@@ -256,6 +259,7 @@ async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 200
     // Checked and counted in one step (market.reserveCall), before it is sent.
     if (!market.reserveCall(ws)) {
       const budget = market.callBudget(ws, market.readStatus(ws));
+      if (budget.unknown) throw new OpError('REFUSED', budget.unknown);
       throw new OpError('REFUSED', `The monthly CoinGecko call budget is used up (${budget.month_count} of ${budget.budget_monthly}).`);
     }
     sent++;
