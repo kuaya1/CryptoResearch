@@ -236,3 +236,142 @@ test('market context can be turned off; then nothing is fetched and packets say 
   assert.match(cycle.packetContext(ws).note, /turned off/);
   assert.equal(cycle.contextStatus(ws).state, 'off');
 });
+
+// ---------------------------------------------------------------------------
+// Market context reserves each request through the shared CoinGecko meter
+// (market.reserveCall) before it is sent (PR #125 audit, finding 1). The
+// transports below are fakes; the reservation, the lock and the status file
+// are the real ones. A fake transport reads the status file from disk as the
+// request arrives, so "counted when sent" is what the file says at that moment.
+const { spawn } = require('child_process');
+const STATUS = (root) => path.join(root, 'market-data', 'status.json');
+const sentCount = (root) => (fs.existsSync(STATUS(root)) ? JSON.parse(fs.readFileSync(STATUS(root), 'utf8')).calls.month_count : 0);
+function reserveInChild(root, attempts, cap) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(process.execPath, [path.join(__dirname, 'children', 'child-meter-reserve.js'), root, 'coingecko', String(attempts), String(Date.now()), String(cap)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('error', reject);
+    p.on('close', (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(`child exited ${code}: ${err}`))));
+  });
+}
+const UNUSABLE = `${JSON.stringify({ schema_version: 'cr.market-status.v2', calls: { month: '2026-10', month_count: '7', day: '2026-10-15', day_count: 1 } }, null, 2)}\n`;
+
+test('context: each request is on disk in the meter before the transport receives it', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('cyclereserve');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const inner = fakeFetch();
+  const atDispatch = [];
+  const r = await cycle.refreshContext(ws, { fetchImpl: async (url, opts) => { atDispatch.push(sentCount(root)); return inner(url, opts); } });
+  assert.equal(r.status, 'ok', r.message);
+  assert.deepEqual(atDispatch, [1, 2], 'the first request was counted before it left, then the second');
+  const st = market.readStatus(ws);
+  assert.deepEqual([st.calls.month_count, st.calls.day_count, st.calls.month_answered, st.calls.day_answered], [2, 2, 2, 2], 'counted once each, both answered');
+});
+
+test('context: a competing caller and context together never pass the shared cap; a refused second request is not sent', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('cyclecompete');
+  t.after(cleanup);
+  enableMarket(ws, root, { monthly_call_budget: 4 });
+  const first = await cycle.refreshContext(ws, { fetchImpl: fakeFetch() });
+  assert.equal(first.status, 'ok', first.message);
+  const kept = cycle.readContext(ws).snapshot_id;
+  const log = [];
+  const inner = fakeFetch({ log });
+  let competitor = null;
+  const r = await cycle.refreshContext(ws, { force: true, fetchImpl: async (url, opts) => {
+    // While context's first request is out, another process reserves two
+    // through the same real meter.
+    if (url.includes('/global')) competitor = await reserveInChild(root, 2, 4);
+    return inner(url, opts);
+  } });
+  assert.deepEqual(competitor, { ok: 1 }, 'the competitor got the one place context had not already taken');
+  assert.equal(log.length, 1, 'only /global was sent; the refused markets request never reached the transport');
+  assert.equal(r.status, 'budget_paused', r.message);
+  const st = market.readStatus(ws);
+  assert.equal(st.calls.month_count, 4, 'the cap of 4 holds: 2 earlier, 1 for /global, 1 for the competitor');
+  assert.equal(st.calls.month_answered, 3, '/global still counts as answered');
+  assert.equal(cycle.readContext(ws).snapshot_id, kept, 'no partial snapshot; the last valid one is kept');
+});
+
+test('context: a meter that becomes unusable while /global is out stops the markets request and is kept byte for byte', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('cyclecorrupt1');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const first = await cycle.refreshContext(ws, { fetchImpl: fakeFetch() });
+  assert.equal(first.status, 'ok', first.message);
+  const kept = cycle.readContext(ws).snapshot_id;
+  const log = [];
+  const inner = fakeFetch({ log });
+  const r = await cycle.refreshContext(ws, { force: true, fetchImpl: async (url, opts) => {
+    if (url.includes('/global')) fs.writeFileSync(STATUS(root), UNUSABLE);
+    return inner(url, opts);
+  } });
+  assert.equal(log.length, 1, 'nothing more was sent once the count could not be used');
+  assert.equal(r.status, 'held', r.message);
+  assert.equal(r.accounting_unknown, true);
+  assert.match(r.message, /cannot be used/);
+  assert.equal(fs.readFileSync(STATUS(root), 'utf8'), UNUSABLE, 'the unusable file is kept as it was');
+  assert.equal(cycle.readContext(ws).snapshot_id, kept, 'no partial snapshot; the last valid one is kept');
+});
+
+test('context: a meter that becomes unusable during the last answer is kept and the refresh says held, never ok', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('cyclecorrupt2');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const log = [];
+  const inner = fakeFetch({ log });
+  const r = await cycle.refreshContext(ws, { fetchImpl: async (url, opts) => {
+    if (url.includes('/coins/markets')) fs.writeFileSync(STATUS(root), UNUSABLE);
+    return inner(url, opts);
+  } });
+  assert.equal(log.length, 2);
+  assert.equal(r.status, 'held', r.message);
+  assert.equal(r.accounting_unknown, true);
+  assert.match(r.message, /cannot be used/);
+  assert.equal(fs.readFileSync(STATUS(root), 'utf8'), UNUSABLE, 'finalization rewrote nothing');
+  // Both requests were sent and answered under counted reservations: the
+  // complete snapshot is data and is kept, as prices are on the same hold.
+  assert.equal(cycle.readContext(ws).snapshot_id, r.snapshot_id);
+});
+
+test('context: success, an HTTP failure, a timeout and a network failure are each counted once', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('cycleonce');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const counts = () => { const c = market.readStatus(ws).calls; return [c.month_count, c.month_answered]; };
+  assert.equal((await cycle.refreshContext(ws, { fetchImpl: fakeFetch() })).status, 'ok');
+  assert.deepEqual(counts(), [2, 2], 'success: two sent, two answered');
+  assert.equal((await cycle.refreshContext(ws, { fetchImpl: fakeFetch({ marketsStatus: 500 }), force: true })).status, 'failed');
+  assert.deepEqual(counts(), [4, 3], 'HTTP 500 on the second: both sent once, one answered');
+  const timeout = async () => { const e = new Error('The operation was aborted due to timeout'); e.name = 'TimeoutError'; throw e; };
+  const timedOut = await cycle.refreshContext(ws, { fetchImpl: timeout, force: true });
+  assert.equal(timedOut.status, 'failed');
+  assert.match(timedOut.message, /timed out/);
+  assert.deepEqual(counts(), [5, 3], 'a timeout on /global: one sent, none answered, nothing after it');
+  assert.equal((await cycle.refreshContext(ws, { fetchImpl: async () => { throw new Error('getaddrinfo ENOTFOUND'); }, force: true })).status, 'failed');
+  assert.deepEqual(counts(), [6, 3], 'a network failure: one sent');
+});
+
+test('context: a request is counted in the period it was sent, its answer in the period it arrived', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('cycleperiod');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  // One second before midnight on 30 September in New York (EDT, UTC-4).
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-01T03:59:59.000Z') });
+  const inner = fakeFetch();
+  const atDispatch = [];
+  const r = await cycle.refreshContext(ws, { fetchImpl: async (url, opts) => {
+    const c = fs.existsSync(STATUS(root)) ? JSON.parse(fs.readFileSync(STATUS(root), 'utf8')).calls : null;
+    atDispatch.push(c && [c.month, c.month_count, c.day, c.day_count]);
+    if (url.includes('/global')) t.mock.timers.tick(2000); // /global answers after midnight
+    return inner(url, opts);
+  } });
+  assert.equal(r.status, 'ok', r.message);
+  assert.deepEqual(atDispatch, [['2026-09', 1, '2026-09-30', 1], ['2026-10', 1, '2026-10-01', 1]], 'each request in the month and day it was sent');
+  const c = market.readStatus(ws).calls;
+  assert.deepEqual([c.month, c.month_count, c.day, c.day_count, c.month_answered, c.day_answered], ['2026-10', 1, '2026-10-01', 1, 2, 2], 'both answers arrived in October; only one October request was sent');
+});

@@ -268,7 +268,19 @@ async function fetchContext(ws, fetchImpl = fetch) {
   let calls = 0;
   let answered = 0;
   const get = async (pathAndQuery) => {
-    calls++; // counted before the request, so a failed request still counts
+    // Each request is reserved in the shared CoinGecko meter under its lock
+    // before it is sent (market.reserveCall), so it is on disk when it leaves,
+    // a failed or interrupted request still counts, and no other caller can
+    // take the same place in the budget. Refused: nothing is sent. `stop`
+    // says why: the count cannot be used (accounting_unknown) or the monthly
+    // budget is used up (budget).
+    if (!market.reserveCall(ws)) {
+      const unknown = market.accountingHold(ws);
+      const e = new Error(unknown || 'the monthly CoinGecko call budget is used up');
+      Object.assign(e, { calls, answered, stop: unknown ? 'accounting_unknown' : 'budget' });
+      throw e;
+    }
+    calls++;
     let res;
     try {
       res = await fetchImpl(`${base}${pathAndQuery}`, { headers, signal: AbortSignal.timeout(timeout) });
@@ -300,14 +312,18 @@ async function fetchContext(ws, fetchImpl = fetch) {
   return { global, rows, calls, answered, base: base === md.api_base ? null : 'custom' };
 }
 
-function recordAttempt(ws, { calls, answered = 0, outcome, error = null, snapshotId = null, at, rateLimit = null }) {
+// Records an attempt whose requests fetchContext already counted when it
+// reserved them: only the answers are added, in the period they arrived (as
+// the price path does). Returns null when recorded, else the words for why
+// the count cannot be used; the file is then kept as it is, unrewritten.
+function recordAttempt(ws, { answered = 0, outcome, error = null, snapshotId = null, at, rateLimit = null }) {
   const market = require('./market');
-  withLock(ws, 'market_write', () => {
+  return withLock(ws, 'market_write', () => {
     const status = market.readStatus(ws);
     const counted = market.callBudget(ws, status);
     // A count that cannot be used is kept as it is (call-accounting.js).
-    if (counted.unknown) return;
-    const c = market.addCalls(counted, calls, answered);
+    if (counted.unknown) return counted.unknown;
+    const c = market.addCalls(counted, 0, answered); // sent: counted by reserveCall
     const prev = status.context || {};
     const context = {
       state: outcome,
@@ -318,10 +334,11 @@ function recordAttempt(ws, { calls, answered = 0, outcome, error = null, snapsho
       consecutive_failures: outcome === 'ok' ? 0 : (prev.consecutive_failures || 0) + 1,
     };
     const next = { ...status, schema_version: market.STATUS_SCHEMA, calls: c, context };
-    if (!market.writableStatus(ws, status, next)) return;
+    if (!market.writableStatus(ws, status, next)) return market.accountingHold(ws) || 'CoinGecko\'s request count could not be rewritten; it is kept as it is.';
     replaceFile(ws, ws.abs(market.STATUS_REL), jsonText(next));
     // Under the same lock, so no runner sees the failure without the wait.
     if (rateLimit) market.noteRateLimit(ws, rateLimit);
+    return null;
   });
 }
 
@@ -344,27 +361,48 @@ async function refreshContext(ws, { trigger = 'manual', fetchImpl, force = false
   const lease = acquireLease(ws, 'market', ttl, { label: `context-${trigger}` });
   if (!lease) return { status: 'busy', message: 'A price refresh is running; market context waits for the next turn.' };
   const at = new Date().toISOString();
+  // The count went unusable while this refresh was under way: nothing more is
+  // sent, the file is kept as it is, and the refresh says so (never ok).
+  const held = (unknown, extra = {}) => ({ status: 'held', accounting_unknown: true, message: extra.snapshot_id ? `Market context ${extra.snapshot_id} was complete and is kept, but its answers could not be recorded: ${unknown}` : `Market context not refreshed: ${unknown} It stays at its last snapshot.`, ...extra });
   try {
     let data;
     try {
       data = await fetchContext(ws, fetchImpl);
     } catch (err) {
+      const sent = Number.isInteger(err.calls) ? err.calls : 0;
+      const answered = Number.isInteger(err.answered) ? err.answered : 0;
+      if (err.stop === 'accounting_unknown') return held(err.message, { calls: sent });
+      if (err.stop === 'budget') {
+        // Another caller used the last of the budget while this one waited or
+        // its first request was out: no partial snapshot, the last one stays.
+        const b = market.callBudget(ws, market.readStatus(ws));
+        const paused = { status: 'budget_paused', message: `${b.budget_monthly ? `Monthly CoinGecko call budget reached (${b.month_count} of ${b.budget_monthly})` : 'CoinGecko\'s request could not be reserved'}; market context stays at its last snapshot.`, calls: sent };
+        if (!sent) return b.unknown ? held(b.unknown, { calls: 0 }) : paused;
+        const unknown = recordAttempt(ws, { answered, outcome: 'failed', error: 'The monthly CoinGecko call budget ran out before the second request.', at });
+        return unknown ? held(unknown, { calls: sent }) : paused;
+      }
       const limited = err.httpStatus === 429 || typeof err.retryAfterMs === 'number';
-      recordAttempt(ws, { calls: Number.isInteger(err.calls) ? err.calls : 1, answered: Number.isInteger(err.answered) ? err.answered : 0, outcome: 'failed', error: err.message, at, rateLimit: limited ? { retryAfterMs: err.retryAfterMs, source: 'market context', httpStatus: err.httpStatus } : null });
+      const unknown = recordAttempt(ws, { answered, outcome: 'failed', error: err.message, at, rateLimit: limited ? { retryAfterMs: err.retryAfterMs, source: 'market context', httpStatus: err.httpStatus } : null });
+      if (unknown) return held(unknown, { calls: sent });
       return { status: 'failed', message: `Market context not refreshed: ${err.message}. The last snapshot is kept.` };
     }
     let snap;
     try {
       snap = buildSnapshot({ global: data.global, rows: data.rows, capturedAt: at, base: data.base });
     } catch (err) {
-      recordAttempt(ws, { calls: data.calls, answered: data.answered, outcome: 'failed', error: err.message, at });
+      const unknown = recordAttempt(ws, { answered: data.answered, outcome: 'failed', error: err.message, at });
+      if (unknown) return held(unknown, { calls: data.calls });
       return { status: 'failed', message: `Market context not refreshed: ${err.message}. The last snapshot is kept.` };
     }
+    // Both requests were sent under counted reservations and answered: the
+    // snapshot is complete and is kept even if the count goes unusable now,
+    // as prices are (market.js); the refresh then says held, not ok.
     withLock(ws, 'market_write', () => {
       appendLine(ws.abs(`${HISTORY_DIR}/${at.slice(0, 7)}.jsonl`), snap);
       replaceFile(ws, ws.abs(LATEST_REL), jsonText(snap));
     });
-    recordAttempt(ws, { calls: data.calls, answered: data.answered, outcome: 'ok', snapshotId: snap.snapshot_id, at });
+    const unknown = recordAttempt(ws, { answered: data.answered, outcome: 'ok', snapshotId: snap.snapshot_id, at });
+    if (unknown) return held(unknown, { snapshot_id: snap.snapshot_id, calls: data.calls });
     return { status: 'ok', message: `Market context ${snap.snapshot_id}: ${describe(snap)}`, snapshot_id: snap.snapshot_id, calls: data.calls };
   } finally {
     releaseLease(ws, 'market', lease);

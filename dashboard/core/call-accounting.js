@@ -35,10 +35,17 @@
 //   exit_quotes cr.forensic-monitor-status.v1 with {month, month_count, day,
 //               day_count}. A file without `calls` is the monitor's state
 //               before its first reserved request (the online desk's file
-//               2026-10-22 .. 2026-10-31: runs recorded, nothing sent), and is
-//               accepted only while nothing in it says a request was made.
+//               2026-10-22 .. 2026-10-31: runs recorded, nothing sent). It is
+//               accepted only in the exact shape the monitor writes then
+//               (exitQuoteInitial: its eight fields, `last_result` in one of
+//               its three historical field sets, every request counter 0).
 //   candles     cr.trader-candles-status.v1, the same counters and the same
-//               no-`calls` initial state, under the same condition.
+//               kind of no-`calls` initial state (candleInitial: a pool
+//               choice that failed before asking, and the run's end with
+//               every request counter 0). No such file was ever found.
+// Anything else without `calls` is unknown, never zero: a counter that is
+// merely not a positive number (PR #125 audit: "7", -7, true) is no proof
+// that nothing was sent.
 // `calls: null` is accepted for none of them: no writer of these four emits it.
 // Answered counts are not compared with sent counts: the existing writers add
 // an answer in the period it arrives, while its request was counted in the
@@ -56,7 +63,7 @@ const initial = (defaults = {}) => ({ ...defaults, [ABSENT]: true });
 const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
 const show = (v) => (v === undefined ? 'missing' : JSON.stringify(v).slice(0, 40));
-const positive = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const isTime = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && Number.isFinite(Date.parse(v));
 const nullOrNumber = (v) => v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0);
 
@@ -71,20 +78,89 @@ function realDay(s) {
   return Number(m[3]) >= 1 && Number(m[3]) <= days;
 }
 
-// What in a status without `calls` says a request was sent anyway.
-function exitQuoteEvidence(s) {
-  const r = isObj(s.last_result) ? s.last_result : {};
-  for (const k of ['checks', 'reads', 'quotes', 'quotes_answered', 'quote_errors', 'no_route']) if (positive(r[k])) return `its last run recorded ${k} ${r[k]}`;
-  if (isObj(s.quote_gates) && Object.keys(s.quote_gates).length) return 'it holds a quote provider\'s answer or wait';
-  if (s.github_retry_after_until) return 'it holds a GitHub wait';
+// A status without `calls` is accepted only as the exact state its writers
+// leave before their first reserved request: the fields those writers put
+// there and no other, each of its own type, every request counter exactly 0,
+// nothing that only a request writes. The absence of a positive number is not
+// proof that nothing was sent: a counter that is a string, a boolean, null, a
+// negative or a fraction, a container of another kind, or a field that
+// contradicts "nothing sent" is unknown. Each returns why, or null.
+const isTrigger = (v) => typeof v === 'string' && v.length > 0 && v.length <= 100;
+const kind = (v) => (v === null ? 'null' : Array.isArray(v) ? 'a list' : typeof v === 'object' ? 'an object' : `${typeof v} ${show(v)}`);
+const sameKeys = (o, keys) => Object.keys(o).length === keys.length && keys.every((k) => has(o, k));
+const strayOf = (o, allowed) => Object.keys(o).filter((k) => !allowed.includes(k));
+
+// forensic-monitor.js refresh() writes the run's end in one update; a
+// request is reserved (and `calls` written) before every product check,
+// GitHub read, decimals lookup and quote. Its `counts`, as written at 3640e23,
+// cde3637 and a64e21a (2026-10-16, the current fields); `state` is the
+// reader's default, never set by the monitor.
+const EXIT_TOP = ['schema_version', 'state', 'last_run_at', 'last_trigger', 'last_result', 'last_resolutions_day', 'consecutive_failures', 'next_allowed_at'];
+const EXIT_RESULTS = [
+  ['checks', 'reads', 'failed', 'not_checkable', 'budget', 'rate_limited', 'resolutions'],
+  ['checks', 'reads', 'failed', 'not_checkable', 'quotes', 'quotes_answered', 'no_route', 'quote_errors', 'quote_waits', 'budget', 'rate_limited', 'resolutions'],
+  ['checks', 'reads', 'failed', 'not_checkable', 'incomplete', 'quotes', 'quotes_answered', 'no_route', 'quote_errors', 'quote_waits', 'budget', 'rate_limited', 'resolutions', 'corrections'],
+];
+// Each of these follows a reserved request; none can be other than 0 before one.
+const EXIT_SENT = ['checks', 'reads', 'failed', 'not_checkable', 'incomplete', 'quotes', 'quotes_answered', 'no_route', 'quote_errors'];
+function exitQuoteInitial(s) {
+  const stray = strayOf(s, EXIT_TOP);
+  if (stray.length) return `it carries ${stray.slice(0, 3).join(', ')}, which the monitor never writes before its first request`;
+  const missing = EXIT_TOP.filter((k) => !has(s, k));
+  if (missing.length) return `it lacks ${missing.slice(0, 3).join(', ')}, which the monitor writes with every run`;
+  if (s.state !== 'never_run') return `its state is ${show(s.state)}, not never_run`;
+  if (!isTime(s.last_run_at)) return `its last_run_at is ${show(s.last_run_at)}, not a time`;
+  if (!isTrigger(s.last_trigger)) return `its last_trigger is ${show(s.last_trigger)}`;
+  if (!realDay(s.last_resolutions_day)) return `its last_resolutions_day is ${show(s.last_resolutions_day)}, not a real day`;
+  if (s.consecutive_failures !== 0) return `its consecutive_failures is ${show(s.consecutive_failures)}; a failure follows only a request`;
+  if (s.next_allowed_at !== null) return `its next_allowed_at is ${show(s.next_allowed_at)}; a backoff follows only a failed request`;
+  const r = s.last_result;
+  if (!isObj(r)) return `its last_result is ${kind(r)}, not the monitor's counts`;
+  if (!EXIT_RESULTS.some((keys) => sameKeys(r, keys))) return `its last_result's fields (${Object.keys(r).slice(0, 4).join(', ') || 'none'}${Object.keys(r).length > 4 ? ', …' : ''}) are not a set the monitor ever wrote`;
+  for (const k of EXIT_SENT) if (has(r, k) && r[k] !== 0) return `its last run recorded ${k} ${show(r[k])}, where nothing sent is 0`;
+  if (has(r, 'quote_waits') && !(isObj(r.quote_waits) && Object.keys(r.quote_waits).length === 0)) return `its last run recorded quote waits ${show(r.quote_waits)}, which follow only a request`;
+  if (r.budget !== false) return `its last run recorded budget ${show(r.budget)}`;
+  if (r.rate_limited !== null) return `its last run recorded a GitHub rate limit ${show(r.rate_limited)}, which follows only a request`;
+  for (const k of ['resolutions', 'corrections']) if (has(r, k) && !isCount(r[k])) return `its last run recorded ${k} ${show(r[k])}, not a whole number of 0 or more`;
   return null;
 }
-function candleEvidence(s) {
-  const r = isObj(s.last_result) ? s.last_result : {};
-  if (positive(r.requests)) return `its last run recorded ${r.requests} requests`;
-  if (isObj(s.pairs) && Object.values(s.pairs).some((p) => isObj(p) && (p.asked_at || p.http_status))) return 'it records a pair as asked';
-  const g = isObj(s.gate) ? s.gate : {};
-  if (g.retry_after_until || g.backoff_until || g.last_answer_at || g.last_failure_at) return 'it holds GeckoTerminal\'s answer or wait';
+
+// trader-candles.js: reserve() writes `calls` before every ask; pairs and
+// gate follow an answer. Before one, notePoolAttempt (a pool choice that
+// failed before asking) and the run's end (last_run_at, last_trigger and
+// last_result, together) are all that is written. Its `counts`, as written at
+// 1739acf (2026-10-28) and cdcab9c (2026-11-01, the current fields).
+const CANDLE_TOP = ['schema_version', 'state', 'pool_attempts', 'last_run_at', 'last_trigger', 'last_result'];
+const CANDLE_RESULTS = [
+  ['pairs', 'requests', 'sources', 'hours', 'unchanged', 'refused', 'budget', 'wait_until', 'waits', 'problems', 'step'],
+  ['pairs', 'requests', 'sources', 'hours', 'unchanged', 'refused', 'budget', 'accounting_unknown', 'wait_until', 'waits', 'problems', 'step'],
+];
+const CANDLE_SENT = ['requests', 'sources', 'hours', 'unchanged', 'refused'];
+const listOfObjects = (v) => Array.isArray(v) && v.length <= 20 && v.every(isObj);
+function candleInitial(s) {
+  const stray = strayOf(s, CANDLE_TOP);
+  if (stray.length) return `it carries ${stray.slice(0, 3).join(', ')}, which the candle read never writes before its first request`;
+  if (s.state !== 'never_run') return `its state is ${show(s.state)}, not never_run`;
+  if (has(s, 'pool_attempts')) {
+    const p = s.pool_attempts;
+    if (!isObj(p) || !Object.values(p).every((a) => isObj(a) && sameKeys(a, ['at', 'why']) && isTime(a.at) && typeof a.why === 'string')) return `its pool_attempts are ${show(p)}, not the pool choices it records`;
+  }
+  const run = ['last_run_at', 'last_trigger', 'last_result'].filter((k) => has(s, k));
+  if (run.length === 0) return null;
+  if (run.length !== 3) return `it records ${run.join(' and ')} without the rest of a run's end, which is written in one update`;
+  if (!isTime(s.last_run_at)) return `its last_run_at is ${show(s.last_run_at)}, not a time`;
+  if (!isTrigger(s.last_trigger)) return `its last_trigger is ${show(s.last_trigger)}`;
+  const r = s.last_result;
+  if (!isObj(r)) return `its last_result is ${kind(r)}, not the read's counts`;
+  if (!CANDLE_RESULTS.some((keys) => sameKeys(r, keys))) return `its last_result's fields (${Object.keys(r).slice(0, 4).join(', ') || 'none'}${Object.keys(r).length > 4 ? ', …' : ''}) are not a set the candle read ever wrote`;
+  for (const k of CANDLE_SENT) if (r[k] !== 0) return `its last run recorded ${k} ${show(r[k])}, where nothing sent is 0`;
+  if (!isCount(r.pairs)) return `its last run recorded pairs ${show(r.pairs)}, not a whole number of 0 or more`;
+  if (r.budget !== false) return `its last run recorded budget ${show(r.budget)}`;
+  if (r.wait_until !== null) return `its last run recorded GeckoTerminal's wait ${show(r.wait_until)}, which follows only a request`;
+  if (has(r, 'accounting_unknown') && r.accounting_unknown !== null) return `its last run recorded an unusable count, which is never written`;
+  if (!listOfObjects(r.waits)) return `its last run's waits are ${kind(r.waits)}, not a list of at most 20 waits`;
+  if (!listOfObjects(r.problems)) return `its last run's problems are ${kind(r.problems)}, not a list of at most 20 problems`;
+  if (r.step !== null && !(isObj(r.step) && sameKeys(r.step, ['done', 'problems']) && isCount(r.step.done) && isCount(r.step.problems))) return `its last run's step is ${show(r.step)}, not the book's step counts`;
   return null;
 }
 
@@ -99,11 +175,11 @@ const METERS = Object.freeze({
   }),
   exit_quotes: Object.freeze({
     id: 'exit_quotes', label: 'The exit-quote monitor', provider: 'the exit-quote and forensic sources', file: 'market-data/forensics/status.json', schema: 'cr.forensic-monitor-status.v1',
-    answered: 'none', extra: Object.freeze({}), initial: exitQuoteEvidence,
+    answered: 'none', extra: Object.freeze({}), initial: exitQuoteInitial,
   }),
   candles: Object.freeze({
     id: 'candles', label: 'GeckoTerminal\'s candle read', provider: 'GeckoTerminal', file: 'market-data/trader/candles-status.json', schema: 'cr.trader-candles-status.v1',
-    answered: 'none', extra: Object.freeze({}), initial: candleEvidence,
+    answered: 'none', extra: Object.freeze({}), initial: candleInitial,
   }),
 });
 
@@ -123,8 +199,8 @@ function problemOf(id, s) {
   if (s.schema_version !== m.schema) return `its schema is ${show(s.schema_version)}, not ${m.schema}`;
   if (!Object.prototype.hasOwnProperty.call(s, 'calls') || s.calls === undefined) {
     if (!m.initial) return 'it has no request counts (calls)';
-    const ev = m.initial(s);
-    return ev ? `it has no request counts (calls), yet ${ev}` : null;
+    const why = m.initial(s);
+    return why ? `it has no request counts (calls) and is not a state its writers leave before a first request: ${why}` : null;
   }
   const c = s.calls;
   if (!isObj(c)) return `its request counts are ${c === null ? 'null' : Array.isArray(c) ? 'a list' : show(c)}, not counts`;

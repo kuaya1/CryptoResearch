@@ -12,6 +12,11 @@ outside the repository in
 It holds no token, key, header, secrets file or production task arguments
 (the two production tasks are recorded by state and XML SHA-256 only).
 
+The corrections after the audit of PR #125's merge (branch
+`claude/pr125-audit-fixes`, base `328ccd82c8cf639ecc296c85ef54dc9c90a5775f`)
+are recorded under "PR #125 audit corrections" below. Nothing in them was
+activated either.
+
 ## Protected core
 
 These four files are byte-identical to the base (SHA-256, checked before the
@@ -102,8 +107,8 @@ backups (2026-10-06 to 2026-10-31) and the local workspace:
 | --- | --- | --- |
 | CoinGecko | `cr.market-status.v2` | `calls {month, month_count, day, day_count}`; `month_answered` and `day_answered` both or neither (older files and `demo.js` carry neither); the derived `budget_monthly` and `remaining`. `calls` is required |
 | GoPlus | `cr.screening-status.v1` | all six counters, answered included; `calls` required |
-| Exit quotes | `cr.forensic-monitor-status.v1` | the four counters; no `calls` only as the monitor's state before its first reserved request, while nothing in it says a request was made |
-| Candles | `cr.trader-candles-status.v1` | the same, with the same no-`calls` initial state |
+| Exit quotes | `cr.forensic-monitor-status.v1` | the four counters; no `calls` only in the exact shape the monitor writes before its first reserved request (`exitQuoteInitial`, corrected after the PR #125 audit, below) |
+| Candles | `cr.trader-candles-status.v1` | the same counters; no `calls` only in the candle read's own pre-request shape (`candleInitial`, same correction) |
 
 `calls: null` is accepted for none of them. Answered counts are not compared
 with sent counts: an answer is added in the period it arrives, and its request
@@ -418,10 +423,20 @@ Read from the code at the base:
 
   If none of the successors is available in the window, B2 stops with this
   evidence.
+- **A cancelled grant still uses the New York day's grant allowance.**
+  `mandateCapacity` (mandate-authority.js:302-321) counts in `grants_today`
+  every mandate `approve` or `halve` decided on today's New York day, cancelled
+  or not. With `max_grants_per_day` at its default of 1 (`MANDATE_DEFAULTS`,
+  tickets.js:1539), a successor's grant on the same New York day is refused
+  `MANDATE_CAP_DAY` (tickets.js:1901). So a later fill attempt needs a legal
+  proposal and decision path (one of the successors above) **and may need the
+  next calendar day in New York**. Never raise the cap to make it the same day.
 - **Not verified here:** whether a cancelled-but-in-force mandate grant still
-  counts toward `max_open_grants` (`mandateCapacity`). Read the capacity
-  (`MA.statusRows`, `pilot-all --dry-run`) before B2 and treat a held capacity
-  as a blocker to report, not to work around.
+  counts toward `max_open_grants` (`mandateCapacity`: a grant holds capacity
+  while its trader request is open, or `not_opened` and not final, or not
+  listed at all). Read the capacity (`MA.statusRows`, `pilot-all --dry-run`)
+  before B2 and treat a held capacity as a blocker to report, not to work
+  around.
 
 ## Phase A verification (2026-11-01, on the committed tree)
 
@@ -441,6 +456,140 @@ first on PATH for npm; never the Volta shim.
 The first full run on this tree had one failure, the `ui-backend.test.js`
 fixture described under A2 Evidence. The run above is after that correction.
 `CR_TEST_REAL_REGISTRY` was left off: it changes a registry key's ACL.
+
+## PR #125 audit corrections (2026-11-01)
+
+Base `328ccd82c8cf639ecc296c85ef54dc9c90a5775f`, PR #125's merge. The audit of
+that merge confirmed three defects. Each is corrected here with the smallest
+change, and the architecture and risk policy are as they were. No grade,
+sizing threshold, consent gate, forensic requirement, admission limit or budget
+ceiling changed. `paper.js`, `paper-trader.js`, `trade-risk.js` and
+`decimal.js` are byte-identical to the base.
+
+**1. Market context reserves each request before sending it**
+(`dashboard/core/cycle.js`).
+
+- **Before:** `fetchContext` sent `/global` and `/coins/markets` with no
+  reservation, and `recordAttempt` added both afterwards. The up-front check
+  (room for two) was the only gate. As a result:
+  - competing callers could pass the shared cap;
+  - a meter that went unusable while `/global` was out did not stop the
+    second request;
+  - the refresh still answered `ok`.
+- **Now:** each request is reserved through the existing locked
+  `market.reserveCall` before it is dispatched, so it is on disk when it
+  leaves. A refused reservation sends nothing and builds no partial snapshot;
+  the earlier snapshot is kept:
+  - an unusable count is `held` with `accounting_unknown`;
+  - a used-up budget is `budget_paused`.
+
+  `recordAttempt` adds only the answers (0 sent), in the period they arrive, as
+  the price path does. A count found unusable at finalization is kept
+  byte-for-byte, and the refresh says `held` with `accounting_unknown: true`,
+  never `ok`.
+- **Unchanged:** the lease, the backoff gate, the up-front check, snapshot
+  validation and freshness, and the kept snapshot on failure. There is no
+  second ledger, batch reservation or queue.
+
+**2. A meter status without `calls` is accepted only in its writer's exact
+shape** (`dashboard/core/call-accounting.js`).
+
+- **Before:** `exitQuoteEvidence` and `candleEvidence` looked only for
+  positive numbers. With an exit-quote `last_result.quotes`, or a candle
+  `last_result.requests`, of `"7"`, `-7` or `true`, the status read as zero
+  requests: all six audit cases were granted a reservation, starting at 1.
+- **Now:** `exitQuoteInitial` and `candleInitial` accept a status without
+  `calls` only in the shape its writers leave before their first reserved
+  request. The shapes come from the writers' code and history, and from the
+  online desk's recorded file:
+  - **Exit quotes** (`forensic-monitor.js` `refresh`): exactly its eight
+    top-level fields, and:
+    - `state: never_run`;
+    - a real time and day;
+    - `consecutive_failures` 0 and `next_allowed_at` null;
+    - `last_result` in one of the three field sets it ever wrote (3640e23,
+      cde3637, a64e21a), with every request counter exactly 0,
+      `quote_waits` `{}`, `budget` false, `rate_limited` null, and
+      resolutions and corrections whole counts.
+  - **Candles** (`trader-candles.js`):
+    - `state: never_run`;
+    - optional `pool_attempts` of `{at, why}`;
+    - optionally the run's end (`last_run_at`, `last_trigger` and
+      `last_result` together), in one of its two field sets (1739acf,
+      cdcab9c), with every request counter 0, `budget` false, `wait_until` and
+      `accounting_unknown` null, at most 20 waits and problems as objects, and
+      `step` null or two counts.
+
+  Anything else is unknown: a string, boolean, null, negative or fractional
+  counter, a container of another kind, a field only a request writes, or a
+  missing or extra field. Admission holds, the reservation is refused, nothing
+  is sent and the bytes are kept. The readers and `problemOf`, `classify`,
+  `countsOf` and `words` keep their interfaces. The whitelist was not
+  broadened.
+
+**3. Phase C applies admission with an admission-only Settings patch** (this
+document). Phase C step 3 named `arm-desk --admission-days=N
+--admission-daily=1`, a baseline arming. It now gives the reviewed patch, the
+validation, the owner's application and the read back. See "Phase C step 3:
+the admission-only patch". No code, CLI or flag was added for it. The canary
+constraints are explicit before B2:
+
+- the production task's launcher still needs replacing;
+- a cancelled grant cannot be reused, and it still uses its New York day's
+  grant allowance;
+- a later fill may need the next day;
+- no cap or gate is relaxed.
+
+**Regressions, base against head.** Each test was first run against the base
+code (or, for finding 3, the base runbook), then against the correction.
+Transports are mocked; the reservation, the lock, the status files and the
+Settings path are the real ones. Workspaces are fictional, with controlled
+clocks.
+
+| Test | Base `328ccd8` | Head |
+| --- | --- | --- |
+| **Finding 1** (`cycle.test.js`, 6 new) | | |
+| Each request is on disk when the transport receives it | fail: `[0, 0]` at dispatch | pass: `[1, 2]` |
+| A competitor reserving 2 through a real child process while `/global` is out, cap 4 after an earlier refresh | fail: competitor granted 2, markets still sent | pass: competitor granted 1, markets refused, count 4, earlier snapshot kept |
+| Count made unusable while `/global` is out | fail: markets sent (2 requests) | pass: `held`, 1 request, bytes kept, earlier snapshot kept |
+| Count made unusable during the last answer | fail: `status: 'ok'` | pass: `held`, `accounting_unknown`, bytes kept |
+| Success, HTTP 500, timeout and network failure counted once each | pass (new acceptance coverage) | pass: 2/2, 4/3, 5/3, 6/3 sent/answered |
+| Midnight in New York (30 Sep to 1 Oct, mocked Date): sent in its period, answered in its own | fail: nothing on disk at dispatch | pass |
+| **Finding 2** (`meter-cases.js`, through `call-accounting.test.js` and `trader-candles.test.js`) | | |
+| 53 new no-`calls` rejection cases (28 exit quotes, 25 candles) | 50 read as zero (all six audit cases among them); 3 refused | 0 read as zero |
+| 8 writer-shape controls, replacing the earlier `{state: 'ok', last_result: {}}` control, which no writer produces | read | read, reserve and count |
+| The four matrix tests (validator; readers, reserve and admission; the exit-quote monitor; the candle read) | fail at the first audit case. With `quotes "7"` the monitor sent a product check and a repository read; with `requests "7"` the candle read sent 2 requests | pass |
+| **Finding 3** (`arm-desk.test.js`, 4 new) | | |
+| The admission-only patch through `validateSettingsPatch` and `applySettings`, from non-default book, fee, lead policy, sizing, intent life and automation | fail: the base runbook carries no such patch | pass: only `automation.lead_admission` and its authority (generation 2) changed, plus the write's own operation records; the mandate is untouched |
+| The runbook's validation command, run as written | fail: absent | pass: prepared patch unchanged; placeholder, past expiry, 31 days, limit 4, an extra key and a rewritten expiry refused |
+| The runbook's console script, run in `vm` against a real local fictional desk | fail: absent | pass: placeholder sends nothing; with a time, session, index, settings, index; `unrelated_changed: []`, `mandate_unchanged: true` |
+| The earlier step, `arm-desk --admission-days=3 --admission-daily=1` | pass: reproduces the finding (book, fee, lead policy, sizing, intent life and exit quotes reset; online it also posts exit-quote targets and contract defaults) | pass |
+
+Raw output for the runs below (base and head) is kept outside the repository
+in `%USERPROFILE%\Documents\CryptoResearch-evidence\pr125-audit-fixes-2026-11-01\`.
+It holds test output only.
+
+**Verification** (2026-11-01). Node v24.21.0, the real binary
+(`...\Volta\tools\image\node\24.21.0\node.exe`), first on PATH for npm. Run
+from the Git-backed worktree of this branch, on base `328ccd8`, which is still
+`origin/main`.
+
+| Command | Result |
+| --- | --- |
+| Focused: `cycle`, `call-accounting`, `trader-candles` and `arm-desk` tests | 57 of 57 pass |
+| Every suite that loads the changed modules (19 files) | 348 of 348 pass |
+| `node dashboard/cli.js test` | 1503 tests: 1501 pass, 0 fail, 2 skipped (the opt-in real-machine tests), 171 s |
+| `npm run ui:build` | exit 0. `build.json` `fec06fde…`, 40 assets, byte-identical to the committed bundle: no `public` source changed |
+| `npm --prefix dashboard/web run check` | exit 0: all browser checks passed (115), 86 of 86 regression checks on the production build, 417 s |
+| Protected files: SHA-256 and `git diff 328ccd8 --` | 4 of 4 match the base; the diff is empty |
+
+The first full run on this tree had one failure, in
+`rollback-drill.test.js`: "no `cr-rollback-drill` worktree is left". Its drill
+had passed. The cause was a stale temporary worktree, locked `initializing`.
+It was left by an earlier full run of the same tree that was stopped by hand
+while the drill was creating its worktree. That worktree was unlocked and
+removed, and the complete run above followed. It was not a defect in the
+change.
 
 ## Phase B runbook: supervised real-data canary (after merge and Eric's authorization)
 
@@ -483,7 +632,11 @@ No unlimited retries and no silent cap increases.
    Eric's explicit action, never reset.
 6. `node dashboard/cli.js arm-desk --desk=online --dry-run` with the approved
    flags only, reviewed. Printing arms nothing. Do not replay baseline book or
-   risk values that would reset established settings.
+   risk values that would reset established settings. Every arming flag
+   (`--mandate-days`, `--admission-days`) prints the whole baseline patch
+   beside it (see "Phase C step 3: the admission-only patch"), so compare
+   each printed value with the desk's current settings before anything is
+   applied. A mandate-only patch procedure is not part of this runbook yet.
 7. Eric applies the reviewed settings. Read back:
    - the mandate generation, expiry, caps and allowed chains;
    - the pause state;
@@ -510,6 +663,22 @@ Inspect the real queue first and touch no other pilot project.
   - the hosted timer and candles still advancing.
 - A command's success is not proof. The full offline matrix stays the proof
   for every revocation mode.
+
+**Canary constraints that hold throughout B and C** (none of them is relaxed
+to make a step happen sooner):
+
+- The production `CryptoResearch pilot-all` task still runs the old conhost
+  launcher until Eric replaces it with the job wrapper (B0 step 3, A4). Nothing
+  in this repository has replaced it.
+- A cancelled grant is never reused: it stays the decision in force on its
+  receipt, and the mandate refuses that receipt again.
+- A cancelled grant still uses that New York day's grant allowance
+  (`grants_today`; one a day by default). A later fill attempt needs a legal
+  proposal and decision path (a supported successor) and may have to wait for
+  the next New York day.
+- No cap is raised and no gate is weakened: not `max_grants_per_day`,
+  `max_open_grants`, the admission limit, the session ceilings, the provider
+  budgets, sizing or the forensic and consent gates.
 
 **B2. Legitimate fill and risk reduction.** Use only a supported successor
 (the `reopenReason` analysis above), with:
@@ -562,10 +731,12 @@ No limit is raised for throughput.
    `SCOUT_LEADS` variables (a true variable does not enable a disabled
    workflow). Enable only the authorized scout workflow, for the approved paid
    budget and window.
-3. Apply admission only (`arm-desk --admission-days=N --admission-daily=1`, an
-   explicit expiry), never with baseline values. Read back:
-   - the admission generation, policy hash, expiry and daily quota;
-   - the separate paper mandate.
+3. Apply admission only, with the reviewed admission-only patch below, through
+   the desk's existing Settings path. Nothing else is in the patch. See
+   "Phase C step 3: the admission-only patch" below for how to prepare it,
+   validate it, apply it to the online desk and read it back. **Do not use
+   `arm-desk --admission-days=N --admission-daily=1` for this step**: that is a
+   baseline arming (see the same section).
 4. Make every authority expire inside the window. A recurring task must not
    produce provider use after expiry. Check what enrolled projects can still
    dispatch after expiry, and bound it with the supported controls (admission
@@ -601,6 +772,147 @@ failure, unexpected authority or unbounded cost):
 - never delete records, reset meters or cancel protective exits;
 - record what is still running (processes, claims, orders, settings).
 
+### Phase C step 3: the admission-only patch
+
+The reviewed patch is this, and nothing else:
+
+```json
+{"automation":{"lead_admission":{"enabled":true,"daily_limit":1,"expires_at":"<explicit approved ISO timestamp>"}}}
+```
+
+It goes through the desk's existing Settings path (`POST /api/settings`:
+`validateSettingsPatch`, then `applySettings`), the same path the Settings page
+uses. That write merges only these three values and records admission's new
+authority generation (`lead-admission.js` `authorityNext`). It never touches
+the paper mandate, `autonomous_paper_loop` or any other setting.
+
+**Why not `arm-desk --admission-days=N --admission-daily=1`.** That is a
+baseline arming. Besides admission, its patch also writes:
+
+- the lead policy (`leads`: enabled, chains, thresholds);
+- `automation.exit_quotes_auto: true`;
+- `tickets.sizing.min_grade_new_entry: 50`;
+- `trader.book` (`cash_usd` 25000, `fee_rate` 0.001);
+- `trader.rules`, including `max_validity_minutes`, which goes back to 1440
+  when `--intent-life` is not given.
+
+Without `--desk=online` it writes this PC's local workspace, not the online
+desk. With `--desk=online`, its script also posts the exit-quote targets
+(`/api/forensics/exit-quotes/auto`) and the contract defaults
+(`/api/contracts/init-defaults`). `dashboard/tests/arm-desk.test.js` shows
+each of these on a fictional desk. Baseline `arm-desk` commands are broader
+operations and are not part of this step.
+
+**1. Prepare.**
+
+- Eric approves the expiry. It must be inside the Phase C window and at most
+  30 days ahead.
+- Write it in UTC in the form the desk stores: `YYYY-MM-DDTHH:MM:SS.000Z`
+  (for example `2026-11-08T21:00:00.000Z`).
+- Keep `daily_limit` at 1. Do not add any other key.
+
+**2. Validate, locally, writing nothing.** From the repository folder, in
+PowerShell 7, with the approved time in place of the placeholder:
+
+```powershell
+$patch = '{"automation":{"lead_admission":{"enabled":true,"daily_limit":1,"expires_at":"<explicit approved ISO timestamp>"}}}'
+node -e 'try { const p = JSON.parse(process.argv[1]); const v = require(require("path").resolve("dashboard/server")).validateSettingsPatch(JSON.parse(process.argv[1]), null); console.log(JSON.stringify(v)); if (JSON.stringify(v) !== JSON.stringify(p)) { console.error("Not valid as prepared: the validator changed it."); process.exit(1); } } catch (e) { console.error(`Not valid: ${e.message}`); process.exit(1); }' $patch
+```
+
+This runs the desk's own `validateSettingsPatch`, the same check the online
+desk runs again before it writes. It reads no workspace and writes nothing.
+
+- Exit 0 prints the patch exactly as prepared.
+- Anything else is refused and names the field. A past expiry, one more than
+  30 days ahead, a limit outside 0 to 3, or any other key is refused.
+
+**3. Apply, on the intended online desk (Eric).**
+
+1. Check the build first: `GET /healthz` on the online desk must report the
+   merged SHA (B0 step 1).
+2. Sign in to the online desk in the browser and open the console (F12) on
+   that page.
+3. Paste the script below, with the same approved time in `PATCH`, and press
+   Enter.
+
+The script reads the settings, posts the patch, reads the settings again, and
+prints only the admission block, its authority and the names of the settings
+that changed. It never prints the token or any other value. With the
+placeholder left in, it sends nothing.
+
+```js
+// Phase C step 3: admission only. Paste on the signed-in online desk's page.
+(async () => {
+  const PATCH = {"automation":{"lead_admission":{"enabled":true,"daily_limit":1,"expires_at":"<explicit approved ISO timestamp>"}}};
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/.test(PATCH.automation.lead_admission.expires_at)) {
+    console.log('Set the approved expiry first (YYYY-MM-DDTHH:MM:SS.000Z). Nothing was sent.');
+    return;
+  }
+  const s = await (await fetch('/api/session', { credentials: 'same-origin' })).json();
+  const read = async () => {
+    const r = await fetch('/api/index', { credentials: 'same-origin', headers: { 'x-cr-token': s.token } });
+    if (r.status !== 200) throw new Error(`Read back failed: HTTP ${r.status}`);
+    return (await r.json()).settings;
+  };
+  const leaves = (o, p = '', out = {}) => {
+    for (const [k, v] of Object.entries(o || {})) {
+      const q = p ? `${p}.${k}` : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) leaves(v, q, out);
+      else out[q] = JSON.stringify(v);
+    }
+    return out;
+  };
+  const before = await read();
+  const w = await fetch('/api/settings', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-cr-token': s.token }, body: JSON.stringify(PATCH) });
+  console.log('admission patch', { status: w.status, body: await w.json() });
+  if (w.status !== 200) return;
+  const after = await read();
+  const b = leaves(before);
+  const a = leaves(after);
+  const changed = [...new Set([...Object.keys(b), ...Object.keys(a)])].filter((k) => b[k] !== a[k]).sort();
+  const la = after.automation.lead_admission;
+  const au = la.authority || {};
+  console.log('read back', {
+    enabled: la.enabled,
+    daily_limit: la.daily_limit,
+    expires_at: la.expires_at,
+    paused: after.automation.paused === true,
+    authority: { generation: au.generation, armed_at: au.armed_at, policy_sha256: au.policy_sha256, revoked_at: au.revoked_at || null },
+    changed,
+    unrelated_changed: changed.filter((k) => !k.startsWith('automation.lead_admission.')),
+    mandate_unchanged: JSON.stringify(before.automation.mandate || null) === JSON.stringify(after.automation.mandate || null) && before.automation.autonomous_paper_loop === after.automation.autonomous_paper_loop,
+  });
+})();
+```
+
+**4. Read back.** Check every line:
+
+- `admission patch`: `status: 200` and `body.status: 'saved'`.
+- **Values:** `enabled: true`, `daily_limit: 1` and `expires_at` equal to the
+  approved time. `paused: false`: admission is not live while automation is
+  paused.
+- **Authority:**
+  - `generation` is one more than before the write (1 if admission was never
+    armed);
+  - `armed_at` is the time of this write;
+  - `policy_sha256` is present;
+  - `revoked_at` is null.
+
+  If the same values were already armed and in force, the desk records no new
+  generation, and the generation stays as it was.
+- **Unrelated settings:** `unrelated_changed` is `[]`. Every name in `changed`
+  starts with `automation.lead_admission.`. Anything else means the write did
+  more than admission: stop, and use the A5 off-only control.
+- **The paper mandate:** `mandate_unchanged: true`. The mandate's authority is
+  separate from admission's and is not armed, extended or revoked by this
+  write. Read the mandate's generation, expiry, caps and allowed chains on
+  their own (B0 step 7). They must read as they did before.
+
+To turn admission off again, use the A5 off-only control
+(`arm-desk --desk=online --admission-off`) or post
+`{"automation":{"lead_admission":{"enabled":false}}}` the same way. That
+revokes the generation in force, and only a new explicit arming arms it again.
+
 ## Known limitations
 
 - **`\CryptoResearch\Hourly` still uses conhost.** It is started by
@@ -611,9 +923,30 @@ failure, unexpected authority or unbounded cost):
 - **The real 3-hour limit and a real `pilot.js` run were not exercised by the
   probes:** the probes used `PT15S` and fictional children. The production
   task was not run.
-- **CoinGecko's context refresh** (`cycle.refreshContext`) checks the meter
-  before its requests and counts after, as before: one refresh can end above
-  the cap by its own small number of requests. Its pre-check now fails closed
-  on an unknown meter.
+- **Market context when the count goes unusable after both answers.** The
+  complete snapshot is kept, as prices are, and the refresh reports `held` with
+  `accounting_unknown`. The status file is not rewritten, so
+  `context.last_success_at` stays at the earlier success. Nothing more is sent
+  to CoinGecko until the file is repaired (A2 operator steps).
+- **Market context and a competing caller.** The up-front check still needs
+  room for both requests. If another caller takes the last place while
+  `/global` is out, the markets request is refused and not sent. The refresh
+  reports `budget_paused`, the `/global` request stays counted, and the
+  earlier snapshot is kept.
+- **The online desk's exit-quote status was not re-read for the no-`calls`
+  correction.** The fields recorded from it on 2026-10-22 to 2026-10-31 match
+  the accepted shape:
+  - the eight top-level fields;
+  - every recorded request counter 0;
+  - `budget: false`;
+  - no gate and no GitHub wait.
+
+  Its `failed`, `not_checkable`, `incomplete`, `quote_waits`, `rate_limited`,
+  `resolutions` and `corrections` values were not recorded then. When nothing
+  is sent, the monitor writes them as 0, `{}`, null and counts. If the file has
+  any other shape, the monitor holds and says why. Read doctor's Forensics line
+  before B0 (step 5) and repair by the A2 operator steps. No candle file
+  without `calls` was ever found.
 - **Whether a cancelled mandate grant holds `max_open_grants` capacity** is to
-  be read before B2 (see above).
+  be read before B2 (see above). That it uses the New York day's grant
+  allowance is established from the code (see the `reopenReason` analysis).

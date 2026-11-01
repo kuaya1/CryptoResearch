@@ -499,3 +499,168 @@ test('--desk=online off-only: the script makes the settings write and one read b
   assert.deepEqual(bad.calls.map((c) => c[1]), ['/api/session', '/api/settings']);
   assert.notEqual(quiet[0][1].status, 200);
 });
+
+// ---------------------------------------------------------------------------
+// Phase C step 3: the reviewed admission-only patch (PR #125 audit, finding 3;
+// docs/engineering/BOUNDED_PAPER_READINESS.md). The runbook's own validation
+// command and console script are read from the markdown and run here, on a
+// FICTIONAL desk, through the real Settings validation and application path.
+
+const RUNBOOK = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'engineering', 'BOUNDED_PAPER_READINESS.md'), 'utf8');
+const PLACEHOLDER = '<explicit approved ISO timestamp>';
+const PATCH_TEXT = `{"automation":{"lead_admission":{"enabled":true,"daily_limit":1,"expires_at":"${PLACEHOLDER}"}}}`;
+const RUNBOOK_SCRIPT = (RUNBOOK.match(/```js\n(\/\/ Phase C step 3: admission only\.[\s\S]*?)```/) || [])[1];
+const RUNBOOK_VALIDATE = (RUNBOOK.match(/^node -e '([^']+)' \$patch$/m) || [])[1];
+const HOUR = 3600000;
+const expiryIn = (ms) => new Date(Math.floor((Date.now() + ms) / HOUR) * HOUR).toISOString();
+const admissionPatch = (exp) => JSON.parse(PATCH_TEXT.replace(PLACEHOLDER, exp));
+
+// A desk where every value the baseline arm-desk writes is Eric's own, none
+// of them the baseline's: the book and fee, the lead policy (off, his own
+// thresholds), sizing, the intent life, automatic exit quotes off, the paper
+// mandate armed (generation 1) and admission armed once and turned off
+// (generation 1, revoked).
+async function ownValuesDesk(t) {
+  const w = temp(t);
+  assert.equal((await run(['arm-desk', '--mandate-days=7', '--admission-days=5', '--admission-daily=2', '--allow=XFIC/USDC', '--intent-life=4320', '--workspace', w.root])).status, 'saved');
+  assert.equal((await run(['arm-desk', '--admission-off', '--workspace', w.root])).verified, true);
+  applySettings(reopen(w), {
+    automation: { exit_quotes_auto: false },
+    leads: { enabled: false, min_market_cap_usd: 9000000, min_volume_24h_usd: 400000, max_sell_tax_pct: 3, eligibility_hours: 24 },
+    tickets: { sizing: { min_grade_new_entry: 60 } },
+    trader: { book: { cash_usd: '40000', fee_rate: '0.002' } },
+  }, 'FICTIONAL: own values');
+  const s = settingsOf(w);
+  assert.deepEqual([s.trader.book, s.trader.rules.max_validity_minutes, s.leads.enabled, s.leads.min_market_cap_usd, s.tickets.sizing.min_grade_new_entry, s.automation.exit_quotes_auto], [{ cash_usd: '40000', fee_rate: '0.002' }, 4320, false, 9000000, 60, false]);
+  assert.deepEqual([s.automation.lead_admission.enabled, s.automation.lead_admission.daily_limit, s.automation.lead_admission.authority.generation, s.automation.lead_admission.authority.revoked_because], [false, 2, 1, 'off']);
+  assert.equal(MT.mandateOf(reopen(w)).on, true);
+  assert.equal(LA.authorityOf(reopen(w)).on, false);
+  return w;
+}
+
+test('admission-only patch: the Settings path arms admission alone, as a new generation; the book, fee, lead policy, sizing, intent life, other automation and the mandate are as they were', async (t) => {
+  assert.ok(RUNBOOK.includes(PATCH_TEXT), 'the runbook carries the reviewed patch verbatim');
+  const w = await ownValuesDesk(t);
+  const ws = reopen(w);
+  const exp = expiryIn(3 * 24 * HOUR);
+  const patch = admissionPatch(exp);
+  const tree0 = hashTree(w.root);
+  // Prepare and validate: the desk's own validator returns it unchanged and writes nothing.
+  assert.deepEqual(validateSettingsPatch(JSON.parse(JSON.stringify(patch)), ws), patch);
+  assert.deepEqual(hashTree(w.root), tree0, 'validation wrote nothing');
+  const before = settingsOf(w);
+  applySettings(ws, patch, 'FICTIONAL: Phase C admission-only patch');
+  const after = settingsOf(w);
+  const au = after.automation.lead_admission.authority;
+  const want = JSON.parse(JSON.stringify(before));
+  want.automation.lead_admission = { ...before.automation.lead_admission, enabled: true, daily_limit: 1, expires_at: exp, authority: au };
+  assert.deepEqual(after, want, 'only admission\'s three values and its authority changed');
+  assert.deepEqual(Object.keys(au).sort(), ['armed_at', 'armed_by', 'generation', 'policy_sha256', 'version']);
+  assert.deepEqual([au.version, au.generation], ['cr-lead-admission-authority@1', 2], 'a new generation after the revoked one');
+  assert.match(au.armed_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.match(au.policy_sha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(after.automation.mandate, before.automation.mandate, 'the paper mandate and its authority are untouched');
+  assert.equal(after.automation.autonomous_paper_loop, before.automation.autonomous_paper_loop);
+  const files = changed(tree0, hashTree(w.root));
+  assert.ok(files.includes('config/settings.json'));
+  const others = files.filter((f) => f !== 'config/settings.json');
+  assert.ok(others.every((f) => OP_RECORD.test(f)), `only the settings and the write's own operation records changed: ${others.join(', ')}`);
+  // Read back: admission authority, generation, expiry and daily limit.
+  const a = LA.authorityOf(reopen(w));
+  assert.deepEqual([a.on, a.generation, a.values.enabled, a.values.daily_limit, a.values.expires_at, a.policy_sha256], [true, 2, true, 1, exp, au.policy_sha256]);
+  const m = MT.mandateOf(reopen(w));
+  assert.equal(m.on, true, 'the mandate is still on, apart from admission');
+  // The same patch again records no new generation.
+  applySettings(reopen(w), patch, 'FICTIONAL: the same patch again');
+  assert.deepEqual(settingsOf(w).automation.lead_admission.authority, au);
+});
+
+test('admission-only patch: the runbook\'s validation command passes the prepared patch unchanged and refuses the placeholder, a past expiry and one over 30 days', (t) => {
+  assert.ok(RUNBOOK_VALIDATE, 'the runbook carries the validation command');
+  const repo = path.join(__dirname, '..', '..');
+  const validate = (text) => require('child_process').spawnSync(process.execPath, ['-e', RUNBOOK_VALIDATE, text], { cwd: repo, encoding: 'utf8', timeout: 60000 });
+  const good = PATCH_TEXT.replace(PLACEHOLDER, expiryIn(3 * 24 * HOUR));
+  const ok = validate(good);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout.trim(), good, 'the patch exactly as prepared');
+  for (const [name, text, why] of [
+    ['the placeholder', PATCH_TEXT, /expires_at must be an ISO-8601 UTC time/],
+    ['a past expiry', PATCH_TEXT.replace(PLACEHOLDER, '2026-10-01T00:00:00.000Z'), /must be in the future/],
+    ['31 days ahead', PATCH_TEXT.replace(PLACEHOLDER, expiryIn(31 * 24 * HOUR)), /at most 30 days ahead/],
+    ['a limit of 4', PATCH_TEXT.replace(PLACEHOLDER, expiryIn(3 * 24 * HOUR)).replace('"daily_limit":1', '"daily_limit":4'), /from 0 to 3/],
+    ['another key', PATCH_TEXT.replace(PLACEHOLDER, expiryIn(3 * 24 * HOUR)).replace('"enabled":true', '"enabled":true,"authority":{}'), /has no setting authority/],
+    ['an expiry the desk would rewrite', PATCH_TEXT.replace(PLACEHOLDER, expiryIn(3 * 24 * HOUR).replace('.000Z', 'Z')), /the validator changed it/],
+  ]) {
+    const r = validate(text);
+    assert.equal(r.status, 1, `${name}: refused`);
+    assert.match(r.stderr, why, name);
+  }
+});
+
+test('admission-only patch: the runbook\'s console script, on a signed-in FICTIONAL desk, sends nothing with the placeholder; with an approved time it writes admission alone and reads back its authority and no unrelated change', async (t) => {
+  assert.ok(RUNBOOK_SCRIPT, 'the runbook carries the console script');
+  assert.ok(RUNBOOK_SCRIPT.includes(`const PATCH = ${PATCH_TEXT};`), 'the script posts the reviewed patch');
+  assert.doesNotMatch(RUNBOOK_SCRIPT, /exit-quotes|init-defaults|pilot|enroll|contracts|forensics|DESK_INGEST_KEY|XAI_API_KEY|ALCHEMY_API_KEY|passphrase/i);
+  const w = await ownValuesDesk(t);
+  const ws = reopen(w);
+  const srv = await start(ws, { port: 47980 + Math.floor(Math.random() * 9), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  // As written: nothing is asked of the desk.
+  const idle = fictionalTransport(srv.port);
+  const said = [];
+  await vm.runInNewContext(RUNBOOK_SCRIPT, { fetch: idle.fetchImpl, console: { log: (...a) => said.push(a) } });
+  assert.deepEqual(idle.calls, [], 'the placeholder sends nothing');
+  assert.match(String(said[0][0]), /Set the approved expiry first.+Nothing was sent/);
+  // With Eric's approved time.
+  const exp = expiryIn(3 * 24 * HOUR);
+  const before = settingsOf(w);
+  const tree0 = hashTree(w.root);
+  const tr = fictionalTransport(srv.port);
+  const logs = [];
+  await vm.runInNewContext(RUNBOOK_SCRIPT.replace(PLACEHOLDER, exp), { fetch: tr.fetchImpl, console: { log: (...a) => logs.push(a) } });
+  assert.deepEqual(tr.calls, [['GET', '/api/session'], ['GET', '/api/index'], ['POST', '/api/settings'], ['GET', '/api/index']], 'no other endpoint is asked');
+  const [wrote, read] = logs.map((l) => JSON.parse(JSON.stringify(l)));
+  assert.deepEqual([wrote[0], wrote[1].status, wrote[1].body.status], ['admission patch', 200, 'saved']);
+  const after = settingsOf(w);
+  const au = after.automation.lead_admission.authority;
+  assert.equal(read[0], 'read back');
+  const { changed: names, ...shown } = read[1];
+  assert.deepEqual(shown, {
+    enabled: true,
+    daily_limit: 1,
+    expires_at: exp,
+    paused: false,
+    authority: { generation: 2, armed_at: au.armed_at, policy_sha256: au.policy_sha256, revoked_at: null },
+    unrelated_changed: [],
+    mandate_unchanged: true,
+  });
+  assert.ok(names.every((k) => k.startsWith('automation.lead_admission.')), names.join(', '));
+  for (const k of ['enabled', 'daily_limit', 'expires_at', 'authority.generation', 'authority.armed_at', 'authority.policy_sha256', 'authority.revoked_at']) assert.ok(names.includes(`automation.lead_admission.${k}`), `${k} is named as changed`);
+  const want = JSON.parse(JSON.stringify(before));
+  want.automation.lead_admission = { ...before.automation.lead_admission, enabled: true, daily_limit: 1, expires_at: exp, authority: au };
+  assert.deepEqual(after, want, 'on disk: admission alone');
+  // Besides the settings write's own records, the server rebuilds its derived
+  // index after a settings write (POST /api/settings, rebuild(['config'])).
+  const others = changed(tree0, hashTree(w.root)).filter((f) => f !== 'config/settings.json' && f !== 'dashboard/index/index.json');
+  assert.ok(others.every((f) => OP_RECORD.test(f)), `only the settings, the write's own operation records and the derived index changed: ${others.join(', ')}`);
+  assert.equal(LA.authorityOf(reopen(w)).on, true);
+  assert.equal(MT.mandateOf(reopen(w)).on, true);
+});
+
+test('the earlier Phase C step (arm-desk --admission-days=N --admission-daily=1) is a baseline arming: it resets the book, fee, lead policy, sizing, intent life and exit quotes, and online it posts more than settings', async (t) => {
+  const w = await ownValuesDesk(t);
+  const before = settingsOf(w);
+  const online = await run(['arm-desk', '--desk=online', '--admission-days=3', '--admission-daily=1', '--workspace', w.root]);
+  assert.match(online._text, /post\('\/api\/forensics\/exit-quotes\/auto', \{\}\)/);
+  assert.match(online._text, /post\('\/api\/contracts\/init-defaults', \{\}\)/);
+  const out = await run(['arm-desk', '--admission-days=3', '--admission-daily=1', '--workspace', w.root]);
+  assert.equal(out.status, 'saved', 'without --desk=online it writes this local workspace');
+  const after = settingsOf(w);
+  assert.deepEqual(after.trader.book, { cash_usd: '25000', fee_rate: '0.001' }, 'the book and fee were reset');
+  assert.notDeepEqual(after.trader.book, before.trader.book);
+  assert.equal(after.trader.rules.max_validity_minutes, 1440, 'the intent life went back to 1440');
+  assert.equal(after.leads.enabled, true, 'the lead policy was turned on');
+  assert.equal(after.leads.min_market_cap_usd, 5000000, 'its thresholds reset');
+  assert.equal(after.tickets.sizing.min_grade_new_entry, 50, 'sizing reset');
+  assert.equal(after.automation.exit_quotes_auto, true, 'automatic exit quotes turned on');
+});
