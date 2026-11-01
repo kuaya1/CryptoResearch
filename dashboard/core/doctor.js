@@ -196,7 +196,7 @@ async function doctor(ws, { writeProbe = false } = {}) {
   }
 
   const m = require('./market').freshness(ws);
-  add('Market data', ['fresh', 'fresh_partial', 'fresh_last_failed'].includes(m.freshness), m.last_success_at ? `Last success ${m.last_success_at} (${m.age_minutes} min ago)${m.last_error ? `; last issue: ${m.last_error}` : ''}; CoinGecko requests this month ${m.calls.month_count}${m.calls.budget_monthly ? ` of ${m.calls.budget_monthly}` : ''}${typeof m.calls.month_answered === 'number' ? ` (${m.calls.month_answered} answered${m.calls.answered_counted_since ? ` since ${m.calls.answered_counted_since}` : ''})` : ''}` : ws.settings.market_data.enabled ? 'Never fetched' : 'Turned off in settings', ['fresh'].includes(m.freshness) || !ws.settings.market_data.enabled ? 'ok' : 'warn');
+  add('Market data', ['fresh', 'fresh_partial', 'fresh_last_failed'].includes(m.freshness), m.last_success_at ? `Last success ${m.last_success_at} (${m.age_minutes} min ago)${m.last_error ? `; last issue: ${m.last_error}` : ''}; ${m.calls.unknown ? `CoinGecko requests this month unknown: ${m.calls.unknown}` : `CoinGecko requests this month ${m.calls.month_count}${m.calls.budget_monthly ? ` of ${m.calls.budget_monthly}` : ''}${typeof m.calls.month_answered === 'number' ? ` (${m.calls.month_answered} answered${m.calls.answered_counted_since ? ` since ${m.calls.answered_counted_since}` : ''})` : ''}`}` : m.calls.unknown ? m.calls.unknown : ws.settings.market_data.enabled ? 'Never fetched' : 'Turned off in settings', !m.calls.unknown && (['fresh'].includes(m.freshness) || !ws.settings.market_data.enabled) ? 'ok' : 'warn');
 
   try {
     // DefiLlama fundamentals: what is bound and saved, the last refresh, the gate.
@@ -224,12 +224,12 @@ async function doctor(ws, { writeProbe = false } = {}) {
     const detail = !so.enabled
       ? 'Turned off in settings.'
       : [
-        `${parts.join(', ') || 'No verified contracts on record'}; last run ${so.last_run ? `${so.last_run.at} (${so.last_run.status})` : 'never'}; requests this month ${so.calls.month_count}${so.budget_monthly ? ` of ${so.budget_monthly}` : ''}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; research packets: ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : 'GoPlus keyless'}.`,
+        `${parts.join(', ') || 'No verified contracts on record'}; last run ${so.last_run ? `${so.last_run.at} (${so.last_run.status})` : 'never'}; requests this month ${so.accounting_unknown ? `unknown (${so.accounting_unknown})` : `${so.calls.month_count}${so.budget_monthly ? ` of ${so.budget_monthly}` : ''}`}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; research packets: ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : 'GoPlus keyless'}.`,
         so.credential_note || '',
         alerts ? `${alerts} contract change alert(s) in the review queue.` : '',
         bad.length ? `Contracts that cannot be screened: ${bad.slice(0, 5).map((b) => `${b.project_id} (${b.reason})`).join('; ')}${bad.length > 5 ? ` and ${bad.length - 5} more` : ''}.` : '',
       ].filter(Boolean).join(' ');
-    const warn = so.enabled && (alerts > 0 || (st.unavailable || 0) > 0 || bad.some((b) => b.kind === 'invalid_address'));
+    const warn = so.enabled && (Boolean(so.accounting_unknown) || alerts > 0 || (st.unavailable || 0) > 0 || bad.some((b) => b.kind === 'invalid_address'));
     add('Contract screening', !warn, detail, warn ? 'warn' : 'info');
   } catch (_) { /* screening module optional */ }
 
@@ -264,9 +264,9 @@ async function doctor(ws, { writeProbe = false } = {}) {
       if (prof.monitoring && prof.monitoring.enabled) monitored += 1;
     }
     const m = require('./forensic-monitor').statusView(ws);
-    add('Forensics', true, receipts || open || monitored
-      ? `${receipts} saved assessment(s), ${open} audit(s) open, monitoring on for ${monitored} project(s); monitor requests this month ${m.requests_this_month} of ${m.monthly_budget}${m.last_run_at ? `; last run ${m.last_run_at}` : ''}${m.github_wait_until ? `; GitHub asked to wait until ${m.github_wait_until}` : ''}${m.held ? '; held in this restored copy' : ''}. No model is called for it.`
-      : 'No forensic audit yet; nothing is monitored.', 'info');
+    add('Forensics', !m.accounting_unknown, receipts || open || monitored || m.accounting_unknown
+      ? `${receipts} saved assessment(s), ${open} audit(s) open, monitoring on for ${monitored} project(s); monitor requests this month ${m.accounting_unknown ? `unknown (${m.accounting_unknown})` : `${m.requests_this_month} of ${m.monthly_budget}`}${m.last_run_at ? `; last run ${m.last_run_at}` : ''}${m.github_wait_until ? `; GitHub asked to wait until ${m.github_wait_until}` : ''}${m.held ? '; held in this restored copy' : ''}. No model is called for it.`
+      : 'No forensic audit yet; nothing is monitored.', m.accounting_unknown ? 'warn' : 'info');
   } catch (_) { /* forensics optional */ }
 
   const pendingReq = require('./requests').pendingRequests(ws);

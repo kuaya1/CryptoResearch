@@ -33,12 +33,16 @@
 // (projects/<id>/forensics/observations/), appended through forensics.js.
 
 const crypto = require('crypto');
+const fs = require('fs');
 const { readJson, jsonText, sha256 } = require('./fsx');
+const A = require('./call-accounting');
 const { withLock, replaceFile, OpError } = require('./ops');
 const { acquireLease, releaseLease } = require('./leases');
 const { ymdInTz } = require('./dates');
 
 const STATUS_REL = 'market-data/forensics/status.json';
+const STATUS_SCHEMA = 'cr.forensic-monitor-status.v1';
+const METER = 'exit_quotes';
 const LEASE = 'forensics';
 const GITHUB = 'https://api.github.com';
 const HOUR = 3600000;
@@ -46,39 +50,53 @@ const isoOf = (ms) => new Date(ms).toISOString();
 
 const cfgOf = (ws) => require('./forensics').monitorCfg(ws);
 
+// The status, validated before anything reads its counts (call-accounting.js):
+// a file never written is a monitor never run; one whose accounting cannot be
+// used is returned with `unreadable` and `accounting_unknown` (its other
+// fields kept for a view), and no writer replaces it.
 function readStatus(ws) {
-  try {
-    return readJson(ws.abs(STATUS_REL), { state: 'never_run' });
-  } catch (_) {
-    return { state: 'never_run', unreadable: true };
-  }
+  const r = A.classify(METER, () => fs.readFileSync(ws.abs(STATUS_REL), 'utf8'));
+  if (r.unknown) return { ...(r.status || { state: 'never_run' }), unreadable: true, accounting_unknown: A.words(METER, r.unknown) };
+  return r.absent ? A.initial({ state: 'never_run' }) : r.status;
 }
 
-function updateStatus(ws, fn) {
-  withLock(ws, 'forensics_status', () => {
+// This month's and today's counts at `now` (New York), or { unknown: words }.
+function callCounts(status, now) {
+  if (status.unreadable) return { unknown: status.accounting_unknown || A.words(METER, 'it could not be read') };
+  const c = A.countsOf(METER, status, now);
+  return c.unknown ? { unknown: A.words(METER, c.unknown) } : c;
+}
+
+// The words when the monitor's request count cannot be used now, else null.
+function accountingHold(ws, now) {
+  return callCounts(readStatus(ws), now).unknown || null;
+}
+
+// Rewrites the status under its lock, or returns null and writes nothing when
+// the stored accounting cannot be used at `now` (kept for inspection, also
+// when it went bad while a request was out) or the result would not be.
+function updateStatus(ws, fn, now = null) {
+  return withLock(ws, 'forensics_status', () => {
     const cur = readStatus(ws);
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...fn(cur), schema_version: 'cr.forensic-monitor-status.v1' }));
+    if (cur.unreadable || (now !== null && callCounts(cur, now).unknown)) return null;
+    const next = { ...fn(cur), schema_version: STATUS_SCHEMA };
+    if (A.problemOf(METER, next)) return null;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
+    return next;
   });
 }
 
-function callCounts(status, now) {
-  const today = ymdInTz(new Date(now));
-  const month = today.slice(0, 7);
-  const c = status.calls && status.calls.month === month ? { ...status.calls } : { month, month_count: 0, day: today, day_count: 0 };
-  if (c.day !== today) {
-    c.day = today;
-    c.day_count = 0;
-  }
-  return c;
-}
-
-// Counts one request before it is sent; false when the month's budget is used.
+// Counts one request before it is sent; false, with nothing counted or
+// rewritten, when the month's budget is used or the count cannot be used.
 function reserveRequest(ws, cfg, now) {
   return withLock(ws, 'forensics_status', () => {
     const cur = readStatus(ws);
     const c = callCounts(cur, now);
+    if (c.unknown) return false;
     if (cfg.monthly_request_budget && c.month_count >= cfg.monthly_request_budget) return false;
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...cur, calls: { ...c, month_count: c.month_count + 1, day_count: c.day_count + 1 }, schema_version: 'cr.forensic-monitor-status.v1' }));
+    const next = { ...cur, calls: { ...c, month_count: c.month_count + 1, day_count: c.day_count + 1 }, schema_version: STATUS_SCHEMA };
+    if (A.problemOf(METER, next)) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText(next));
     return true;
   });
 }
@@ -157,7 +175,7 @@ function noteQuoteOutcome(ws, cfg, provider, out, now) {
     }
     gates[provider] = g;
     return { ...s, quote_gates: gates };
-  });
+  }, now);
 }
 
 function isDue(ws, now = Date.now()) {
@@ -352,6 +370,8 @@ async function refresh(ws, opts = {}) {
   if (heldCopy(ws)) return { status: 'held', message: 'A restored copy: the forensic monitor sends nothing until the copy is released.' };
   const t0 = now();
   const st0 = readStatus(ws);
+  const unknown0 = callCounts(st0, t0).unknown;
+  if (unknown0) return { status: 'held', accounting_unknown: true, message: `Forensic monitor not run: ${unknown0}` };
   if (!force && st0.next_allowed_at && Date.parse(st0.next_allowed_at) > t0) return { status: 'backoff', message: `Forensic monitor backing off until ${st0.next_allowed_at}.` };
   const lease = acquireLease(ws, LEASE, 30 * 60000, { label: trigger });
   if (!lease) return { status: 'busy', message: 'Another forensic monitor run is in progress.' };
@@ -399,7 +419,7 @@ async function refresh(ws, opts = {}) {
         if (out.stop === 'budget') { counts.budget = true; break; }
         if (out.stop === 'rate_limited') {
           counts.rate_limited = isoOf(out.until);
-          updateStatus(ws, (s) => ({ ...s, github_retry_after_until: isoOf(out.until) }));
+          updateStatus(ws, (s) => ({ ...s, github_retry_after_until: isoOf(out.until) }), now());
           continue;
         }
         F.appendObservation(ws, d.project.project_id, out.obs);
@@ -420,7 +440,8 @@ async function refresh(ws, opts = {}) {
       }
     }
     const allFailed = counts.checks > 0 && counts.failed + counts.not_checkable === counts.checks && counts.reads === 0 && counts.quotes_answered === 0;
-    updateStatus(ws, (s) => ({
+    const unknownNow = accountingHold(ws, now());
+    const recorded = updateStatus(ws, (s) => ({
       ...s,
       last_run_at: isoOf(now()),
       last_trigger: trigger,
@@ -428,9 +449,13 @@ async function refresh(ws, opts = {}) {
       last_resolutions_day: today,
       consecutive_failures: allFailed ? (s.consecutive_failures || 0) + 1 : 0,
       next_allowed_at: allFailed ? isoOf(now() + Math.min(cfg.backoff_max_minutes, cfg.backoff_initial_minutes * 2 ** Math.max(0, (s.consecutive_failures || 0))) * 60000 * (0.9 + crypto.randomInt(0, 200) / 1000)) : null,
-    }));
+    }), now());
     const did = counts.checks + counts.reads + counts.resolutions + counts.corrections + counts.quotes + counts.quote_errors;
     const waits = Object.entries(counts.quote_waits).map(([p, until]) => `${p} asked to wait until ${until}`);
+    // A reservation refused because the count went bad mid-run reads as the
+    // budget to the request path; it is said as what it is.
+    const unknownWords = unknownNow || (!recorded ? accountingHold(ws, now()) || 'The run could not be recorded in the monitor\'s status.' : null);
+    if (unknownWords) return { status: 'held', accounting_unknown: true, message: `${did ? `${counts.checks} product check(s), ${counts.reads} repository read(s), ${counts.quotes} exit quote(s) before it stopped. ` : ''}${unknownWords}`, counts };
     return {
       status: !did ? 'noop' : counts.budget ? 'budget_paused' : counts.failed || counts.quote_errors ? 'attention' : 'ok',
       message: !did ? 'No forensic observation was due.' : `${counts.checks} product check(s) (${counts.failed} failed, ${counts.incomplete} incomplete, ${counts.not_checkable} not checkable), ${counts.reads} repository read(s), ${counts.quotes} exit quote(s) (${counts.no_route} no route, ${counts.quote_errors} error(s)), ${counts.resolutions} checkpoint outcome(s) recorded${counts.corrections ? ` and ${counts.corrections} re-read under ${require("./forensic-defs").METHOD_VERSION}` : ""}${counts.budget ? '; the monthly request budget is used up' : ''}${counts.rate_limited ? `; GitHub asked to wait until ${counts.rate_limited}` : ''}${waits.length ? `; ${waits.join('; ')}` : ''}.`,
@@ -463,6 +488,8 @@ async function quoteFixedToken(ws, pid, { target_id: targetId, amount_in: amount
   const target = (F.readProfile(ws, pid).targets.exit_quotes || []).find((t) => t.target_id === targetId);
   if (!target) throw new OpError('NOT_FOUND', 'That exit-quote chain is not approved for this project.');
   if (!require('./forensic-exitcompare').referenceAmounts(ws, pid, target).has(amountIn)) throw new OpError('INVALID', 'Only the comparison\'s reference quantity can be quoted (what your position size bought at the first quote after an assessment).');
+  const unknown = accountingHold(ws, now());
+  if (unknown) throw new OpError('REFUSED', unknown);
   const wait = quoteGate(readStatus(ws), target.provider, now());
   if (wait) throw new OpError('REFUSED', `${target.provider} asked this desk to wait until ${wait}; nothing was sent.`);
   const lease = acquireLease(ws, LEASE, 10 * 60000, { label: 'explicit quote' });
@@ -474,7 +501,7 @@ async function quoteFixedToken(ws, pid, { target_id: targetId, amount_in: amount
     const out = await XQ.quoteTarget(ws, { project, target, sizes: [], amounts: [amountIn], request_id: rid, cfg, fetchImpl, now, reserve: () => reserveRequest(ws, cfg, now()), sleep, observations: recent.filter((o) => o.target_id === targetId), cgGetImpl });
     const written = out.observations.map((o) => F.appendObservation(ws, pid, { ...o, request_ref: rid }));
     noteQuoteOutcome(ws, cfg, target.provider, out, now());
-    if (out.stop === 'budget') throw new OpError('REFUSED', 'The monthly request budget is used up; nothing was sent.');
+    if (out.stop === 'budget') throw new OpError('REFUSED', accountingHold(ws, now()) || 'The monthly request budget is used up; nothing was sent.');
     if (out.gate) throw new OpError('REFUSED', `${target.provider} asked this desk to wait; nothing more was sent.`);
     if (out.skip) throw new OpError('REFUSED', out.skip);
     return { status: 'saved', observation: written[written.length - 1] || null };
@@ -499,6 +526,8 @@ async function quoteSizeUsd(ws, pid, { size_usd: sizeUsd, fetchImpl = fetch, cgG
   const project = require('./projects').getProject(ws, pid);
   const targets = F.readProfile(ws, pid).targets.exit_quotes || [];
   if (!targets.length) return { status: 'no_target', reason: 'No exit-quote chain is approved for this project (Forensics > Exits).' };
+  const unknown = accountingHold(ws, now());
+  if (unknown) return { status: 'refused', reason: unknown };
   const target = targets.find((t) => !quoteGate(readStatus(ws), t.provider, now()));
   if (!target) return { status: 'refused', reason: `${targets[0].provider} asked this desk to wait; nothing was sent.` };
   const lease = acquireLease(ws, LEASE, 10 * 60000, { label: 'ticket exit quote' });
@@ -508,7 +537,7 @@ async function quoteSizeUsd(ws, pid, { size_usd: sizeUsd, fetchImpl = fetch, cgG
     const out = await XQ.quoteTarget(ws, { project, target, sizes: [sizeUsd], cfg, fetchImpl, now, reserve: () => reserveRequest(ws, cfg, now()), sleep, observations: recent.filter((o) => o.target_id === target.target_id), cgGetImpl });
     for (const o of out.observations) F.appendObservation(ws, pid, o);
     noteQuoteOutcome(ws, cfg, target.provider, out, now());
-    if (out.stop === 'budget') return { status: 'refused', reason: 'The monthly request budget is used up; nothing was sent.' };
+    if (out.stop === 'budget') return { status: 'refused', reason: accountingHold(ws, now()) || 'The monthly request budget is used up; nothing was sent.' };
     if (out.gate) return { status: 'refused', reason: `${target.provider} asked this desk to wait; nothing more was sent.` };
     if (out.skip) return { status: 'refused', reason: out.skip };
     const last = out.observations[out.observations.length - 1] || null;
@@ -527,12 +556,14 @@ function statusView(ws, now = Date.now()) {
   const c = callCounts(st, now);
   return {
     enabled: cfg.enabled,
+    // Unknown is said, never a 0 (requests_this_month is then null).
+    accounting_unknown: c.unknown || null,
     held: Boolean(heldCopy(ws)),
     last_run_at: st.last_run_at || null,
     last_result: st.last_result || null,
     github_wait_until: gate(st, now),
     next_allowed_at: st.next_allowed_at && Date.parse(st.next_allowed_at) > now ? st.next_allowed_at : null,
-    requests_this_month: c.month_count,
+    requests_this_month: c.unknown ? null : c.month_count,
     monthly_budget: cfg.monthly_request_budget,
     product_interval_hours: cfg.product_interval_hours,
     repo_interval_hours: cfg.repo_interval_hours,
@@ -542,4 +573,4 @@ function statusView(ws, now = Date.now()) {
   };
 }
 
-module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate, quoteFixedToken, quoteSizeUsd };
+module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, callCounts, accountingHold, reserveRequest, quoteGate, quoteFixedToken, quoteSizeUsd };

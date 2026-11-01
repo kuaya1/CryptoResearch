@@ -152,7 +152,8 @@ export function candleWords(c) {
   if (c.held) return 'A restored copy: the hourly read sends nothing until the copy is released.';
   const parts = [
     c.last_run_at ? `Last read ${c.last_run_at}` : 'Not read yet',
-    `${c.requests_today} of ${c.daily_budget} requests today, ${c.requests_this_month} of ${c.monthly_budget} this month`,
+    // An unreadable request count is said as unknown, never as 0.
+    c.accounting_unknown ? `Request count unknown: ${c.accounting_unknown}` : `${c.requests_today} of ${c.daily_budget} requests today, ${c.requests_this_month} of ${c.monthly_budget} this month`,
     c.wait_until ? `GeckoTerminal asked to wait until ${c.wait_until}` : null,
   ].filter(Boolean);
   return `${parts.join(' · ')}.`;

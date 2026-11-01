@@ -304,7 +304,10 @@ function recordAttempt(ws, { calls, answered = 0, outcome, error = null, snapsho
   const market = require('./market');
   withLock(ws, 'market_write', () => {
     const status = market.readStatus(ws);
-    const c = market.addCalls(market.callBudget(ws, status), calls, answered);
+    const counted = market.callBudget(ws, status);
+    // A count that cannot be used is kept as it is (call-accounting.js).
+    if (counted.unknown) return;
+    const c = market.addCalls(counted, calls, answered);
     const prev = status.context || {};
     const context = {
       state: outcome,
@@ -314,7 +317,9 @@ function recordAttempt(ws, { calls, answered = 0, outcome, error = null, snapsho
       last_snapshot_id: snapshotId || prev.last_snapshot_id || null,
       consecutive_failures: outcome === 'ok' ? 0 : (prev.consecutive_failures || 0) + 1,
     };
-    replaceFile(ws, ws.abs(market.STATUS_REL), jsonText({ ...status, schema_version: status.schema_version || 'cr.market-status.v2', calls: c, context }));
+    const next = { ...status, schema_version: market.STATUS_SCHEMA, calls: c, context };
+    if (!market.writableStatus(ws, status, next)) return;
+    replaceFile(ws, ws.abs(market.STATUS_REL), jsonText(next));
     // Under the same lock, so no runner sees the failure without the wait.
     if (rateLimit) market.noteRateLimit(ws, rateLimit);
   });
@@ -331,6 +336,7 @@ async function refreshContext(ws, { trigger = 'manual', fetchImpl, force = false
   const gate = market.nextAllowed(ws, status0, { force });
   if (!gate.allowed) return { status: 'backoff', message: `Market context not refreshed: ${gate.reason}; next try ${market.clock(gate.until)}.`, rate_limited: gate.rate_limited, retry_at: gate.until };
   const budget = market.callBudget(ws, status0);
+  if (budget.unknown) return { status: 'held', accounting_unknown: true, message: `Market context not refreshed: ${budget.unknown} It stays at its last snapshot.` };
   if (budget.budget_monthly && budget.month_count + 2 > budget.budget_monthly) {
     return { status: 'budget_paused', message: `Monthly CoinGecko call budget reached (${budget.month_count} of ${budget.budget_monthly}); market context stays at its last snapshot.` };
   }

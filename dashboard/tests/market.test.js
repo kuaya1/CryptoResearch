@@ -95,9 +95,13 @@ function answer(status, { retryAfter = null, rows = [] } = {}) {
 
 const TIME = '(\\w{3} \\d{1,2}, )?\\d{1,2}:\\d{2} [AP]M';
 const msFromNow = (iso) => Date.parse(iso) - Date.now();
+// A status as the desk's writers leave it (call-accounting.js): the
+// supported schema and its counts. A file not written yet starts from an
+// ended period, which reads as zero this month.
 const writeStatus = (root, patch) => {
   const file = path.join(root, 'market-data', 'status.json');
-  atomicWrite(file, jsonText({ ...readJson(file, {}), ...patch }));
+  const base = readJson(file, null) || { schema_version: 'cr.market-status.v2', calls: { month: '2000-01', month_count: 0, day: '2000-01-01', day_count: 0 } };
+  atomicWrite(file, jsonText({ ...base, ...patch }));
 };
 
 test('a 429 without Retry-After closes the shared gate for two minutes; Refresh prices waits for it and says when it will try again', async (t) => {
@@ -376,7 +380,8 @@ test('V2-007: every CoinGecko request a price refresh sends counts once, also wh
     f.calls = calls;
     return f;
   };
-  const fresh = () => atomicWrite(ws.abs('market-data/status.json'), jsonText({ state: 'never_run' }));
+  // Never run: no status file at all (a schema-less object is unknown accounting).
+  const fresh = () => fs.rmSync(ws.abs('market-data/status.json'), { force: true });
   const counts = () => { const c = market.readStatus(ws).calls; return [c.month_count, c.day_count, c.month_answered, c.day_answered, c.remaining]; };
   const budget = market.callBudget(ws, market.readStatus(ws)).budget_monthly;
   const failures = [
@@ -410,7 +415,7 @@ test('V2-007: every CoinGecko request a price refresh sends counts once, also wh
   // A month already counted by older code (no answered count) keeps its
   // count and says from when answers are counted.
   const today = require('../core/dates').ymdInTz();
-  atomicWrite(ws.abs('market-data/status.json'), jsonText({ state: 'ok', calls: { month: today.slice(0, 7), month_count: 119, day: today, day_count: 3 } }));
+  atomicWrite(ws.abs('market-data/status.json'), jsonText({ schema_version: 'cr.market-status.v2', state: 'ok', calls: { month: today.slice(0, 7), month_count: 119, day: today, day_count: 3 } }));
   assert.equal(market.readStatus(ws).calls.month_answered, undefined);
   await market.refresh(ws, { fetchImpl: twoChunks(null), force: true });
   const c = market.readStatus(ws).calls;

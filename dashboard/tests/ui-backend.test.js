@@ -301,7 +301,10 @@ test('review queue: stale prices open the activity log and carry the market\'s o
   const { ws, root, cleanup } = tempWorkspace('attention-market');
   t.after(cleanup);
   fs.mkdirSync(path.join(root, 'market-data'), { recursive: true });
-  atomicWrite(path.join(root, 'market-data', 'status.json'), jsonText({ state: 'failed', last_attempt_at: new Date().toISOString(), last_success_at: new Date(Date.now() - 3 * 3600000).toISOString(), last_error: 'HTTP 429', note: 'FICTIONAL: the price source is limiting requests.', consecutive_failures: 2 }));
+  // The price job's own shape (schema and request counts): a status file
+  // without them is an unusable count since A2, said instead of this note.
+  const day = require('../core/dates').ymdInTz(new Date());
+  atomicWrite(path.join(root, 'market-data', 'status.json'), jsonText({ schema_version: 'cr.market-status.v2', state: 'failed', last_attempt_at: new Date().toISOString(), last_success_at: new Date(Date.now() - 3 * 3600000).toISOString(), last_error: 'HTTP 429', note: 'FICTIONAL: the price source is limiting requests.', consecutive_failures: 2, calls: { month: day.slice(0, 7), month_count: 2, day, day_count: 2 } }));
   const { buildIndex } = require('../core/indexer');
   const item = buildIndex(ws).attention.find((a) => a.kind === 'market_stale');
   assert.ok(item);
