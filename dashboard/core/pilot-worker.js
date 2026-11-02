@@ -44,16 +44,23 @@
 //   release   by the claim's token, before a session started ("stopped") or
 //             after one that failed and could save nothing ("agent_failed").
 //             Releasing as reconciled is Eric's, signed in (server.js).
+//   poll      the unattended runner's production poll (blueprint 2026-11-02
+//             row 6): the same snapshot GET /api/pilot/queue answers, and,
+//             only after it was computed, the sighting record
+//             (pilot-sighting.js: the desk's clock, the runner's ID, the
+//             invocation's ID and its declared agent cap). A snapshot that
+//             fails writes nothing; a time in the body is never read.
 //
 // What the worker token can never do: decide a ticket, arm or change the
 // mandate or any setting, force a Prosecutor, release as reconciled, or reach
-// any route but these four. The Researcher's and the Prosecutor's sessions
+// any route but these five. The Researcher's and the Prosecutor's sessions
 // never hold it (scripts/pilot.js keeps it in the runner).
 
 const crypto = require('crypto');
 const { OpError } = require('./ops');
 const claims = require('./pilot-claims');
-const { hourBucket, bearerMatches } = require('./pilot-poll');
+const { hourBucket, bearerMatches, pollBody } = require('./pilot-poll');
+const sighting = require('./pilot-sighting');
 
 const FORMAT = 'cr-pilot-worker@1';
 const LIMIT_PER_HOUR = 240;
@@ -274,6 +281,16 @@ function complete(ws, pid, token, { text, prompt_sha256, now = Date.now() } = {}
   return { ...base, status: 'saved', receipt_id: r.receipt_id, verified: true, ...(clamped ? { words: `as_of ${clamped.written} was after the save; recorded as ${clamped.recorded}.` } : {}) };
 }
 
+// The production poll: the snapshot first, then the sighting. Invalid fields
+// are refused before anything is read or written.
+function pollStep(ws, body, { now = Date.now() } = {}) {
+  const f = sighting.fieldsOf(body);
+  if (!f.runner_id || !f.invocation_id || f.max_agents === null) throw new OpError('INVALID', 'poll names runner_id (letters, digits, space, . _ : @ -; at most 80), invocation_id (8 to 64 letters, digits or -) and max_agents (0 to 10).');
+  const poll = pollBody(ws, now);
+  const rec = sighting.record(ws, f, { now });
+  return { format: FORMAT, status: 'polled', poll, sighting: rec };
+}
+
 function releaseByWorker(ws, pid, token, { outcome, now = Date.now() } = {}) {
   if (!WORKER_OUTCOMES.has(outcome)) throw new OpError('INVALID', `outcome is ${[...WORKER_OUTCOMES].join(' or ')}.`);
   const cur = claims.held(ws, pid, token);
@@ -315,7 +332,7 @@ function makePilotWorkerRoute(ws, { env = process.env, log = () => {}, now = () 
     const want = expectedDigest(env);
     if (!want) return send(res, 404, { error: 'Unknown API route' });
     const op = url.pathname.slice('/api/pilot/worker/'.length);
-    if (!['claim', 'prepare', 'complete', 'release'].includes(op)) return send(res, 404, { error: 'Unknown API route' });
+    if (!['claim', 'prepare', 'complete', 'release', 'poll'].includes(op)) return send(res, 404, { error: 'Unknown API route' });
     if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' });
     const t = now();
     if (!bearerMatches(req, want)) {
@@ -328,6 +345,7 @@ function makePilotWorkerRoute(ws, { env = process.env, log = () => {}, now = () 
     if (wait) return send(res, 429, { error: `At most ${LIMIT_PER_HOUR} worker requests an hour; try again in ${wait} s.`, code: 'RATE_LIMITED' }, { 'Retry-After': String(wait) });
     try {
       const body = await readBody(req);
+      if (op === 'poll') return send(res, 200, pollStep(ws, body, { now: t }));
       const pid = pidOf(body.project_id);
       let out;
       if (op === 'claim') out = claimStep(ws, pid, { owner: body.owner, expect: typeof body.expect === 'string' ? body.expect : null, now: t });
@@ -348,4 +366,4 @@ function makePilotWorkerRoute(ws, { env = process.env, log = () => {}, now = () 
   };
 }
 
-module.exports = { FORMAT, LIMIT_PER_HOUR, REFUSED_PER_HOUR, expectedDigest, claimStep, prepare, complete, releaseByWorker, makePilotWorkerRoute };
+module.exports = { FORMAT, LIMIT_PER_HOUR, REFUSED_PER_HOUR, expectedDigest, claimStep, prepare, complete, releaseByWorker, pollStep, makePilotWorkerRoute };

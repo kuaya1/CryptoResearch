@@ -941,6 +941,27 @@ async function pollOnline(o, { fetchImpl = globalThis.fetch, token, env = proces
   if (!body || body.format !== 'cr-pilot-poll@1' || !Array.isArray(body.steps)) throw new Error('The online desk\'s pilot poll did not answer cr-pilot-poll@1.');
   return { paused: body.paused === true, sessions: body.sessions || null, steps: body.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })) };
 }
+// The production poll (blueprint 2026-11-02 row 6): an unattended online run
+// polls through the worker route `poll` under the worker bearer, so the desk
+// records the sighting on its own clock after it computed the same snapshot.
+// The runner's ID is CR_PILOT_RUNNER_ID, else this host's name; the
+// invocation's ID is new for each run. Attended and dry runs keep the GET.
+const RUNNER_ID_ENV = 'CR_PILOT_RUNNER_ID';
+const RUNNER_ID_RE = /^[A-Za-z0-9 ._:@-]{1,80}$/;
+function runnerIdOf(env = process.env, host = os.hostname()) {
+  const set = env && typeof env[RUNNER_ID_ENV] === 'string' ? env[RUNNER_ID_ENV].trim() : '';
+  if (set) {
+    if (!RUNNER_ID_RE.test(set)) throw new Error(`${RUNNER_ID_ENV} is letters, digits, space, . _ : @ - only, at most 80.`);
+    return set;
+  }
+  return String(host || '').replace(/[^A-Za-z0-9._:@-]/g, '-').slice(0, 80) || 'pilot';
+}
+async function sightOnline(o, { fetchImpl = globalThis.fetch, token, env = process.env, runnerId, invocationId } = {}) {
+  const body = await workerCall(fetchImpl, deskUrlOf(o, env), token, 'poll', { runner_id: runnerId, invocation_id: invocationId, max_agents: o.maxAgents }, { timeoutMs: 30000 });
+  const p = body && body.poll;
+  if (!p || p.format !== 'cr-pilot-poll@1' || !Array.isArray(p.steps)) throw new Error('The online desk\'s production poll did not answer cr-pilot-poll@1.');
+  return { paused: p.paused === true, sessions: p.sessions || null, steps: p.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })), sighting: body.sighting || null };
+}
 function pollLocal(call) {
   const q = call(['tickets', 'queue']);
   const claims = (q && q.claims) || {};
@@ -950,9 +971,10 @@ function pollLocal(call) {
 async function runAll(o, {
   call = cli, agent = claude, fetchImpl = globalThis.fetch, token = null, workerToken = null, env = process.env,
   lockFile = lockPath(), logFile = pilotLogPath(), out = say, now = () => Date.now(), pid = process.pid,
-  runLocalImpl = runLocal, runOnlineImpl = runOnline,
+  runLocalImpl = runLocal, runOnlineImpl = runOnline, newInvocationId = () => require('crypto').randomUUID(),
 } = {}) {
   const log = { format: 'cr-pilot-all@1', started_at: new Date(now()).toISOString(), desk: o.desk, max_agents: o.maxAgents, dry_run: Boolean(o.dryRun), paused: null, polled: [], dispatches: [], needs_eric: [], error: null, exit: null };
+  const production = o.desk === 'online' && Boolean(o.unattended) && !o.dryRun;
   const finish = (code) => {
     log.exit = code;
     log.finished_at = new Date(now()).toISOString();
@@ -982,8 +1004,18 @@ async function runAll(o, {
   if (lock.took_over) out(`A lock ${lock.took_over.unreadable ? 'that did not read' : `from pid ${lock.took_over.pid} since ${lock.took_over.started_at}`} was older than 3 hours; taken over.`);
   try {
     let tok = null;
+    let sight = null;
+    if (production) {
+      sight = { runner_id: runnerIdOf(env), invocation_id: newInvocationId(), token: workerToken || readWorkerToken(undefined, env) };
+      log.sighting = { runner_id: sight.runner_id, invocation_id: sight.invocation_id, last_polled_at: null };
+    }
     const poll = async () => {
       if (o.desk === 'local') return pollLocal(call);
+      if (sight) {
+        const q = await sightOnline(o, { fetchImpl, token: sight.token, env, runnerId: sight.runner_id, invocationId: sight.invocation_id });
+        if (q.sighting && q.sighting.last_polled_at) log.sighting.last_polled_at = q.sighting.last_polled_at;
+        return q;
+      }
       if (!tok) tok = token || readPollToken(undefined, env);
       return pollOnline(o, { fetchImpl, token: tok, env });
     };
@@ -1096,7 +1128,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {
