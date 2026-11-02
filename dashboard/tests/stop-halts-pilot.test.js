@@ -164,7 +164,7 @@ test('a dispatch whose outcome is unknown stays visible as reconcile after a sto
   assert.equal(row.claim.state, 'reconcile');
   assert.equal(PC.read(s.ws, s.pid).released, false, 'nothing settles it by itself');
   // Eric's reconcile is his own act; the stop never blocks it.
-  assert.equal(PC.release(s.ws, s.pid, { reconciled: true, now: later }).claim.outcome, 'reconciled');
+  assert.equal(PC.release(s.ws, s.pid, { reconciled: true, attempt_id: PC.read(s.ws, s.pid).attempt_id, now: later }).claim.outcome, 'reconciled');
   assert.equal(PC.claim(s.ws, s.pid, { now: later }).status, 'stopped', 'and the project stays stopped');
 });
 

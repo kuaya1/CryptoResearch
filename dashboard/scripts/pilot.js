@@ -650,7 +650,7 @@ function localSteps(o, cli, h, agent = claude) {
 // released as agent_failed; its session still counts against the day.
 // Eric's override (--force-prosecution) is local only.
 const WORKER_FORMAT = 'cr-pilot-worker@1';
-const ONLINE_RECONCILE = (pid) => `Check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true}); nothing is run again until then.`;
+const ONLINE_RECONCILE = (pid) => `Check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true,"attempt_id":"<the attempt you checked>"}); nothing is run again until then.`;
 const sha256 = (t) => require('crypto').createHash('sha256').update(t, 'utf8').digest('hex');
 
 // The worker token, from %USERPROFILE%\.cryptoresearch\secrets.json
@@ -842,7 +842,7 @@ const ALL_ORDER = Object.freeze(['ticket', 'ticket_failed', 'gate_closed', 'rese
 const CLAIM_SKIP = new Set(['claimed', 'reconcile', 'correction_limit']);
 const LOCK_STALE_MS = 3 * 3600000;
 const DEFAULT_DESK_URL = 'https://cryptoresearch.onrender.com';
-const RECONCILE_WORDS = 'An earlier dispatch expired with no known outcome (often after the PC slept). Check the desk, then release it: node dashboard/cli.js tickets release <project> --reconciled.';
+const RECONCILE_WORDS = 'An earlier dispatch expired with no known outcome (often after the PC slept). Check the desk for that attempt, then release it: node dashboard/cli.js tickets release <project> --reconciled --attempt <the attempt you checked>.';
 // Each run's health (cr-pilot-health@1, blueprint 2026-11-02 §6.1): the exit
 // code keeps its meaning (0 done or nothing to do, 3 needs Eric, 1 an error);
 // the class says what the 0 was. It comes from the row's stop, never from its
