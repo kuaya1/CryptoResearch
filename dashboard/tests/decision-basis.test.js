@@ -130,7 +130,11 @@ test('a decision from before the basis reads `reconstructed`, as of its time; la
   const { ws, pid } = s;
   const r = saveTicket(ws, pid);
   const d = T.decide(ws, pid, { receipt_id: r.receipt_id, action: 'veto', by: 'eric' }).result.decision;
+  // Deleting only the basis is refused: its digest is on record (audit F3).
   fs.unlinkSync(ws.abs(DB.basisRel(pid, d.decision_id)));
+  assert.throws(() => DB.viewOf(ws, pid, d.decision_id), (e) => e.code === 'INTEGRITY' && /missing, though its digest is on record/.test(e.message));
+  // A project from before the basis has neither a basis nor a digest ledger.
+  fs.unlinkSync(ws.abs(DB.digestRel(pid)));
   // A correction dated after the decision: Claude's report later excluded.
   const notes = require('../core/notes');
   const rid = r.researcher.report_id;
