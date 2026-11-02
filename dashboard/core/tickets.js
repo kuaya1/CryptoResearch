@@ -1380,7 +1380,7 @@ function saveTicket(ws, args) {
   }
 }
 
-function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null }) {
+function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null, guard = null }) {
   if (require('./research').heldProviders(ws).claude) throw new OpError('REFUSED', 'Claude is on hold on this desk; nothing was saved.');
   const body = typeof text === 'string' ? text : '';
   if (body.trim().length < MIN_TEXT) throw new OpError('INVALID', `That is too short to be the finished ticket (${body.trim().length} characters). Save the whole text with its JSON block.`);
@@ -1430,6 +1430,8 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
   // Everything that decides the ticket's risk is read inside the lock, so a
   // price stored between a check and the write cannot slip past it (A03).
   const out = runOp(ws, { type: 'ticket_receipt', summary: `PM ticket for ${pid}` }, (op) => {
+    // The pilot worker's stop check, under this operation's lock (audit F2).
+    if (guard) guard();
     const again = prior().find((r) => r.text && r.text.normalized_sha256 === textHash);
     if (again) return { replay: again };
     const t = op.readJson(ticketRel(pid, tid), null);

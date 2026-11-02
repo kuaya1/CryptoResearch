@@ -57,7 +57,7 @@
 // never hold it (scripts/pilot.js keeps it in the runner).
 
 const crypto = require('crypto');
-const { OpError } = require('./ops');
+const { OpError, withLock } = require('./ops');
 const claims = require('./pilot-claims');
 const { hourBucket, bearerMatches, pollBody } = require('./pilot-poll');
 const sighting = require('./pilot-sighting');
@@ -240,13 +240,34 @@ function complete(ws, pid, token, { text, prompt_sha256, now = Date.now() } = {}
   if (typeof prompt_sha256 !== 'string' || prompt_sha256 !== cur.prompt_sha256) throw new OpError('REFUSED', `The answer is for another prompt (${String(prompt_sha256).slice(0, 16)}…), not attempt ${cur.attempt_id}'s (${String(cur.prompt_sha256).slice(0, 16)}…); nothing was saved.`);
   if (typeof text !== 'string' || !text.trim()) throw new OpError('INVALID', 'The session gave no text; nothing was saved.');
   // Eric stopped the project while the session ran: its answer is not saved
-  // and the attempt is let go as stopped, never as saved.
-  const chk = claims.stopIfHalted(ws, pid, token, { now });
-  if (chk.status === 'stopped') return { ...stoppedAnswer(pid, chk.claim, chk.words), role: cur.role };
+  // and the attempt is let go as stopped, never as saved. The check, the save
+  // and the claim's release hold the workspace lock together, and the save
+  // asks again inside its own operation (claims.stopGuard), so a stop that
+  // lands at any point before the commit leaves nothing saved (audit F2).
+  return withLock(ws, `pilot complete ${pid}`, () => {
+    const chk = claims.stopIfHalted(ws, pid, token, { now });
+    if (chk.status === 'stopped') return { ...stoppedAnswer(pid, chk.claim, chk.words), role: cur.role };
+    try {
+      return saveAnswer(ws, pid, token, cur, text, now);
+    } catch (err) {
+      if (err.code !== 'STOPPED' || !(err.details && err.details.stop_guard)) throw err;
+      // A copy the import kept in the inbox would be imported later; it is
+      // set aside instead (moved to processed/, nothing deleted).
+      const key = err.details.inbox_key;
+      if (key && require('fs').existsSync(ws.abs(`inbox/${key}`))) require('./inbox').setAside(ws, key, `Eric's stop landed before this answer was saved. ${err.message}`);
+      const after = claims.stopIfHalted(ws, pid, token, { now });
+      if (after.status !== 'stopped') throw err;
+      return { ...stoppedAnswer(pid, after.claim, after.words), role: cur.role };
+    }
+  });
+}
+
+function saveAnswer(ws, pid, token, cur, text, now) {
+  const guard = () => claims.stopGuard(ws, pid);
   const base = { format: FORMAT, project_id: pid, ...idsOf(cur), role: cur.role };
   if (cur.role === 'researcher') {
     const research = require('./research');
-    const r = (require('./inbox').importContent(ws, 'claude', { content: text, filename: `${pid}__${cur.run_id}_claude_worker.md`, projectId: pid, runId: cur.run_id, channel: 'pilot worker' }) || {}).result || {};
+    const r = (require('./inbox').importContent(ws, 'claude', { content: text, filename: `${pid}__${cur.run_id}_claude_worker.md`, projectId: pid, runId: cur.run_id, channel: 'pilot worker', guard }) || {}).result || {};
     if (!SAVED_IMPORT.has(r.status)) {
       letGo(ws, pid, token, 'save_refused', now);
       return { ...base, status: 'refused', inbox_key: r.key || null, words: `The desk refused the report (${r.status}): ${r.message || 'no reason given'}. The text is kept in the inbox${r.key ? ` (${r.key})` : ''}; the claim was let go.` };
@@ -262,7 +283,7 @@ function complete(ws, pid, token, { text, prompt_sha256, now = Date.now() } = {}
   const tk = require('./tickets');
   let r;
   try {
-    r = tk.saveTicket(ws, { project_id: pid, ticket_id: cur.ticket_id, text, channel: 'pilot worker' });
+    r = tk.saveTicket(ws, { project_id: pid, ticket_id: cur.ticket_id, text, channel: 'pilot worker', guard });
   } catch (err) {
     if (['INVALID', 'CONFLICT'].includes(err.code)) {
       letGo(ws, pid, token, 'save_refused', now);
