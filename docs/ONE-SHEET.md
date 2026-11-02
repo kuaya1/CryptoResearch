@@ -50,7 +50,7 @@ Four different things, never read as one another. Merged is not deployed, and de
   - Trader Sim replay equivalence, #140 `d94888d`; host recovery, #141 `99148c2`;
   - the poll sighting, #142 `76c58e8`; the attribution view, #143 `f6db9a7`;
   - this sheet and the canon sync, #144 `099b443`; desk controls, #145 `5024179`;
-  - audit fixes F1 #146 `c241467`, F2 #147 `ce3294a`, F4 #148 `6928513`, F5 #149 `3d791a5`.
+  - audit fixes F1 #146 `c241467`, F2 #147 `ce3294a`, F4 #148 `6928513`, F5 #149 `3d791a5`, F6 #150 `fb529e5`.
 - **Proposed** (open pull requests or text only; not on `main` until Eric merges): the remaining fixes from the 2026-11-02 implementation audit, each on its own pull request; the protected-core execution stamp (row 9); the runner's move off the PC (Ops-1); the blueprint itself (#134).
 - **Deployed: not verified.** The online desk deploys from `main`, but no deployed SHA has been read back. Which commit it runs is Eric's to check on Render.
 - **Operating proof: none yet.** No unattended run on a chosen host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation.
