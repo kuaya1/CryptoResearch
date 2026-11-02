@@ -381,6 +381,17 @@ function mustMatch(ws, rel, want, what) {
   return buf;
 }
 
+// A SHA-256 the basis must hold for a record it names (audit F7): absent,
+// null or not a lowercase SHA-256 is INTEGRITY, never a check skipped and
+// read as verified. A report that genuinely carried no digest is the one
+// exception, and viewOf handles it apart, by name.
+function digestOnRecord(rec, field, what, brel) {
+  const want = rec ? rec[field] : undefined;
+  if (typeof want === 'string' && HEX64.test(want)) return want;
+  const why = !rec || !(field in rec) ? 'has no SHA-256 in the basis' : want === null ? 'has a null SHA-256 in the basis' : 'has a recorded SHA-256 that is not one';
+  throw new OpError('INTEGRITY', `${what} ${why} (${field}), so it cannot be checked. It is not taken as verified and nothing is put in its place; restore the basis from a backup.`, { path: brel, record: what, field });
+}
+
 // Corrections and exclusions dated after the decision: annotations, never applied.
 function laterAnnotations(reports, decidedAt, ids) {
   const out = [];
@@ -459,19 +470,54 @@ function viewOf(ws, pid, decisionId) {
     }
     const receiptBuf = mustMatch(ws, receiptRel, basis.receipt_sha256, 'The ticket receipt');
     const receipt = JSON.parse(receiptBuf.toString('utf8'));
-    if (receipt.packet && receipt.packet.path) mustMatch(ws, receipt.packet.path, basis.packet_sha256, 'The frozen ticket packet');
-    if (receipt.text && receipt.text.path) mustMatch(ws, receipt.text.path, basis.text_sha256, 'The Prosecutor\'s saved text');
+    let packet = null;
+    if (receipt.packet && receipt.packet.path) {
+      const what = 'The frozen ticket packet';
+      const want = digestOnRecord(basis, 'packet_sha256', what, brel);
+      if (receipt.packet.sha256 !== want) throw new OpError('INTEGRITY', `${what}'s SHA-256 in the basis is not the one its receipt records. It is not taken as verified; restore the basis from a backup.`, { path: brel, record: what, field: 'packet_sha256' });
+      try { packet = JSON.parse(mustMatch(ws, receipt.packet.path, want, what).toString('utf8')); } catch (err) { if (err instanceof OpError) throw err; packet = null; }
+    }
+    if (receipt.text && receipt.text.path) mustMatch(ws, receipt.text.path, digestOnRecord(basis, 'text_sha256', 'The Prosecutor\'s saved text', brel), 'The Prosecutor\'s saved text');
     const ids = new Set();
+    const originals = [];
     for (const e of basis.research || []) {
-      if (!e.report_id || !e.original_sha256) continue;
+      // A stated absence (the report the ticket names, not on record then)
+      // names no original to check; the basis says so in its own words.
+      if (!e || !e.report_id || (e.state === 'missing' && !('original_sha256' in e))) continue;
       ids.add(e.report_id);
+      const what = `The original of report ${e.report_id}`;
       const r = reports.find((x) => x.report_id === e.report_id && !x.broken);
       if (!r) throw new OpError('INTEGRITY', `Report ${e.report_id}, on record at the decision, is gone. It is not rebuilt; restore it from a backup.`, { report_id: e.report_id, record: `Report ${e.report_id}` });
-      mustMatch(ws, `${r.dir}/${r.meta.original_file}`, e.original_sha256, `The original of report ${e.report_id}`);
+      const rel = `${r.dir}/${r.meta.original_file}`;
+      if (e.original_sha256 === null) {
+        // The report carried no digest when the decision was made. The
+        // ticket's frozen packet (checked above) may hold the one it had when
+        // the ticket was opened: the original is checked against that.
+        const frozen = packet && packet.researcher && packet.researcher.report_id === e.report_id ? packet.researcher.original_sha256 : null;
+        if (typeof frozen === 'string' && HEX64.test(frozen)) {
+          mustMatch(ws, rel, frozen, what);
+          originals.push({ report_id: e.report_id, use: e.use || null, digest: 'verified', against: 'packet' });
+          continue;
+        }
+        mustMatch(ws, rel, null, what); // still there; its bytes cannot be checked
+        originals.push({ report_id: e.report_id, use: e.use || null, digest: 'not_recorded', provider: e.provider || null });
+        continue;
+      }
+      mustMatch(ws, rel, digestOnRecord(e, 'original_sha256', what, brel), what);
+      originals.push({ report_id: e.report_id, use: e.use || null, digest: 'verified', against: 'basis' });
     }
+    const unchecked = originals.filter((o) => o.digest === 'not_recorded');
+    const shown = originals.map(({ provider, ...o }) => o);
+    const reasons = [];
     // A basis from before the digest ledger: read as recorded, never called verified.
-    if (verified.digest !== 'verified') return { format: VIEW_VERSION, label: 'unverified', words: UNVERIFIED_WORDS, digest: 'not_recorded', decision, basis, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
-    return { format: VIEW_VERSION, label: 'decision_time', digest: 'verified', decision, basis, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
+    if (verified.digest !== 'verified') reasons.push(UNVERIFIED_WORDS);
+    if (unchecked.length) {
+      const named = unchecked.map((o) => `report ${o.report_id} (${o.provider || 'model not stated'})`).join(', ');
+      reasons.push(`The original of ${named} carried no SHA-256 when this decision was made, so its bytes cannot be checked against what the decision stood on: this basis is read as recorded and is not verified decision-time history. No digest is put in its place.`);
+    }
+    const digest = verified.digest === 'verified' ? 'verified' : 'not_recorded';
+    if (reasons.length) return { format: VIEW_VERSION, label: 'unverified', words: reasons.join(' '), digest, decision, basis, originals: shown, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
+    return { format: VIEW_VERSION, label: 'decision_time', digest: 'verified', decision, basis, originals: shown, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
   }
   // Before cr.decision-basis.v1: rebuilt from what exists now, as of the decision.
   const receiptBuf = readExact(ws, receiptRel);
