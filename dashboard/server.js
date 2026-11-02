@@ -1287,6 +1287,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // An expired pilot dispatch Eric checked on this desk, released as
   // reconciled (pilot-claims.js): the online counterpart of
   // "tickets release <project> --reconciled".
+  // The last server-observed production poll (core/pilot-sighting.js,
+  // blueprint 2026-11-02 row 6), read only: fresh, stale, never or unknown.
+  route('GET', '/api/pilot/sighting', () => require('./core/pilot-sighting').view(ws));
   route('POST', '/api/projects/([^/]+)/pilot-claim/release', (m, req, res, body) => {
     if (!(body && body.reconciled === true)) throw new HttpError(400, 'Release a pilot claim here only as reconciled ({"reconciled":true}), after you checked the desk.');
     return after(require('./core/pilot-claims').release(ws, pid(m[1]), { reconciled: true }));

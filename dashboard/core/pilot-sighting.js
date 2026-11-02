@@ -1,0 +1,95 @@
+'use strict';
+// The last server-observed production poll (cr-pilot-sighting@1; blueprint
+// 2026-11-02 §6.2, row 6). The unattended runner polls through the worker
+// route `poll` (POST, worker bearer; pilot-worker.js). Only after the desk
+// has computed the queue snapshot it answers with is one bounded record
+// written: { last_polled_at, runner_id, invocation_id, max_agents }, the
+// time from the desk's own clock. A time in the request is never read, so
+// a forged clock cannot freshen the record, and a snapshot that failed
+// writes nothing. GET /api/pilot/queue stays read-only and never writes it.
+//
+// STALE means the production poll is overdue. It is not proof that no grade
+// exists or that no session is running. The threshold is 120 min at hourly
+// cron and --max-agents=1 (Q2); a runner that declares a larger cap raises
+// it to max_agents × 95 + 15 min (§6.3: one claim from its claim to its
+// last complete reply takes up to about 95 min). A record that does not
+// read, does not hold its shape, or stands ahead of the desk's clock is
+// unknown, never fresh and never "never polled".
+//
+// One file under .cr/ (runner state, not a research record), replaced
+// atomically inside the workspace lock; it never moves backward.
+
+const path = require('path');
+const { withLock } = require('./ops');
+const { readJson, atomicWrite, mkdirp } = require('./fsx');
+
+const FORMAT = 'cr-pilot-sighting@1';
+const REL = '.cr/pilot-sighting.json';
+const STALE_MIN = 120;
+const PER_AGENT_MIN = 95;
+const MARGIN_MIN = 15;
+const MAX_AGENTS = 10;
+const SKEW_MS = 5 * 60000;
+const RUNNER_RE = /^[A-Za-z0-9 ._:@-]{1,80}$/;
+const INVOCATION_RE = /^[A-Za-z0-9-]{8,64}$/;
+
+const staleAfterMin = (maxAgents) => Math.max(STALE_MIN, (Number.isInteger(maxAgents) ? maxAgents : 1) * PER_AGENT_MIN + MARGIN_MIN);
+
+// The request's fields, checked; anything else in it is ignored.
+function fieldsOf(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const runner_id = typeof b.runner_id === 'string' && RUNNER_RE.test(b.runner_id) ? b.runner_id : null;
+  const invocation_id = typeof b.invocation_id === 'string' && INVOCATION_RE.test(b.invocation_id) ? b.invocation_id : null;
+  const max_agents = Number.isInteger(b.max_agents) && b.max_agents >= 0 && b.max_agents <= MAX_AGENTS ? b.max_agents : null;
+  return { runner_id, invocation_id, max_agents };
+}
+
+// A stored record that holds its shape, else null.
+function wellFormed(rec) {
+  if (!rec || typeof rec !== 'object' || rec.format !== FORMAT) return null;
+  const at = Date.parse(rec.last_polled_at);
+  if (!Number.isFinite(at) || new Date(at).toISOString() !== rec.last_polled_at) return null;
+  if (typeof rec.runner_id !== 'string' || !RUNNER_RE.test(rec.runner_id)) return null;
+  if (typeof rec.invocation_id !== 'string' || !INVOCATION_RE.test(rec.invocation_id)) return null;
+  if (!Number.isInteger(rec.max_agents) || rec.max_agents < 0 || rec.max_agents > MAX_AGENTS) return null;
+  return { rec, at };
+}
+
+function readRecord(ws) {
+  try { return { rec: readJson(ws.abs(REL), null) }; } catch (err) { return { error: err.code || 'unreadable' }; }
+}
+
+// Called by the worker route after the snapshot is computed, with the
+// route's own clock. The record never moves backward; one that does not
+// read or stands ahead of the clock is replaced by this real sighting.
+function record(ws, body, { now = Date.now() } = {}) {
+  const f = fieldsOf(body);
+  if (!f.runner_id || !f.invocation_id || f.max_agents === null) return null;
+  return withLock(ws, 'pilot sighting', () => {
+    const cur = readRecord(ws);
+    const ok = cur.rec ? wellFormed(cur.rec) : null;
+    if (ok && ok.at > now && ok.at - now <= SKEW_MS) return ok.rec;
+    const rec = { format: FORMAT, last_polled_at: new Date(now).toISOString(), runner_id: f.runner_id, invocation_id: f.invocation_id, max_agents: f.max_agents };
+    const abs = ws.abs(REL);
+    mkdirp(path.dirname(abs));
+    atomicWrite(abs, `${JSON.stringify(rec, null, 2)}\n`);
+    return rec;
+  });
+}
+
+// What the desk can say about the production poll, read only.
+function view(ws, { now = Date.now() } = {}) {
+  const base = { format: FORMAT, writes_nothing: true, last_polled_at: null, runner_id: null, invocation_id: null, max_agents: null, age_min: null, stale_after_min: null };
+  const cur = readRecord(ws);
+  if (cur.error) return { ...base, state: 'unknown', words: `The production poll's record does not read (${cur.error}); whether the runner is polling is unknown.` };
+  if (!cur.rec) return { ...base, state: 'never', words: 'No production poll has reached this desk.' };
+  const ok = wellFormed(cur.rec);
+  if (!ok) return { ...base, state: 'unknown', words: 'The production poll\'s record does not hold its shape; whether the runner is polling is unknown.' };
+  const facts = { last_polled_at: ok.rec.last_polled_at, runner_id: ok.rec.runner_id, invocation_id: ok.rec.invocation_id, max_agents: ok.rec.max_agents, stale_after_min: staleAfterMin(ok.rec.max_agents) };
+  if (ok.at - now > SKEW_MS) return { ...base, ...facts, state: 'unknown', words: `The production poll's record (${ok.rec.last_polled_at}) is ahead of the desk's clock; whether the runner is polling is unknown.` };
+  const age = Math.max(0, Math.floor((now - ok.at) / 60000));
+  if (age > facts.stale_after_min) return { ...base, ...facts, age_min: age, state: 'stale', words: `STALE: the production poll is overdue. Last seen ${ok.rec.last_polled_at} (${age} min ago; stale after ${facts.stale_after_min} min). This is not proof that no grade exists or that no session is running.` };
+  return { ...base, ...facts, age_min: age, state: 'fresh', words: `The production poll last reached the desk ${age} min ago (${ok.rec.last_polled_at}).` };
+}
+
+module.exports = { FORMAT, REL, STALE_MIN, PER_AGENT_MIN, MARGIN_MIN, SKEW_MS, staleAfterMin, fieldsOf, record, view };
