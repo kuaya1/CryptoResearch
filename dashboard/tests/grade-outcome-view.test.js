@@ -115,7 +115,7 @@ test('every denominator is shown, no rate at any count, groups by Q3\'s default 
     fills: { full: 0, part: 1, unfilled: 0, pending: 0, unknown: 0 },
     positions: { open: 0, closed: 1 },
     closed_fees: { complete: 1, incomplete: 0 },
-    basis: { decision_time: 1, reconstructed: 0, refused: 0 },
+    basis: { decision_time: 1, unverified: 0, reconstructed: 0, refused: 0 },
     excluded: { count: 0, of: 1, rule: 'none', words: '0 excluded of 1.' },
   });
   assert.equal(v.rates, null);
