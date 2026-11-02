@@ -115,7 +115,7 @@ test('every denominator is shown, no rate at any count, groups by Q3\'s default 
     fills: { full: 0, part: 1, unfilled: 0, pending: 0, unknown: 0 },
     positions: { open: 0, closed: 1 },
     closed_fees: { complete: 1, incomplete: 0 },
-    basis: { decision_time: 1, reconstructed: 0, refused: 0 },
+    basis: { decision_time: 1, unverified: 0, reconstructed: 0, refused: 0 },
     excluded: { count: 0, of: 1, rule: 'none', words: '0 excluded of 1.' },
   });
   assert.equal(v.rates, null);
@@ -164,6 +164,7 @@ test('a later exclusion is an annotation; the book outcome stands. A basis that 
   assert.equal(bad.details.denominators.positions.closed, 1);
   // No basis at all (a decision from before it existed): reconstructed.
   fs.unlinkSync(file);
+  fs.unlinkSync(s.ws.abs(DB.digestRel(s.pid))); // with neither a basis nor a digest ledger (audit F3)
   const old = V.view(s.ws, { now: s.end });
   assert.equal(old.rows[0].inputs.label, 'reconstructed');
   assert.equal(old.denominators.basis.reconstructed, 1);
