@@ -229,7 +229,10 @@ function complete(ws, pid, token, { text, prompt_sha256, now = Date.now() } = {}
     return { ...base, status: 'unverified', receipt_id: (r && r.receipt_id) || null, words: `The ticket's receipt ${(r && r.receipt_id) || '?'} did not read back as saved. ${reconcileWords(pid)}` };
   }
   claims.release(ws, pid, { token, outcome: 'saved', now });
-  return { ...base, status: 'saved', receipt_id: r.receipt_id, verified: true };
+  // A Prosecutor's as_of the desk clamped to the save (tickets.js
+  // AS_OF_AHEAD_MS) is said back, so the runner's log shows it.
+  const clamped = r.receipt && r.receipt.as_of_clamped;
+  return { ...base, status: 'saved', receipt_id: r.receipt_id, verified: true, ...(clamped ? { words: `as_of ${clamped.written} was after the save; recorded as ${clamped.recorded}.` } : {}) };
 }
 
 function releaseByWorker(ws, pid, token, { outcome, now = Date.now() } = {}) {
