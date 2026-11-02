@@ -327,6 +327,17 @@ function stopIfHalted(ws, pid, token, { now = Date.now() } = {}) {
   });
 }
 
+// Audit F2: the same question as stopIfHalted, asked by a save inside its own
+// locked operation, before anything is written. A stop (never the pause)
+// throws STOPPED, so the operation aborts with nothing written; the worker
+// then lets the claim go as stopped. The workspace lock is one lock, so no
+// stop can land between this check and the commit.
+function stopGuard(ws, pid) {
+  const g = gateOf(ws, pid);
+  if (g.ok || g.code === 'PAUSED') return;
+  throw new OpError('STOPPED', `Not saved: ${g.words}`, { stop_guard: true, gate_code: g.code });
+}
+
 // Let the claim go: by its token after the agent's save, or by Eric as
 // reconciled after an expired dispatch he checked. A reconcile names the
 // attempt he checked (attempt_id), compared here under the lock with the
@@ -349,4 +360,4 @@ function release(ws, pid, { token = null, reconciled = false, attempt_id = null,
   });
 }
 
-module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, STOPPED, transitionKey, claim, beginPreparation, assertPreparing, bind, stopIfHalted, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };
+module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, STOPPED, transitionKey, claim, beginPreparation, assertPreparing, bind, stopIfHalted, stopGuard, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };
