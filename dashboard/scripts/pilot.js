@@ -69,6 +69,7 @@ function parse(argv) {
     else if (k === 'max-agents') out.maxAgents = Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10 ? Number(v) : out.maxAgents;
     else if (k === 'desk-url') out.deskUrl = v || null;
     else if (k === 'check-isolation') out.checkIsolation = true;
+    else if (k === 'unattended') out.unattended = true;
     else if (k === 'help') out.help = true;
   }
   return out;
@@ -654,7 +655,22 @@ const sha256 = (t) => require('crypto').createHash('sha256').update(t, 'utf8').d
 
 // The worker token, from %USERPROFILE%\.cryptoresearch\secrets.json
 // (pilot_worker_token). Never printed or logged, never given to a session.
-function readWorkerToken(file = path.join(homeDir(), 'secrets.json')) {
+// The desk's bearers stay in the runner (blueprint 2026-11-02 §6.4): from the
+// environment first (CR_PILOT_WORKER_TOKEN, CR_PILOT_POLL_TOKEN, as an
+// unattended host holds them), else secrets.json. No CR_* name is on the
+// session's environment allowlist (ENV_KEEP), so neither reaches a session;
+// neither is ever put in argv, a log line, the prompt or the run's log.
+const POLL_TOKEN_ENV = 'CR_PILOT_POLL_TOKEN';
+const WORKER_TOKEN_ENV = 'CR_PILOT_WORKER_TOKEN';
+function bearerFromEnv(env, name) {
+  const v = env && typeof env[name] === 'string' ? env[name].trim() : '';
+  if (!v) return null;
+  if (v.length < 16) throw new Error(`${name} is set but too short to be the desk's token.`);
+  return v;
+}
+function readWorkerToken(file = path.join(homeDir(), 'secrets.json'), env = process.env) {
+  const fromEnv = bearerFromEnv(env, WORKER_TOKEN_ENV);
+  if (fromEnv) return fromEnv;
   let s = null;
   try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw new Error(`The worker token could not be read from ${file} (${err.code || 'unreadable'}).`); }
   const t = s && typeof s.pilot_worker_token === 'string' ? s.pilot_worker_token.trim() : '';
@@ -723,6 +739,15 @@ function savePendingSubmission(dir, rec) {
   return f;
 }
 
+// The stdout record of an answer whose complete was lost (cr-pilot-lost-complete@1).
+const LOST_FORMAT = 'cr-pilot-lost-complete@1';
+const LOST_FIELDS = Object.freeze(['project_id', 'attempt_id', 'key', 'claim_expires_at', 'role', 'run_id', 'ticket_id', 'prompt_sha256', 'text_sha256', 'attempts']);
+function lostComplete(rec) {
+  const out = { format: LOST_FORMAT };
+  for (const k of LOST_FIELDS) out[k] = rec[k] === undefined ? null : rec[k];
+  return out;
+}
+
 async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fetch, token = null, env = process.env, sleep = pause, now = Date.now, pendingDir = null, completeDelays = COMPLETE_BACKOFF_MS } = {}) {
   if (o.forceProsecution) throw new Error('Eric\'s override (--force-prosecution) is local only: the online worker never forces a Prosecutor.');
   const desk = deskUrlOf(o, env);
@@ -733,7 +758,7 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
   }
   // The session's tool boundary, before the token is read or a claim taken.
   await preflightOf(run, o);
-  const tok = token || readWorkerToken();
+  const tok = token || readWorkerToken(undefined, env);
   const post = (op, body, opts) => workerCall(fetchImpl, desk, tok, op, { project_id: o.project, ...body }, opts);
   const stop = (kind, words) => { Object.assign(result, { stop: kind, words }); out(`    Not dispatched: ${words}`); return result; };
   for (let i = 0; i < MAX_STEPS; i++) {
@@ -787,6 +812,10 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
       } catch (e2) {
         kept = ` (The pending-submission copy could not be written: ${String(e2 && (e2.code || e2.message) || e2).slice(0, 120)}.)`;
       }
+      // On a host whose disk does not outlive the run (Render cron), the one
+      // record that survives is stdout: identifiers and hashes only, never the
+      // answer's text or the claim token (blueprint §6.4, build plan row 4).
+      out(`Lost complete: ${JSON.stringify(lostComplete({ project_id: o.project, attempt_id: c.attempt_id, key: c.key, claim_expires_at: c.expires_at, role: p.role, run_id: p.run_id || null, ticket_id: p.ticket_id || null, prompt_sha256: p.prompt_sha256, text_sha256: sha256(answer), attempts: (err.attempts || []).length }))}`);
       return stop('reconcile', `${err.message} The session's answer is kept at ${f}.${kept} ${ONLINE_RECONCILE(o.project)}`);
     }
     out(`    ${done.status === 'stopped' ? 'not saved' : 'saved'}: ${done.status} ${done.report_id || done.receipt_id || ''}${done.words ? ` — ${done.words}` : ''}`);
@@ -918,7 +947,9 @@ function dropLock(file, pid = process.pid) {
 
 // The poll token from %USERPROFILE%\.cryptoresearch\secrets.json
 // (pilot_poll_token). Never printed or logged.
-function readPollToken(file = path.join(homeDir(), 'secrets.json')) {
+function readPollToken(file = path.join(homeDir(), 'secrets.json'), env = process.env) {
+  const fromEnv = bearerFromEnv(env, POLL_TOKEN_ENV);
+  if (fromEnv) return fromEnv;
   let s = null;
   try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw new Error(`The poll token could not be read from ${file} (${err.code || 'unreadable'}).`); }
   const t = s && typeof s.pilot_poll_token === 'string' ? s.pilot_poll_token.trim() : '';
@@ -988,6 +1019,10 @@ async function runAll(o, {
     return code;
   };
   if (!['local', 'online'].includes(o.desk)) { log.error = '--desk is local or online.'; out(`pilot-all: ${log.error}`); return finish(1); }
+  // Unattended (a scheduled host), the model is named on the command line,
+  // never left to whatever the host's Claude Code settings choose.
+  if (o.unattended && !o.model) { log.error = 'An unattended run names its model: --model=<id>. Nothing was claimed or dispatched.'; out(`pilot-all: ${log.error}`); return finish(1); }
+  if (o.unattended) log.unattended = true;
   const lock = takeLock(lockFile, { now: now(), pid });
   if (!lock.ok) {
     out(`Another run is in progress (pid ${lock.held.pid}, since ${lock.held.started_at}); nothing is dispatched.`);
@@ -999,7 +1034,7 @@ async function runAll(o, {
     let tok = null;
     const poll = async () => {
       if (o.desk === 'local') return pollLocal(call);
-      if (!tok) tok = token || readPollToken();
+      if (!tok) tok = token || readPollToken(undefined, env);
       return pollOnline(o, { fetchImpl, token: tok, env });
     };
     const q = await poll();
@@ -1098,19 +1133,20 @@ async function main() {
   if (o.pilotAll) { process.exitCode = await runAll(o); return; }
   if (o.help || !o.project) {
     say('npm run pilot -- --project=<id> [--desk=local|online] [--dry-run] [--force-prosecution [--owner-words="…"]] [--model=<id>] [--timeout-min=60] [--connector=mcp__claude_ai_CryptoResearch]');
-    say('npm run pilot -- --pilot-all [--desk=local|online] [--max-agents=2] [--dry-run] [--timeout-min=60] [--desk-url=https://…]');
+    say('npm run pilot -- --pilot-all [--desk=local|online] [--max-agents=2] [--dry-run] [--timeout-min=60] [--desk-url=https://…] [--unattended --model=<id>]');
     say('npm run pilot -- --check-isolation [--model=<id>]   the session launch check only (no claim, no generation)');
     process.exitCode = o.help ? 0 : 2;
     return;
   }
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(o.project)) throw new Error(`"${o.project}" is not a project ID.`);
+  if (o.unattended && !o.model) throw new Error('An unattended run names its model: --model=<id>. Nothing was claimed or dispatched.');
   if (o.desk === 'online') { const r = await runOnline(o); if (r && r.stop === 'reconcile') process.exitCode = 3; return; }
   if (o.desk !== 'local') throw new Error('--desk is local or online.');
   await preflightOf(claude, o);
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {
