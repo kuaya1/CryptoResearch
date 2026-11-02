@@ -39,13 +39,22 @@ function tree(ws, pid) {
   walk(`projects/${pid}`);
   return out;
 }
+// With audit F3's digest ledger, any edit of a basis that declares it is
+// refused by its recorded SHA-256 before a field is read. The digest checks
+// below are the guard for a basis written before the ledger (no declaration,
+// no ledger line), so each edit is made to such a basis; the restore puts the
+// basis and the ledger back byte for byte.
 function editBasis(ws, pid, d, fn) {
   const file = ws.abs(DB.basisRel(pid, d.decision_id));
+  const ledger = ws.abs(DB.digestRel(pid));
   const was = fs.readFileSync(file);
+  const ledgerWas = fs.existsSync(ledger) ? fs.readFileSync(ledger) : null;
   const rec = JSON.parse(was.toString('utf8'));
+  delete rec.digest_ledger;
   fn(rec);
   fs.writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
-  return () => fs.writeFileSync(file, was);
+  if (ledgerWas) fs.unlinkSync(ledger);
+  return () => { fs.writeFileSync(file, was); if (ledgerWas) fs.writeFileSync(ledger, ledgerWas); };
 }
 
 test('the audit\'s case: the decision input\'s digest removed before the decision, then its original changed, is refused, never decision_time', (t) => {

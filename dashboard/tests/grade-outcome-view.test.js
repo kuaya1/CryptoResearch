@@ -164,6 +164,7 @@ test('a later exclusion is an annotation; the book outcome stands. A basis that 
   assert.equal(bad.details.denominators.positions.closed, 1);
   // No basis at all (a decision from before it existed): reconstructed.
   fs.unlinkSync(file);
+  fs.unlinkSync(s.ws.abs(DB.digestRel(s.pid))); // with neither a basis nor a digest ledger (audit F3)
   const old = V.view(s.ws, { now: s.end });
   assert.equal(old.rows[0].inputs.label, 'reconstructed');
   assert.equal(old.denominators.basis.reconstructed, 1);

@@ -89,9 +89,10 @@ const appendByte = (abs, b = ' ') => fs.writeFileSync(abs, Buffer.concat([fs.rea
 
 // Each damage, applied to a freshly illustrated desk.
 const DAMAGES = [
-  // A byte that leaves the basis valid JSON is audit F3's (the basis's own bytes carry no digest yet); here, bytes that do not read.
+  // Bytes that do not read; and, since audit F3's digest ledger, bytes that still read: a trailing space and a valid-JSON edit are refused by the recorded SHA-256 before any field is read.
   ['the decision basis, a byte that breaks it', /decision basis/, (s) => appendByte(s.ws.abs(DB.basisRel(s.pid, s.decision.decision_id)), 'x')],
-  ['the decision basis, a valid-JSON edit naming another decision', /does not belong to decision/, (s) => {
+  ['the decision basis, one trailing space (still valid JSON)', /does not match its recorded SHA-256/, (s) => appendByte(s.ws.abs(DB.basisRel(s.pid, s.decision.decision_id)), ' ')],
+  ['the decision basis, a valid-JSON edit naming another decision', /does not match its recorded SHA-256/, (s) => {
     const abs = s.ws.abs(DB.basisRel(s.pid, s.decision.decision_id));
     const b = JSON.parse(fs.readFileSync(abs, 'utf8'));
     b.decision_id = `${b.decision_id.slice(0, -1)}${b.decision_id.endsWith('0') ? '1' : '0'}`;
