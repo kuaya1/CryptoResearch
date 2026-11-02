@@ -10,13 +10,24 @@
 // Claude report the ticket names and the Prosecutor were its inputs; any
 // other model's report was context (decision-basis.js).
 //
-// Each row joins two things side by side, never merged:
+// Each row joins two things side by side, never merged, and each is read on
+// its own:
 // - what the decision stood on: decision-basis.js viewOf (decision_time, or
-//   reconstructed for a decision from before the basis existed); a record
-//   that does not match its SHA-256 is said by name, never rebuilt;
+//   reconstructed for a decision from before the basis existed);
 // - what the book recorded: the trader adapter's own view (trader-desk.js;
-//   nothing here calls the book), its phase, order, fills, position, the
-//   realized result net of every fee, and whether each fee is known.
+//   nothing here calls the book) and the decision's own book events
+//   (decision-basis.js executionOf, read apart from the basis): its phase,
+//   order, fills, position, the realized result net of every fee, and
+//   whether each fee is known.
+//
+// A record that does not hold (a basis that does not read or does not belong
+// to its decision; a receipt, packet or report original that does not match
+// the SHA-256 on record; a book journal that does not read) refuses
+// the whole view: INTEGRITY (409) naming each record, nothing rebuilt and
+// nothing put in its place (blueprint §5.2). The refusal still says what the
+// book recorded, read apart from the basis, so a reservation is never
+// reported as zero; when the book itself does not read, no count is given,
+// because unknown is not zero (docs/CONSTITUTION.md, Law 4).
 //
 // Denominators are always shown (§5.4). No rate is shown at any count until
 // Eric sets a minimum number of closed positions (Q3): the default is counts
@@ -85,8 +96,15 @@ function inputsOf(b) {
     prosecutor: v.basis.prosecutor ? { provider: v.basis.prosecutor.provider, model_version: v.basis.prosecutor.model_version, verdict: v.basis.prosecutor.verdict, conviction_score: v.basis.prosecutor.conviction_score, spread: v.basis.prosecutor.spread } : null,
     authority: v.basis.authority || null,
     later: v.later || [],
-    execution: v.execution,
   };
+}
+
+// What the book recorded for this decision, read on its own and never through
+// the basis: a basis that does not hold leaves the book's facts as they are.
+// A journal that does not read is a refusal of its own (no partial journal).
+const EXEC_REFUSED = new Set(['unreadable', 'integrity']);
+function executionFor(ws, decisionId) {
+  return require('./decision-basis').executionOf(ws, decisionId);
 }
 
 // The order's fill, in the book's own words: full, part, none, or unknown.
@@ -171,20 +189,38 @@ function selectionOf(ws, rows, w) {
   };
 }
 
+// The view refused (blueprint §5.2: INTEGRITY, 409, naming the record). Its
+// words name every record that does not hold and say what the book recorded,
+// read apart from the basis; with the book itself unread, no count at all.
+const n = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+function refusal(refused, denominators) {
+  const named = refused.map((x) => `Decision ${x.decision_id} on ${x.project_id}: ${x.words}`).join(' ');
+  const book = denominators
+    ? `The book's own records stand, read apart from the basis: ${n(denominators.decisions_granted, 'decision')} granted, ${n(denominators.orders_reserved, 'order')} reserved, ${n(denominators.positions.open, 'position')} open and ${denominators.positions.closed} closed.`
+    : 'The book\'s own records do not read, so no count is given: unknown is not zero.';
+  const { OpError } = require('./ops');
+  return new OpError('INTEGRITY', `The attribution view is refused: ${n(refused.length, 'record does', 'records do')} not hold. Nothing is rebuilt or put in its place. ${named} ${book}`, { refused, denominators });
+}
+
 function view(ws, { now, from = null, to = null } = {}) {
   const w = windowOf({ from, to });
   const tv = require('./trader-desk').view(ws, { now });
   const rows = [];
+  const refused = [];
+  let bookUnread = false;
   for (const req of tv.requests) {
     if (!inWindow(req.decided_at, w)) continue;
     const lines = require('./tickets').readDecisions(ws, req.project_id);
     const d = lines.find((x) => x.decision_id === req.decision_id) || {};
-    const inputs = inputsOf(basisOf(ws, req.project_id, req.decision_id));
-    const exec = inputs.execution || null;
-    delete inputs.execution;
-    // The book refused its journal on this read (audit F5): the view refuses
-    // as the trader's own view does, never counting the order as absent.
-    if (exec && exec.state === 'integrity') throw new (require('./ops').OpError)('INTEGRITY', exec.words);
+    const b = basisOf(ws, req.project_id, req.decision_id);
+    if (!b.ok) refused.push({ decision_id: req.decision_id, project_id: req.project_id, record: 'decision_basis', state: b.state, code: b.code, words: b.words });
+    const inputs = inputsOf(b);
+    let exec = executionFor(ws, req.decision_id);
+    if (exec && EXEC_REFUSED.has(exec.state)) {
+      bookUnread = true;
+      refused.push({ decision_id: req.decision_id, project_id: req.project_id, record: 'book_journal', state: exec.state, code: exec.code || 'INTEGRITY', words: String(exec.words || `${exec.source} does not read.`).slice(0, 400) });
+      exec = null;
+    }
     const order = fillOf(req, exec);
     const row = {
       decision_id: req.decision_id,
@@ -225,9 +261,10 @@ function view(ws, { now, from = null, to = null } = {}) {
     },
     positions: { open: count((r) => r.position && r.position.state === 'open'), closed: count((r) => r.position && r.position.state === 'closed') },
     closed_fees: { complete: count((r) => r.position && r.position.state === 'closed' && r.position.fees === 'complete'), incomplete: count((r) => r.position && r.position.state === 'closed' && r.position.fees !== 'complete') },
-    basis: { decision_time: count((r) => r.inputs.label === 'decision_time'), reconstructed: count((r) => r.inputs.label === 'reconstructed'), refused: count((r) => r.inputs.label === 'integrity' || r.inputs.label === 'unreadable') },
+    basis: { decision_time: count((r) => r.inputs.label === 'decision_time'), unverified: count((r) => r.inputs.label === 'unverified'), reconstructed: count((r) => r.inputs.label === 'reconstructed'), refused: count((r) => r.inputs.label === 'integrity' || r.inputs.label === 'unreadable') },
     excluded: { count: 0, of: rows.length, rule: 'none', words: `0 excluded of ${rows.length}.` },
   };
+  if (refused.length) throw refusal(refused, bookUnread ? null : denominators);
   const groups = new Map();
   for (const r of rows) {
     const k = JSON.stringify(r.group);
