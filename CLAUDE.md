@@ -1,6 +1,6 @@
 # CryptoResearch: read this first
 
-This folder is Eric's private CryptoResearch workspace. Before doing anything here, read [COWORK-INSTRUCTIONS.md](COWORK-INSTRUCTIONS.md) and follow it exactly. It applies to Cowork and Claude Code alike. The mission and its limits are in [CryptoResearch-Mission-and-Architecture-v1.md](CryptoResearch-Mission-and-Architecture-v1.md); milestones and what is next are in `audits/` (newest: `2026-10-06-desk-clarity/`).
+This folder is Eric's private CryptoResearch workspace. Before doing anything here, read [COWORK-INSTRUCTIONS.md](COWORK-INSTRUCTIONS.md) and follow it exactly. It applies to Cowork and Claude Code alike. The mission and its limits are in [CryptoResearch-Mission-and-Architecture-v1.md](CryptoResearch-Mission-and-Architecture-v1.md); milestones and what is next are in `audits/` (newest committed: `2026-10-29-intake-dialectic/`; the 2026-11-02 status of each box is on `docs/ONE-SHEET.md`).
 
 The short version:
 
