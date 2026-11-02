@@ -4,7 +4,8 @@
 // Rubrics, Data (the dashboard settings and backups and exports), System and
 // Activity are the same cards and forms as before (views/settings.js
 // prefsSection); Screening edits your forensic screening preferences (D5)
-// and your PM ticket sizing;
+// and your PM ticket sizing; Desk controls shows the five facts of the
+// pilot apart and only turns things off (DeskControls.jsx);
 // Developer holds the Explorer (D4) and the running code. Opening it writes
 // nothing; each save is its own button.
 import { useEffect, useRef, useState } from 'react';
@@ -14,6 +15,7 @@ import { useDesk, useMedia } from '../lib/hooks.js';
 import { api, refresh } from '../lib/desk.js';
 import { legacyCtx } from '../legacy/ctx.js';
 import { Dom } from '../components/Dom.jsx';
+import DeskControls from './DeskControls.jsx';
 import { PREF_SECTIONS, prefsOf, openPrefs, closePrefs, deskPrefs } from './overlays.js';
 import { ui } from '../lib/desk.js';
 import { prefs as readPrefs, VIEWS, DEFAULT_COLUMNS } from '../../../public/watchlist-model.js';
@@ -573,6 +575,7 @@ export default function Preferences() {
             <h3 className="prefs-title" id="prefs-title" tabIndex={-1}>{label}</h3>
             {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /><TraderBook d={d} /><ScoutLeads d={d} /></>
               : section === 'developer' ? <Developer d={d} />
+              : section === 'controls' ? <DeskControls />
                 : section === 'appearance' ? <Appearance />
                 : <>{section === 'models' ? <Automation d={d} /> : null}<Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} /></>}
             {section === 'appearance' ? <DeskDefaults /> : null}

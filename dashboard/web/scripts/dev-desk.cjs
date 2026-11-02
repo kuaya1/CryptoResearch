@@ -569,6 +569,15 @@ function contractFor(symbol) {
     }
   }
 
+  // Preferences > Desk controls (blueprint row 2): Halcyon in the pilot, and
+  // a production poll last seen 200 minutes ago, so STALE shows beside a
+  // report saved minutes ago.
+  {
+    require(`${ROOT}/core/tickets.js`).setPilot(ws, pids.halcyon, true, { by: 'dev-desk' });
+    const seen = require(`${ROOT}/core/pilot-sighting.js`).record(ws, { runner_id: 'dev-desk', invocation_id: 'inv-0000-fictional', max_agents: 1 }, { now: Date.now() - 200 * 60000 });
+    if (!seen) throw new Error('dev desk: the stale poll was not recorded');
+  }
+
   // The archived one last, so its history stays.
   const vireo = EXTRA.find((x) => x.archived);
   projects.archiveProject(ws, pids[vireo.key], 'FICTIONAL: archived for the dev desk');

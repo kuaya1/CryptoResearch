@@ -96,3 +96,26 @@ aside.prefs.is-loading .prefs-in { width: 100%; }
   .dbrief-body { padding: 16px; }
   .dbrief-line a { min-height: 44px; display: flex; align-items: center; }
 }
+
+/* Preferences > Desk controls (DeskControls.jsx): each fact on its own row, its
+   state a word on a tint and its words beside it; never colour alone. */
+.dc-facts { display: grid; gap: 0; margin: 0; }
+.dc-fact { display: grid; grid-template-columns: minmax(140px, 200px) 1fr; gap: 4px 16px; padding: 10px 0; border-top: 1px solid var(--separator); }
+.dc-fact:first-child { border-top: 0; padding-top: 0; }
+.dc-fact dt { font-size: var(--fs-ui-sm); color: var(--text-2); }
+.dc-fact dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; font-size: var(--fs-ui-sm); color: var(--text); }
+.dc-state { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border-radius: 4px; font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dc-state.tone-ok { background: var(--success-soft); color: var(--success-soft-text); }
+.dc-state.tone-warn { background: var(--warning-soft); color: var(--warning-soft-text); }
+.dc-state.tone-work { background: var(--info-soft); color: var(--info-soft-text); }
+.dc-state.tone-quiet { background: var(--alpha-04, var(--surface-sunken)); color: var(--text-2); }
+.dc-words { flex: 1 1 260px; color: var(--text-2); overflow-wrap: anywhere; }
+.dc-said { margin: 8px 0 0; font-size: var(--fs-ui-sm); }
+.dc-said.tone-ok { color: var(--success-text); }
+.dc-said.tone-warn { color: var(--warning-text); }
+.dc-check { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-ui-sm); color: var(--text-2); min-height: 32px; }
+.dc-loading { color: var(--text-2); font-size: var(--fs-ui-sm); }
+@media (max-width: 767px) {
+  .dc-fact { grid-template-columns: 1fr; }
+  .dc-check { min-height: 44px; }
+}

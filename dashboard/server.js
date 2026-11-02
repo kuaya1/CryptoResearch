@@ -1290,6 +1290,10 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // The last server-observed production poll (core/pilot-sighting.js,
   // blueprint 2026-11-02 row 6), read only: fresh, stale, never or unknown.
   route('GET', '/api/pilot/sighting', () => require('./core/pilot-sighting').view(ws));
+  // Preferences > Desk controls (cr-desk-controls@1, blueprint row 2): the
+  // five facts of §6.2 apart and the off-only controls with their readback.
+  // Signed in, reads only.
+  route('GET', '/api/desk/controls', () => require('./core/desk-controls').view(ws));
   route('POST', '/api/projects/([^/]+)/pilot-claim/release', (m, req, res, body) => {
     if (!(body && body.reconciled === true)) throw new HttpError(400, 'Release a pilot claim here only as reconciled ({"reconciled":true}), after you checked the desk.');
     return after(require('./core/pilot-claims').release(ws, pid(m[1]), { reconciled: true }));
