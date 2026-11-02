@@ -100,7 +100,7 @@ function view(ws, { now = Date.now() } = {}) {
       stop: { stopped: au.suspended === true, unreadable: au.unreadable === true, words: au.words || null },
       controls: {
         stop: { available: au.suspended !== true, method: 'POST', path: `/api/projects/${pid}/autonomy`, body: { action: 'stop' }, done: au.suspended === true },
-        reconcile: { available: claim.reconcile === true, method: 'POST', path: `/api/projects/${pid}/pilot-claim/release`, body: { reconciled: true }, attempt_id: claim.attempt_id || null },
+        reconcile: { available: claim.reconcile === true, method: 'POST', path: `/api/projects/${pid}/pilot-claim/release`, body: { reconciled: true, attempt_id: claim.attempt_id || null }, attempt_id: claim.attempt_id || null },
       },
     };
   }) : [];

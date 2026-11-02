@@ -5,7 +5,7 @@
 // apart (a STALE poll beside a freshly saved report, neither read from the
 // other); the read writes nothing and is signed in only; the off-only
 // controls read back through the same view; reconcile only for an expired
-// claim, only as {"reconciled":true}, and never a retry.
+// claim, only as {"reconciled":true} naming the attempt checked, and never a retry.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -185,7 +185,7 @@ test('reconcile: offered only for an expired claim, only as reconciled, through 
   let v = await read();
   assert.equal(v.projects[0].dispatch.state, 'claimed');
   assert.equal(v.projects[0].controls.reconcile.available, false);
-  const early = await request(srv.port, `/api/projects/${s.pid}/pilot-claim/release`, { method: 'POST', body: { reconciled: true }, headers: signed });
+  const early = await request(srv.port, `/api/projects/${s.pid}/pilot-claim/release`, { method: 'POST', body: { reconciled: true, attempt_id: live.claim.attempt_id }, headers: signed });
   assert.notEqual(early.status, 200, 'a live claim is never released as reconciled');
   assert.equal(PC.read(s.ws, s.pid).released, false);
   PC.release(s.ws, s.pid, { token: live.token, outcome: 'done' });
@@ -204,10 +204,10 @@ test('reconcile: offered only for an expired claim, only as reconciled, through 
   const rc = v.projects[0].controls.reconcile;
   assert.equal(rc.available, true);
   assert.equal(rc.path, `/api/projects/${s.pid}/pilot-claim/release`);
-  assert.deepEqual(rc.body, { reconciled: true });
+  assert.deepEqual(rc.body, { reconciled: true, attempt_id: c.claim.attempt_id });
   assert.equal(rc.attempt_id, c.claim.attempt_id);
 
-  // Without {"reconciled":true} the route refuses and nothing changes.
+  // Without {"reconciled":true} and the attempt, the route refuses and nothing changes.
   const bare = await request(srv.port, rc.path, { method: 'POST', body: {}, headers: signed });
   assert.equal(bare.status, 400);
   assert.equal(PC.read(s.ws, s.pid).released, false);

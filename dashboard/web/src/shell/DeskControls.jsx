@@ -5,12 +5,13 @@
 // settings write with OFF_BODIES, the project's autonomy stop, the claim's
 // release as reconciled), then reads the view again and says what it read back. Reconcile is
 // offered only for an expired claim, after Eric says he checked the desk, and
-// goes through the release route as {"reconciled":true}; nothing retries.
+// goes through the release route as {"reconciled":true} with the attempt the
+// panel shows, read back as that same attempt (audit F4); nothing retries.
 // Opening it reads only.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from '../../../public/ui.js';
 import { api, refresh } from '../lib/desk.js';
-import { deskRows, projectRows, offActions, readback, OFF_BODIES } from '../../../public/desk-controls-model.js';
+import { deskRows, projectRows, offActions, readback, reconcileBody, OFF_BODIES } from '../../../public/desk-controls-model.js';
 
 const WAIT_MS = 12000;
 const enc = encodeURIComponent;
@@ -59,7 +60,7 @@ export default function DeskControls() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const act = async (id, projectId) => {
+  const act = async (id, projectId, rc = null) => {
     setBusy(`${projectId || 'desk'}:${id}`);
     setSaid(null);
     try {
@@ -67,11 +68,16 @@ export default function DeskControls() {
       // the settings write, a project stops through its autonomy route, and a
       // claim is released only as reconciled. Nothing here turns anything on.
       if (id === 'stop') await api.post(`/api/projects/${enc(projectId)}/autonomy`, { action: 'stop' });
-      else if (id === 'reconcile') await api.post(`/api/projects/${enc(projectId)}/pilot-claim/release`, { reconciled: true });
+      else if (id === 'reconcile') {
+        // The attempt shown is the attempt released, or nothing (audit F4).
+        const body = reconcileBody(rc);
+        if (!body) throw new Error('No attempt is shown to reconcile.');
+        await api.post(`/api/projects/${enc(projectId)}/pilot-claim/release`, body);
+      }
       else if (OFF_BODIES[id]) await api.post('/api/settings', OFF_BODIES[id]);
       else throw new Error('That control is not an off switch.');
       const after = await load();
-      const rb = readback(after, id, projectId);
+      const rb = readback(after, id, projectId, rc ? rc.attempt_id : null);
       if (alive.current) setSaid(rb);
       toast(rb.words, rb.ok ? undefined : 'bad');
       if (id === 'reconcile') setChecked((x) => ({ ...x, [projectId]: false }));
@@ -141,7 +147,7 @@ export default function DeskControls() {
                       <input type="checkbox" checked={Boolean(checked[p.project_id])} data-key={`prefs-dc-checked-${p.project_id}`} onChange={(e) => setChecked((x) => ({ ...x, [p.project_id]: e.target.checked }))} />
                       <span>I checked the desk for attempt {rc.attempt_id}'s report or ticket</span>
                     </label>
-                    <button type="button" className="btn btn-sm" disabled={busy !== null || !checked[p.project_id]} data-key={`prefs-dc-reconcile-${p.project_id}`} onClick={() => act('reconcile', p.project_id)}>
+                    <button type="button" className="btn btn-sm" disabled={busy !== null || !checked[p.project_id]} data-key={`prefs-dc-reconcile-${p.project_id}`} onClick={() => act('reconcile', p.project_id, rc)}>
                       {busy === `${p.project_id}:reconcile` ? 'Releasing…' : 'Release as reconciled'}
                     </button>
                   </>

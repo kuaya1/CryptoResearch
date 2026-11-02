@@ -157,7 +157,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   const dcSrc = dcSrcOf(files);
   assert.doesNotMatch(dcSrc, /rearm|paused: false|enabled: true|autonomous_paper_loop: true/);
   assert.match(dcSrc, /{ action: 'stop' }/);
-  assert.match(dcSrc, /{ reconciled: true }/);
+  assert.match(dcSrc, /reconcileBody\(rc\)/, 'a reconcile posts the attempt the panel shows (audit F4)');
   assert.deepEqual(uniq('views/watchlist/StatusStrip.jsx'), ['/api/market/refresh']);
   assert.doesNotMatch(files.find(([n]) => n === 'shell/CommandMenu.jsx')[1], /api\.post|sendReview\(/, 'the command menu writes nothing itself');
   const prefsSrc = files.find(([n]) => n === 'shell/Preferences.jsx')[1];

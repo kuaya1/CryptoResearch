@@ -276,7 +276,7 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
   - A project held by another runner, or whose one correction is used, is skipped.
   - `exit_evidence` (the desk's own exit reading at the exit size is not complete yet) and `contract_evidence` steps start no session.
 - **Daily session ceiling** (`cr-pilot-session@1`, `.cr/pilot-sessions.jsonl`, `automation.pilot_daily_sessions`, default 6, 0 to 50): each session is reserved on the desk before it starts, failed ones included, per New York day. Repeated runs never reset it; an unreadable ledger starts none.
-- **Needs Eric.** An expired dispatch with no known outcome (`reconcile`) is listed for Eric and the run exits 3. It is never released by the runner. Online, Eric checks the project on the desk, then releases it signed in: `POST /api/projects/<id>/pilot-claim/release` with `{"reconciled":true}`.
+- **Needs Eric.** An expired dispatch with no known outcome (`reconcile`) is listed for Eric and the run exits 3. It is never released by the runner. Online, Eric checks the project on the desk, then releases it signed in: `POST /api/projects/<id>/pilot-claim/release` with `{"reconciled":true,"attempt_id":"pa_…"}`, naming the attempt he checked. The release compares it with the current claim inside its own lock: another attempt is 409 `CHANGED`, naming both, with nothing written, so a stale click about an attempt already settled never releases a newer one; without an attempt it is 400. Desk controls posts the attempt it shows and reads back that same attempt as released (audit F4, 2026-11-02).
 - **The log.** One JSON line per run in `%USERPROFILE%\.cryptoresearch\pilot-all.jsonl`.
 - **Exit codes.** 0 done or nothing to do; 3 needs Eric; 1 an error.
 
