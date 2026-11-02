@@ -149,17 +149,19 @@ test('a later exclusion is an annotation; the book outcome stands. A basis that 
   assert.ok(r.inputs.later.some((a) => a.report_id === s.report && /after the decision/.test(a.words)), 'the exclusion is a later annotation');
   assert.equal(v.selection.untraded.some((x) => x.report_id === s.report), false);
 
-  // The basis edited: refused by name, the row still counted, the book still shown.
+  // The basis edited: the view is refused by name (INTEGRITY, blueprint
+  // §5.2), nothing substituted, and the book's own facts still counted.
   const file = s.ws.abs(DB.basisRel(s.pid, s.decision.decision_id));
   const was = fs.readFileSync(file);
   fs.writeFileSync(file, Buffer.concat([was, Buffer.from('x')]));
-  const bad = V.view(s.ws, { now: s.end });
-  assert.equal(bad.rows[0].inputs.label, 'integrity');
-  assert.match(bad.rows[0].inputs.words, /decision basis/);
-  assert.equal(bad.rows[0].inputs.decision_input, null, 'nothing is substituted');
-  assert.equal(bad.rows[0].group.researcher_model_version, 'unknown');
-  assert.equal(bad.rows[0].position.realized_pnl_usd, '31.168');
-  assert.equal(bad.denominators.basis.refused, 1);
+  let bad = null;
+  assert.throws(() => V.view(s.ws, { now: s.end }), (err) => { bad = err; return err.code === 'INTEGRITY'; });
+  assert.match(bad.message, /decision basis/);
+  assert.equal(bad.details.refused.length, 1);
+  assert.equal(bad.details.refused[0].record, 'decision_basis');
+  assert.equal(bad.details.denominators.basis.refused, 1);
+  assert.equal(bad.details.denominators.orders_reserved, 1, 'the reservation is still counted');
+  assert.equal(bad.details.denominators.positions.closed, 1);
   // No basis at all (a decision from before it existed): reconstructed.
   fs.unlinkSync(file);
   const old = V.view(s.ws, { now: s.end });
