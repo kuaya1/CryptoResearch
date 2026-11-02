@@ -1,8 +1,10 @@
-# PROPOSAL — Borrowed tools × Grades
+# PROPOSAL — Codex independent report: Borrowed tools × Grades
 
 **Status: PROPOSAL. Design only; no activation or implementation authorization.**
 
 **Date:** 2026-11-02, America/New_York. **Author:** Codex.
+
+**Independent report:** this is Codex's standalone design and evidence review. Other agents' reports are separate artifacts, not sections of this document. This proposal does not amend Claude's report.
 
 **Code baseline:** `84cb28a2a863e77bdf6a450317cca5521f315399` (merged #130). Repository `file:line` citations below refer to that commit, including **committed** DESK_STATE.md, not the pre-existing uncommitted revision. Published vendor pages were read on this date; runtime behavior not exercised here is marked **UNVERIFIED**.
 
