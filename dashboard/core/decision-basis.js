@@ -508,4 +508,4 @@ function viewOf(ws, pid, decisionId) {
   };
 }
 
-module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, DIGEST_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, digestRel, buildBasis, unavailableBasis, stageRecord, stopsProject, identityProblems, describe, stateOf, ledgerOf, verifiedRecord, viewOf };
+module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, DIGEST_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, digestRel, buildBasis, unavailableBasis, stageRecord, stopsProject, identityProblems, describe, stateOf, ledgerOf, verifiedRecord, viewOf, executionOf };
