@@ -72,6 +72,6 @@ Never confuse planned loss-at-stop with notional position size. Sizing must enfo
 
 Before writing any new feature, prompt, or script, run it through this filter:
 1. **Does this directly serve the research or trading desk?** (If it's DevOps meta-tooling to manage AI agents, kill it).
-2. **Can I explain this architecture on one sheet of paper?** (If it requires distributed lease negotiations or multi-app environments, simplify it).
+2. **Can I explain this architecture on one sheet of paper?** (If it requires distributed lease negotiations or multi-app environments, simplify it). The desk's sheet is [ONE-SHEET.md](ONE-SHEET.md).
 3. **What is the failure state when the network drops?** (If the answer is undefined or assumes a timeout, define explicit reconciliation).
 4. **Is the deterministic math protected from model hallucination?** (If an LLM can choose position size or alter accounting logic, put a mathematical clamp in front of it).
