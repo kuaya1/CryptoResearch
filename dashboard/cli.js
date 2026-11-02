@@ -123,7 +123,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets basis <id> <decision_id> [--json]   what a decision stood on (cr.decision-basis.v1), each record checked by its SHA-256, beside its execution in the trader's book; a decision from before it reads "reconstructed" (writes nothing)
   tickets reconcile [<id>] [--dry-run] [--json]   complete a recorded decision's missing paper position or journal entry (never archives, voids or edits a decision)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
-  tickets claim|bind|release <id>        the pilot runner's one execution claim per project (release --reconciled after an expired dispatch)
+  tickets claim|bind|release <id>        the pilot runner's one execution claim per project (release --reconciled --attempt <pa_…> after an expired dispatch you checked)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
   tickets start <id> [--refresh] [--reopen] [--restart] [--force-prosecution] [--assistant]
                                          open (or resume) the Prosecutor's ticket on Claude's current report
@@ -956,7 +956,7 @@ async function run(argv) {
       // The pilot runner's execution claim (cr-pilot-claim@1, stage 5.4).
       if (sub === 'claim') return require('./core/pilot-claims').claim(ws, need(pid, 'tickets claim <project> [--expect KEY] [--owner NAME]'), { owner: one(flags.owner) || actor, expect: one(flags.expect) || null, force: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
       if (sub === 'bind') return require('./core/pilot-claims').bind(ws, need(pid, 'tickets bind <project> --token T [--run R] [--ticket K]'), need(one(flags.token), '--token'), { run_id: one(flags.run) || null, ticket_id: one(flags.ticket) || null });
-      if (sub === 'release') return require('./core/pilot-claims').release(ws, need(pid, 'tickets release <project> --token T | --reconciled'), { token: one(flags.token) || null, reconciled: Boolean(flags.reconciled), outcome: one(flags.outcome) || null });
+      if (sub === 'release') return require('./core/pilot-claims').release(ws, need(pid, 'tickets release <project> --token T | --reconciled --attempt <pa_…>'), { token: one(flags.token) || null, reconciled: Boolean(flags.reconciled), attempt_id: one(flags.attempt) || null, outcome: one(flags.outcome) || null });
       // Before the local runner saves a session's answer: Eric's stop since
       // the dispatch lets the claim go as autonomy_stopped and nothing is saved.
       if (sub === 'check') return require('./core/pilot-claims').stopIfHalted(ws, need(pid, 'tickets check <project> --token T'), need(one(flags.token), '--token'));

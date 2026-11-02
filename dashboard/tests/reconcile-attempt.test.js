@@ -153,3 +153,19 @@ test('F4: the view hands the panel the attempt in the body it names, and the rea
   assert.equal(M.readback(v, 'reconcile', s.pid, 'pa_0000000000000000').ok, false);
   assert.equal(M.readback(v, 'reconcile', s.pid).ok, false, 'a readback names the attempt it checks');
 });
+
+test('F4: the CLI reconcile names the attempt too: a stale one is CHANGED and releases nothing, the shown one is released', async (t) => {
+  const { run } = require('../cli');
+  const s = desk(t);
+  const A = expiredDispatch(s, 'FICTIONAL-runner-A');
+  await assert.rejects(run(['tickets', 'release', s.pid, '--reconciled', '--workspace', s.root]), (e) => e.code === 'INVALID' && /attempt/.test(e.message), 'no attempt named, nothing released');
+  assert.equal(PC.read(s.ws, s.pid).released, false);
+  PC.release(s.ws, s.pid, { reconciled: true, attempt_id: A });
+  const B = expiredDispatch(s, 'FICTIONAL-runner-B');
+  const before = JSON.stringify(PC.read(s.ws, s.pid));
+  await assert.rejects(run(['tickets', 'release', s.pid, '--reconciled', '--attempt', A, '--workspace', s.root]), (e) => e.code === 'CHANGED' && e.message.includes(A) && e.message.includes(B));
+  assert.equal(JSON.stringify(PC.read(s.ws, s.pid)), before, 'the stale CLI reconcile wrote nothing about B');
+  const out = await run(['tickets', 'release', s.pid, '--reconciled', '--attempt', B, '--workspace', s.root]);
+  assert.equal(out.claim.attempt_id, B);
+  assert.equal(PC.read(s.ws, s.pid).outcome, 'reconciled');
+});

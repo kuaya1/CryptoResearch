@@ -1286,7 +1286,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   });
   // An expired pilot dispatch Eric checked on this desk, released as
   // reconciled (pilot-claims.js): the online counterpart of
-  // "tickets release <project> --reconciled".
+  // "tickets release <project> --reconciled --attempt <pa_…>".
   // The last server-observed production poll (core/pilot-sighting.js,
   // blueprint 2026-11-02 row 6), read only: fresh, stale, never or unknown.
   route('GET', '/api/pilot/sighting', () => require('./core/pilot-sighting').view(ws));
