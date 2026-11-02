@@ -35,7 +35,12 @@
 //             and only then releases the claim. A save the desk refused is a
 //             known outcome (the text is kept: the inbox file, or the
 //             ticket's draft) and releases it; anything else leaves the
-//             claim dispatched for Eric to reconcile.
+//             claim dispatched for Eric to reconcile. Eric's stop on the
+//             project (mandate-authority.js automationGate) since the
+//             dispatch saves nothing: the claim is let go as
+//             autonomy_stopped and the answer is "stopped", never "saved".
+//             A stop before the bind hands out no prompt (prepare answers
+//             "stopped").
 //   release   by the claim's token, before a session started ("stopped") or
 //             after one that failed and could save nothing ("agent_failed").
 //             Releasing as reconciled is Eric's, signed in (server.js).
@@ -115,6 +120,30 @@ function finalize(ws, pid, token, args) {
     return claims.bind(ws, pid, token, { ...args, from: 'preparing' });
   } catch (err) {
     if (err && err.code === 'ALREADY_BOUND') return { already: alreadyPrepared(pid, claims.held(ws, pid, token)) };
+    // Eric stopped the project before the bind: bind let the claim go.
+    if (err && err.code === 'STOPPED') return { stopped: stoppedAnswer(pid, (err.details && err.details.claim) || null, err.message) };
+    throw err;
+  }
+}
+
+// A prepare or complete the desk's gate stopped (mandate-authority.js
+// automationGate): no prompt is handed out, nothing is saved.
+function stoppedAnswer(pid, c, words) {
+  return { format: FORMAT, status: 'stopped', project_id: pid, ...idsOf(c), session: Boolean(c && c.stopped && c.stopped.session_dispatched), saved: false, outcome: claims.STOPPED, words };
+}
+
+// Before a preparation opens anything: the claim is read again
+// (assertPreparing). Eric's stop since the claim lets it go as stopped and
+// answers stopped (nothing opened, no prompt); null when it may go on. The
+// bind still decides.
+function stillPreparing(ws, pid, token, t) {
+  try {
+    claims.assertPreparing(ws, pid, token, { now: t });
+    return null;
+  } catch (err) {
+    if (!err || err.code !== 'STOPPED') throw err;
+    const s = claims.stopIfHalted(ws, pid, token, { now: t });
+    if (s.status === 'stopped') return stoppedAnswer(pid, s.claim, s.words);
     throw err;
   }
 }
@@ -127,6 +156,7 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
   // One locked transition decides which request prepares this attempt.
   const begun = claims.beginPreparation(ws, pid, token, { now: at() });
   if (begun.status === 'already') return alreadyPrepared(pid, begun.claim);
+  if (begun.status === 'stopped') return stoppedAnswer(pid, begun.claim, begun.words);
   const cur = begun.claim;
   const step = begun.step;
   if (begun.status === 'changed') {
@@ -141,6 +171,8 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
   if (step.step === 'research') {
     const research = require('./research');
     let runId = step.run_id || null;
+    const halted = stillPreparing(ws, pid, token, at());
+    if (halted) return halted;
     if (!runId) {
       const r = research.createRun(ws, { project_id: pid, providers: 'claude', channel: 'pilot worker (cowork)', assistant: 'claude', utterance });
       runId = r.run_id || null;
@@ -161,6 +193,7 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
     }
     const b = finalize(ws, pid, token, { run_id: runId, now: at(), extra: { role: 'researcher', prompt_sha256: run.prompt.sha256 } });
     if (b.already) return b.already;
+    if (b.stopped) return b.stopped;
     return { format: FORMAT, status: 'prepared', role: 'researcher', project_id: pid, ...idsOf(b.claim), prompt: text, prompt_sha256: run.prompt.sha256, prompt_version: run.prompt.version || null, sessions: b.sessions };
   }
   if (step.step === 'ticket' || step.step === 'ticket_failed') {
@@ -169,7 +202,8 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
     const exit_quote = await tk.prepareExitQuote(ws, pid, { fetchImpl }).catch((err) => ({ size_usd: null, status: 'error', reason: `The exit quote could not be asked: ${String((err && err.message) || err).slice(0, 200)}`, asked_at: new Date(at()).toISOString() }));
     // The quote took time: the claim is read again, at the time now, before
     // anything is opened. The bind below is what decides.
-    claims.assertPreparing(ws, pid, token, { now: at() });
+    const halted = stillPreparing(ws, pid, token, at());
+    if (halted) return halted;
     const t = tk.createTicket(ws, { exit_quote, project_id: pid, channel: 'pilot worker', assistant: true, mode: 'worker', utterance, reopen: Boolean(step.refresh) });
     if (!t.ticket_id) {
       letGo(ws, pid, token, t.status === 'gate_closed' ? 'done' : 'not_started', at());
@@ -183,6 +217,7 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
     }
     const b = finalize(ws, pid, token, { ticket_id: t.ticket_id, now: at(), extra: { role: 'prosecutor', prompt_sha256: p.sha256 } });
     if (b.already) return b.already;
+    if (b.stopped) return b.stopped;
     return { format: FORMAT, status: 'prepared', role: 'prosecutor', project_id: pid, ...idsOf(b.claim), prompt: p.text, prompt_sha256: p.sha256, prompt_version: p.version || null, sessions: b.sessions };
   }
   letGo(ws, pid, token, 'nothing', at());
@@ -197,6 +232,10 @@ function complete(ws, pid, token, { text, prompt_sha256, now = Date.now() } = {}
   if (cur.state !== 'dispatched' || !cur.role) throw new OpError('INVALID', `Attempt ${cur.attempt_id} was not prepared; there is nothing to complete.`);
   if (typeof prompt_sha256 !== 'string' || prompt_sha256 !== cur.prompt_sha256) throw new OpError('REFUSED', `The answer is for another prompt (${String(prompt_sha256).slice(0, 16)}…), not attempt ${cur.attempt_id}'s (${String(cur.prompt_sha256).slice(0, 16)}…); nothing was saved.`);
   if (typeof text !== 'string' || !text.trim()) throw new OpError('INVALID', 'The session gave no text; nothing was saved.');
+  // Eric stopped the project while the session ran: its answer is not saved
+  // and the attempt is let go as stopped, never as saved.
+  const chk = claims.stopIfHalted(ws, pid, token, { now });
+  if (chk.status === 'stopped') return { ...stoppedAnswer(pid, chk.claim, chk.words), role: cur.role };
   const base = { format: FORMAT, project_id: pid, ...idsOf(cur), role: cur.role };
   if (cur.role === 'researcher') {
     const research = require('./research');
@@ -263,7 +302,7 @@ function readBody(req) {
   });
 }
 
-const STATUS_OF_CODE = { NOT_FOUND: 404, BAD_ID: 400, INVALID: 400, REFUSED: 409, CHANGED: 409, PAUSED: 409, SESSION_CEILING: 409, ALREADY_BOUND: 409, UNREADABLE: 503, INTEGRITY: 409, WORKSPACE_BUSY: 503, WRITES_BLOCKED: 503 };
+const STATUS_OF_CODE = { NOT_FOUND: 404, BAD_ID: 400, INVALID: 400, REFUSED: 409, CHANGED: 409, PAUSED: 409, STOPPED: 409, SESSION_CEILING: 409, ALREADY_BOUND: 409, UNREADABLE: 503, INTEGRITY: 409, WORKSPACE_BUSY: 503, WRITES_BLOCKED: 503 };
 
 function makePilotWorkerRoute(ws, { env = process.env, log = () => {}, now = () => Date.now(), fetchImpl, onWrite = () => {} } = {}) {
   const calls = hourBucket(LIMIT_PER_HOUR);

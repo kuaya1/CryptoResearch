@@ -1216,9 +1216,10 @@ function delegatedGate(ws, a, now) {
   if (!a.project_id) return null;
   try {
     const p = require('./projects').getProject(ws, a.project_id);
-    if (p.status === 'archived') return `project ${a.project_id} was archived`;
-    const st = require('./mandate-authority').autonomyOf(ws, a.project_id, { project: p });
-    if (st.suspended) return st.words || `autonomy on ${a.project_id} is suspended`;
+    // The desk's one gate: an archive, a veto, Undo or stop of Eric's, or
+    // the pause (mandate-authority.js automationGate).
+    const gate = require('./mandate-authority').automationGate(ws, a.project_id, { project: p });
+    if (!gate.ok) return gate.words || `automation on ${a.project_id} is stopped`;
     const prof = require('./tickets').readTicketProfile(ws, a.project_id);
     if (prof.pilot_set_at && prof.pilot !== true) return `${a.project_id} was taken off the pilot (${prof.pilot_set_by || 'unknown'} at ${prof.pilot_set_at})`;
   } catch (err) {

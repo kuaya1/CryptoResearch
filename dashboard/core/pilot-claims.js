@@ -45,6 +45,20 @@
 // a new attempt. A preparation that outlives its claim is refused at bind:
 // the token, the state, the expiry and the pause are checked there again,
 // against the time of the bind.
+//
+// A stop must stop everything (fix/stop-halts-pilot, 2026-11-02). Every
+// transition here asks the desk's one gate (mandate-authority.js
+// automationGate), never a predicate of its own: the desk-wide pause and
+// Eric's latch on the project (a veto or Undo of his, an archive, an explicit
+// autonomy stop, until his explicit rearm).
+//   - The pause works as it always did: no claim, prepare or bind; work
+//     already dispatched may still settle.
+//   - A project stop: claim() takes nothing ("stopped"). A claim still
+//     claimed or preparing is let go inside the lock as autonomy_stopped, with
+//     the gate's words, and no session starts (beginPreparation, bind). A
+//     dispatched session's answer is not saved: the claim is let go as
+//     autonomy_stopped when it reports back (stopIfHalted), so the attempt
+//     reads stopped, never saved. The step stays blocked until Eric rearms.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -103,6 +117,20 @@ function sessionsView(ws, now = Date.now()) {
   }
 }
 
+// The desk's one gate, read through its module's exports at each transition.
+const gateOf = (ws, pid) => require('./mandate-authority').automationGate(ws, pid);
+const PAUSED_WORDS = 'Automation is paused: no agent is dispatched until you resume it.';
+const STOPPED = 'autonomy_stopped';
+
+// The claim let go because the gate closed on the project (not the pause).
+function stoppedRec(cur, g, now) {
+  const dispatched = cur.state === 'dispatched';
+  const words = dispatched
+    ? `Attempt ${cur.attempt_id}'s session was dispatched (${cur.run_id || cur.ticket_id || 'no record'}) before the stop; its answer is not saved and the attempt is recorded as stopped, not as a success. ${g.words}`
+    : `Attempt ${cur.attempt_id} was let go while ${cur.state}, before any session started. ${g.words}`;
+  return { ...cur, released: true, released_at: new Date(now).toISOString(), outcome: STOPPED, stopped: { code: g.code, state_at_stop: cur.state, session_dispatched: dispatched, words } };
+}
+
 const claimAbs = (ws, pid) => {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(pid))) throw new OpError('BAD_ID', `"${pid}" is not a project ID.`);
   return ws.abs(`.cr/pilot-claims/${pid}.json`);
@@ -124,13 +152,17 @@ function transitionKey(step) {
 // A forced prosecution claimed on pm_review dispatches a Prosecutor: its ticket
 // waiting on the desk is the same attempt.
 const dispatchedAs = (s) => (s === 'pm_review' ? 'ticket' : s);
+// A blocked project (Eric's stop, an unverified identity) hides which step it
+// would be at, so an expired dispatch on it is still unsettled: it reads
+// reconcile, never just "expired" (fix/stop-halts-pilot).
 function sameAttempt(cur, step, key) {
-  return cur.key === key || cur.bound_key === key || dispatchedAs(cur.step) === dispatchedAs(step.step);
+  return cur.key === key || cur.bound_key === key || dispatchedAs(cur.step) === dispatchedAs(step.step) || step.step === 'blocked';
 }
 
 function claim(ws, pid, { owner = null, now = Date.now(), ttlMs = TTL_MS, expect = null, force = false } = {}) {
   return withLock(ws, `pilot claim ${pid}`, () => {
-    if (require('./workspace').automationPaused(ws)) return { status: 'paused', words: 'Automation is paused: no agent is dispatched until you resume it.' };
+    const g = gateOf(ws, pid);
+    if (!g.ok) return g.code === 'PAUSED' ? { status: 'paused', words: PAUSED_WORDS } : { status: 'stopped', code: g.code, words: g.words };
     const step = require('./tickets').pilotQueue(ws, { project: pid, now })[0];
     if (!step) throw new OpError('NOT_FOUND', `No project ${pid} on this desk.`);
     const key = transitionKey(step);
@@ -207,7 +239,13 @@ function beginPreparation(ws, pid, token, { now = Date.now() } = {}) {
     const cur = held(ws, pid, token);
     if (cur.state !== 'claimed') return { status: 'already', claim: cur };
     if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was prepared.`);
-    if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was prepared.');
+    const g = gateOf(ws, pid);
+    if (!g.ok && g.code === 'PAUSED') throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was prepared.');
+    if (!g.ok) {
+      const rec = stoppedRec(cur, g, now);
+      write(ws, pid, rec);
+      return { status: 'stopped', claim: rec, words: rec.stopped.words };
+    }
     const step = require('./tickets').pilotQueue(ws, { project: pid, now })[0] || null;
     if (!step || transitionKey(step) !== cur.key) {
       const rec = { ...cur, released: true, released_at: new Date(now).toISOString(), outcome: 'changed' };
@@ -227,7 +265,9 @@ function assertPreparing(ws, pid, token, { now = Date.now() } = {}) {
   const cur = held(ws, pid, token);
   if (cur.state !== 'preparing') throw new OpError('ALREADY_BOUND', `Attempt ${cur.attempt_id} is ${cur.state}, not being prepared by this request; nothing more is opened.`);
   if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at} while it was being prepared; nothing was dispatched.`);
-  if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused while the claim was being prepared; nothing was dispatched.');
+  const g = gateOf(ws, pid);
+  if (!g.ok && g.code === 'PAUSED') throw new OpError('PAUSED', 'Automation was paused while the claim was being prepared; nothing was dispatched.');
+  if (!g.ok) throw new OpError('STOPPED', `${g.words} Nothing was dispatched.`);
   return cur;
 }
 
@@ -248,8 +288,15 @@ function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now(
     if (cur.state === 'dispatched') throw new OpError('ALREADY_BOUND', `Attempt ${cur.attempt_id} was already bound to ${cur.run_id || cur.ticket_id || 'its record'} at ${cur.dispatched_at}; its session is not authorized twice.`);
     if (cur.state !== from) throw new OpError('ALREADY_BOUND', `Attempt ${cur.attempt_id} is ${cur.state}, not ${from}; nothing was dispatched.`);
     if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was dispatched.`);
-    if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was dispatched.');
-    const bound = { run_id: run_id || cur.run_id, ticket_id: ticket_id || cur.ticket_id };
+    const g = gateOf(ws, pid);
+    if (!g.ok && g.code === 'PAUSED') throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was dispatched.');
+    // Stopped before the bind: let go as stopped, no session reserved or run.
+    if (!g.ok) {
+      const rec = stoppedRec(cur, g, now);
+      write(ws, pid, rec);
+      throw new OpError('STOPPED', rec.stopped.words, { claim: rec });
+    }
+    const bound ={ run_id: run_id || cur.run_id, ticket_id: ticket_id || cur.ticket_id };
     const s = sessionsToday(ws, now);
     if (!s.all_attempts.has(cur.attempt_id)) {
       if (s.left <= 0) throw new OpError('SESSION_CEILING', ceilingWords(s));
@@ -260,6 +307,23 @@ function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now(
     const rec = { ...cur, ...(extra || {}), state: 'dispatched', dispatched_at: new Date(now).toISOString(), ...bound, bound_key: transitionKey({ step: cur.step, ...bound }) };
     write(ws, pid, rec);
     return { status: 'bound', claim: rec, sessions: { day: s.day, used: s.all_attempts.has(cur.attempt_id) ? s.used : s.used + 1, ceiling: s.ceiling } };
+  });
+}
+
+// Before a dispatched session's answer is saved (the worker's complete, the
+// local runner's import): inside the lock, the claim is this token's and the
+// gate is read again. Closed on the project (anything but the pause, under
+// which dispatched work may still settle), the claim is let go as
+// autonomy_stopped and { status: 'stopped' } says why; the caller saves
+// nothing. Else { status: 'ok' }.
+function stopIfHalted(ws, pid, token, { now = Date.now() } = {}) {
+  return withLock(ws, `pilot check ${pid}`, () => {
+    const cur = held(ws, pid, token);
+    const g = gateOf(ws, pid);
+    if (g.ok || g.code === 'PAUSED') return { status: 'ok', claim: cur };
+    const rec = stoppedRec(cur, g, now);
+    write(ws, pid, rec);
+    return { status: 'stopped', claim: rec, code: g.code, words: rec.stopped.words };
   });
 }
 
@@ -277,4 +341,4 @@ function release(ws, pid, { token = null, reconciled = false, outcome = null, no
   });
 }
 
-module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, transitionKey, claim, beginPreparation, assertPreparing, bind, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };
+module.exports = { VERSION, TTL_MS, MAX_CORRECTIONS, SESSION_FORMAT, SESSIONS_REL, DAILY_SESSIONS_DEFAULT, DAILY_SESSIONS_MAX, STOPPED, transitionKey, claim, beginPreparation, assertPreparing, bind, stopIfHalted, release, read, peek, held, dailyCeiling, sessionsToday, sessionsView };

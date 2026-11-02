@@ -955,8 +955,13 @@ async function run(argv) {
       if (sub === 'claim') return require('./core/pilot-claims').claim(ws, need(pid, 'tickets claim <project> [--expect KEY] [--owner NAME]'), { owner: one(flags.owner) || actor, expect: one(flags.expect) || null, force: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
       if (sub === 'bind') return require('./core/pilot-claims').bind(ws, need(pid, 'tickets bind <project> --token T [--run R] [--ticket K]'), need(one(flags.token), '--token'), { run_id: one(flags.run) || null, ticket_id: one(flags.ticket) || null });
       if (sub === 'release') return require('./core/pilot-claims').release(ws, need(pid, 'tickets release <project> --token T | --reconciled'), { token: one(flags.token) || null, reconciled: Boolean(flags.reconciled), outcome: one(flags.outcome) || null });
-      // Eric's human latch on the paper mandate (mandate-authority.js): --stop
-      // holds the project's automatic grants and openings; --rearm clears it.
+      // Before the local runner saves a session's answer: Eric's stop since
+      // the dispatch lets the claim go as autonomy_stopped and nothing is saved.
+      if (sub === 'check') return require('./core/pilot-claims').stopIfHalted(ws, need(pid, 'tickets check <project> --token T'), need(one(flags.token), '--token'));
+      // Eric's latch on every automated effect on the project (mandate-
+      // authority.js automationGate): --stop halts the pilot's sessions and
+      // claims, the paper mandate's grants and openings, and automatic
+      // admission's remaining effects; --rearm clears it.
       if (sub === 'autonomy') {
         const usage = 'tickets autonomy <project> --stop|--rearm [--note TEXT]';
         const p = need(pid, usage);

@@ -1273,9 +1273,11 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // (tickets.js setPilot); the first quote is asked for right away, in the
   // background, under the monitor's own lease, gates and budget.
   const firstQuotesNow = () => setTimeout(() => jobs.runJob(ws, 'forensics', { trigger: 'dashboard', onlyDue: true }).then(() => rebuild(['api'])).catch(() => {}), 300);
-  // Eric's human latch on the paper mandate (mandate-authority.js,
-  // cr.autonomy.v1): stop holds the project's automatic grants and openings
-  // until he rearms it; rearm clears the interventions recorded so far.
+  // Eric's latch on every automated effect on a project (mandate-authority.js,
+  // cr.autonomy.v1, read through automationGate): stop halts the pilot's
+  // claims and sessions, the paper mandate's grants and openings, and
+  // automatic admission's remaining effects until he rearms it; rearm clears
+  // the interventions recorded so far and is logged with who and when.
   route('POST', '/api/projects/([^/]+)/autonomy', (m, req, res, body) => {
     const action = body && typeof body.action === 'string' ? body.action : null;
     if (!['stop', 'rearm'].includes(action)) throw new HttpError(400, 'action is stop or rearm.');
