@@ -261,7 +261,7 @@ function view(ws, { now, from = null, to = null } = {}) {
     },
     positions: { open: count((r) => r.position && r.position.state === 'open'), closed: count((r) => r.position && r.position.state === 'closed') },
     closed_fees: { complete: count((r) => r.position && r.position.state === 'closed' && r.position.fees === 'complete'), incomplete: count((r) => r.position && r.position.state === 'closed' && r.position.fees !== 'complete') },
-    basis: { decision_time: count((r) => r.inputs.label === 'decision_time'), reconstructed: count((r) => r.inputs.label === 'reconstructed'), refused: count((r) => r.inputs.label === 'integrity' || r.inputs.label === 'unreadable') },
+    basis: { decision_time: count((r) => r.inputs.label === 'decision_time'), unverified: count((r) => r.inputs.label === 'unverified'), reconstructed: count((r) => r.inputs.label === 'reconstructed'), refused: count((r) => r.inputs.label === 'integrity' || r.inputs.label === 'unreadable') },
     excluded: { count: 0, of: rows.length, rule: 'none', words: `0 excluded of ${rows.length}.` },
   };
   if (refused.length) throw refusal(refused, bookUnread ? null : denominators);
