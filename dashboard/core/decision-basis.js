@@ -29,8 +29,9 @@
 // the records that exist now, with only the corrections dated at or before the
 // decision applied, and is labeled `reconstructed`, never `decision_time`.
 // Corrections dated after the decision are listed as later annotations.
-// A veto or Undo whose basis could not be built (audit F1) has an unavailable
-// record in its place (unavailableBasis below) and reads `unavailable`.
+// A stop of Eric's (veto, Undo, a pass that archives) whose basis could not be
+// built (audit F1) has an unavailable record in its place (unavailableBasis
+// below) and reads `unavailable`.
 
 const fs = require('fs');
 const { OpError } = require('./ops');
@@ -173,20 +174,30 @@ function buildBasis(ws, { decision, receipt, receiptText, decisions = [], revisi
 // ---------------------------------------------------------------------------
 // When the basis cannot be built (audit F1, 2026-11-02)
 //
-// Eric's veto and Undo are the project stop: the line itself latches it
-// (mandate-authority.js autonomyOf). A failure building the basis (a report
-// that does not load, a rubric that does not read, anything buildBasis calls)
-// must never hold that line back, so tickets.decide records this in the
-// basis's place, at the same path, create-only and in the same operation. It
-// is not a basis: it names the decision and the failure and nothing else, no
-// part of a basis is filled in, and it is never replaced by one built later.
-// viewOf reads it as `unavailable`, never `decision_time` or `reconstructed`.
-// Every other decision (a grant above all) still commits only with its basis.
+// Eric's stop actions are the ones the desk documents as stopping a project
+// (DESK_STATE.md "One stop per project stops everything on it"): his veto and
+// his Undo, whose lines latch it (mandate-authority.js autonomyOf), and his
+// confirmed pass on a project he does not hold, which archives it
+// (DESK_STATE.md, "Confirm Pass & Archive (archives the project unless
+// held)"). A failure building the basis (a report that does not load, a rubric
+// that does not read, anything buildBasis calls) must never hold one of those
+// back, so tickets.decide records this in the basis's place, at the same path,
+// create-only and in the same operation. It is not a basis: it names the
+// decision and the failure and nothing else, no part of a basis is filled in,
+// and it is never replaced by one built later. viewOf reads it as
+// `unavailable`, never `decision_time` or `reconstructed`. Every other
+// decision still commits only with its basis: a grant, any mandate line, a
+// watch, a trim, a re-open, and a pass on a held project (which stays watched
+// and stops nothing).
 const UNAVAILABLE_VERSION = 'cr.decision-basis-unavailable.v1';
-const STOP_ACTIONS = Object.freeze(['veto', 'undo']);
+
+function stopsProject(decision) {
+  if (!decision || (typeof decision.decided_by === 'string' && decision.decided_by.startsWith('mandate:'))) return false;
+  return decision.action === 'veto' || decision.action === 'undo' || (decision.action === 'pass' && decision.archive === 'archived');
+}
 
 function unavailableBasis({ decision, error }) {
-  if (!STOP_ACTIONS.includes(decision.action)) throw new OpError('INVALID', `Only a veto or an Undo is recorded without its basis, never ${decision.action}.`);
+  if (!stopsProject(decision)) throw new OpError('INVALID', `Only Eric's veto, Undo or a pass that archives is recorded without its basis, never ${decision.action}${decision.action === 'pass' ? ` (${decision.archive || 'no archive'})` : ''}.`);
   return {
     schema_version: UNAVAILABLE_VERSION,
     decision_id: decision.decision_id,
@@ -196,24 +207,57 @@ function unavailableBasis({ decision, error }) {
     action: decision.action,
     state: 'unavailable',
     failure: { code: error && typeof error.code === 'string' ? error.code.slice(0, 60) : null, words: String((error && error.message) || error || 'unknown failure').slice(0, 300) },
-    meaning: 'The decision was recorded and stands, but what it stood on could not be read under its lock (the failure above). This is not a basis: nothing in it is filled in, and it is never rebuilt or replaced later.',
+    meaning: 'What this decision stood on could not be read under its lock (the failure above), so no basis was recorded. This is not a basis: nothing in it is filled in, and it is never rebuilt or replaced later. It says nothing of whether the decision still applies; the decision history says that.',
   };
 }
 
-// What a decide() answer says of the basis it wrote or found.
-function stateOfRecord(rec) {
-  if (rec && rec.schema_version === BASIS_VERSION) return { state: 'frozen' };
-  if (rec && rec.schema_version === UNAVAILABLE_VERSION) return { state: 'unavailable', words: `The decision is recorded and in force; what it stood on could not be recorded (${rec.failure && rec.failure.words ? rec.failure.words : 'no reason on record'}). It is never rebuilt.` };
-  return { state: 'unreadable', words: 'The basis on record for this decision does not read as a basis or as an unavailable record; its view refuses it (INTEGRITY).' };
+const HEX64 = /^[0-9a-f]{64}$/;
+
+// The one identity contract every reader of the record at a decision's basis
+// path applies (viewOf, stateOf, and through viewOf the attribution view and
+// the CLI): the record names this decision, its project, receipt, time and
+// action, under a schema it can be read by. Returns the fields that fail.
+function identityProblems(rec, decision) {
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return ['record'];
+  const bad = [];
+  if (rec.schema_version !== BASIS_VERSION && rec.schema_version !== UNAVAILABLE_VERSION) bad.push('schema_version');
+  for (const k of ['decision_id', 'project_id', 'receipt_id', 'decided_at', 'action']) if (rec[k] !== decision[k]) bad.push(k);
+  if (rec.schema_version === UNAVAILABLE_VERSION) {
+    if (rec.state !== 'unavailable') bad.push('state');
+    if (!rec.failure || typeof rec.failure !== 'object' || typeof rec.failure.words !== 'string') bad.push('failure');
+    if (!stopsProject(decision)) bad.push('action (only a stop is recorded without its basis)');
+    for (const k of ['research', 'receipt_sha256', 'authority']) if (k in rec) bad.push(k);
+  }
+  if (rec.schema_version === BASIS_VERSION) {
+    if (typeof rec.receipt_sha256 !== 'string' || !HEX64.test(rec.receipt_sha256)) bad.push('receipt_sha256');
+    if (!Array.isArray(rec.research)) bad.push('research');
+    if ('state' in rec || 'failure' in rec) bad.push('state');
+  }
+  return bad;
 }
 
-// The basis on record for a decision, as stored (a replay builds nothing).
-function stateOf(ws, pid, decisionId) {
-  const buf = readExact(ws, basisRel(pid, decisionId));
+function integrityError(rel, decisionId, bad) {
+  return new OpError('INTEGRITY', `The decision basis ${rel} does not belong to decision ${decisionId} (${bad.join(', ')}). It is not rebuilt.`, { path: rel, record: 'The decision basis', fields: bad });
+}
+
+const UNAVAILABLE_WORDS = (rec) => `No basis could be recorded when this decision was made (${rec.failure && rec.failure.words ? rec.failure.words : 'no reason on record'}). It is never rebuilt. This says nothing of whether the decision still applies.`;
+
+// What a decide() answer says of the record it wrote or found, under the
+// identity contract. It never speaks of current authority.
+function describe(rec, decision) {
+  const bad = identityProblems(rec, decision);
+  if (bad.length) return { state: 'integrity', fields: bad, words: `The record at this decision's basis path does not match the decision (${bad.join(', ')}); its view refuses it as INTEGRITY. Nothing is rebuilt.` };
+  if (rec.schema_version === UNAVAILABLE_VERSION) return { state: 'unavailable', words: UNAVAILABLE_WORDS(rec) };
+  return { state: 'frozen' };
+}
+
+// The record on file for a decision, as stored (a replay builds nothing).
+function stateOf(ws, pid, decision) {
+  const buf = readExact(ws, basisRel(pid, decision.decision_id));
   if (buf === null) return { state: 'none', words: 'No basis is on record for this decision; its view is rebuilt and labelled reconstructed.' };
   let rec = null;
-  try { rec = JSON.parse(buf.toString('utf8')); } catch (_) { rec = null; }
-  return rec && rec.decision_id === decisionId ? stateOfRecord(rec) : stateOfRecord(null);
+  try { rec = JSON.parse(buf.toString('utf8')); } catch (_) { return { state: 'integrity', fields: ['record'], words: 'The record at this decision\'s basis path does not read; its view refuses it as INTEGRITY. Nothing is rebuilt.' }; }
+  return describe(rec, decision);
 }
 
 // ---------------------------------------------------------------------------
@@ -305,14 +349,15 @@ function viewOf(ws, pid, decisionId) {
   if (basisBuf !== null) {
     let basis;
     try { basis = JSON.parse(basisBuf.toString('utf8')); } catch (_) { throw new OpError('INTEGRITY', `The decision basis ${brel} does not read. It is not rebuilt; restore it from a backup.`, { path: brel, record: 'The decision basis' }); }
-    // A veto or Undo recorded without its basis (unavailableBasis): said as
-    // such, with nothing rebuilt or put in its place.
-    if (basis && basis.schema_version === UNAVAILABLE_VERSION) {
-      if (basis.decision_id !== decisionId || basis.receipt_id !== decision.receipt_id || basis.decided_at !== decision.decided_at || basis.action !== decision.action || basis.state !== 'unavailable' || !STOP_ACTIONS.includes(decision.action)) throw new OpError('INTEGRITY', `The decision basis ${brel} does not belong to decision ${decisionId}. It is not rebuilt.`, { path: brel, record: 'The decision basis' });
+    const bad = identityProblems(basis, decision);
+    if (bad.length) throw integrityError(brel, decisionId, bad);
+    // A stop recorded without its basis (unavailableBasis): said as such, with
+    // nothing rebuilt or put in its place, and nothing said of current authority.
+    if (basis.schema_version === UNAVAILABLE_VERSION) {
       return {
         format: VIEW_VERSION,
         label: 'unavailable',
-        words: `What this ${decision.action === 'undo' ? 'Undo' : 'veto'} stood on could not be read under its lock (${basis.failure && basis.failure.words ? basis.failure.words : 'no reason on record'}), so its basis was not recorded. It is never rebuilt and no current value is put in its place; the decision itself stands.`,
+        words: `What this decision stood on could not be read under its lock, so its basis was not recorded. ${UNAVAILABLE_WORDS(basis)} No current value is put in its place.`,
         decision,
         basis: null,
         unavailable: basis,
@@ -320,7 +365,6 @@ function viewOf(ws, pid, decisionId) {
         execution: executionOf(ws, decisionId),
       };
     }
-    if (!basis || basis.schema_version !== BASIS_VERSION || basis.decision_id !== decisionId || basis.receipt_id !== decision.receipt_id || basis.decided_at !== decision.decided_at) throw new OpError('INTEGRITY', `The decision basis ${brel} does not belong to decision ${decisionId}. It is not rebuilt.`, { path: brel, record: 'The decision basis' });
     const receiptBuf = mustMatch(ws, receiptRel, basis.receipt_sha256, 'The ticket receipt');
     const receipt = JSON.parse(receiptBuf.toString('utf8'));
     if (receipt.packet && receipt.packet.path) mustMatch(ws, receipt.packet.path, basis.packet_sha256, 'The frozen ticket packet');
@@ -370,4 +414,4 @@ function viewOf(ws, pid, decisionId) {
   };
 }
 
-module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, STOP_ACTIONS, VIEW_VERSION, SPREAD_KIND, basisRel, buildBasis, unavailableBasis, stateOf, stateOfRecord, viewOf };
+module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, buildBasis, unavailableBasis, stopsProject, identityProblems, describe, stateOf, viewOf };

@@ -1871,7 +1871,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     // It also says the basis as recorded; nothing is built for it now.
     const replay = (d) => {
       const mine = lines.filter((l) => l.receipt_id === rid);
-      const basis = require('./decision-basis').stateOf(ws, pid, d.decision_id);
+      const basis = require('./decision-basis').stateOf(ws, pid, d);
       if (d.action === 'undo') return { status: 'unchanged', decision: d, live: mine[mine.length - 1] === d, undone: lines.find((l) => l.decision_id === d.undoes) || null, basis };
       const now = decisionFor(lines, rid);
       return { status: 'unchanged', decision: d, live: Boolean(now && now.decision_id === d.decision_id), undone: null, basis };
@@ -1977,20 +1977,21 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     // operation: the line and its basis commit together or not at all. The
     // line stays cr.ticket-decision.v1 (the Paper Book reads only that).
     const DB = require('./decision-basis');
-    // Eric's veto and Undo are the project stop (mandate-authority.js reads
-    // them from this line), so a basis that cannot be built never holds them
-    // back (audit F1, 2026-11-02): the failure is recorded in the basis's place
-    // as unavailable, in this same operation, and read back as such. A grant,
-    // a pass, a watch, a trim or a re-open still commits only with its basis.
+    // Eric's stop actions (his veto and Undo, which latch the project, and his
+    // pass on a project he does not hold, which archives it) are never held
+    // back by a basis that cannot be built (audit F1, 2026-11-02): the failure
+    // is recorded in the basis's place as unavailable, in this same operation,
+    // and read back as such. A grant, any mandate line, a watch, a trim, a
+    // re-open and a pass on a held project still commit only with their basis.
     let basis;
     try {
       basis = DB.buildBasis(ws, { decision: full, receipt: r, receiptText: fs.readFileSync(ws.abs(receiptRel(pid, rid))), decisions: lines });
     } catch (err) {
-      if (mandateLine || !DB.STOP_ACTIONS.includes(action)) throw err;
+      if (mandateLine || !DB.stopsProject(full)) throw err;
       basis = DB.unavailableBasis({ decision: full, error: err });
     }
     op.writeJson(DB.basisRel(pid, full.decision_id), basis, { mode: 'create' });
-    return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null, basis: DB.stateOfRecord(basis) };
+    return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null, basis: DB.describe(basis, full) };
   });
   const res = out.result || {};
   if (res.live) Object.assign(res, effectsOf(ws, pid, rid, res.decision, res.undone));
