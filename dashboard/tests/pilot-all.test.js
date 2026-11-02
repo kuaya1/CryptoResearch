@@ -37,6 +37,9 @@ function fakeDesk(steps, { claims = {}, paused = false, claimAnswer = {} } = {})
     if (sub === 'claim') return claimAnswer[pid] || { status: 'claimed_now', token: `tok_${pid}` };
     if (sub === 'start') return { status: 'created', ticket_id: `tk_${pid}`, message: 'opened' };
     if (sub === 'bind' || sub === 'release') return { status: 'ok' };
+    // Before each import the runner asks whether Eric stopped the project
+    // since the dispatch (tickets check, fix/stop-halts-pilot): not here.
+    if (sub === 'check') return { status: 'ok' };
     if (sub === 'prompt') return text ? 'FICTIONAL PROMPT' : {};
     if (sub === 'import') { state.set(pid, 'pm_review'); return { status: 'saved', receipt_id: `tr_${pid}`, message: 'saved', verified: true }; }
     if (args[0] === 'research' && sub === 'add') return { status: 'created', run_id: `run_${pid}` };

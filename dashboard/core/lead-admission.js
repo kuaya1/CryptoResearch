@@ -247,11 +247,13 @@ function pipelineOf(ws, a, now = Date.now()) {
   try {
     const pid = a.project_id;
     const p = require('./projects').getProject(ws, pid);
-    if (p.status === 'archived') return { active: false, stage: 'archived' };
     const T = require('./tickets');
+    // The desk's one gate (an archive is one of Eric's stops). History that
+    // does not read is not at rest: it counts as active (below).
+    const gate = require('./mandate-authority').automationGate(ws, pid, { project: p });
+    if (gate.code === 'UNREADABLE') return { active: true, stage: 'unreadable', why: String(gate.words || '').slice(0, 200) };
+    if (gate.project_stopped) return { active: false, stage: p.status === 'archived' ? 'archived' : 'suspended' };
     if (!T.readTicketProfile(ws, pid).pilot) return { active: false, stage: 'unenrolled' };
-    const au = require('./mandate-authority').autonomyOf(ws, pid, { project: p });
-    if (au.suspended && !au.unreadable) return { active: false, stage: 'suspended' };
     const s = T.nextStep(ws, pid, { now });
     return { active: ACTIVE_STEPS.has(s.step), stage: s.step };
   } catch (err) {

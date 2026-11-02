@@ -880,7 +880,14 @@ test('reopen: refused on a pending ticket and by tickets start --reopen; allowed
   T.cancelTicket(s.ws, s.pid, again.ticket_id, 'test');
   T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
   assert.equal(T.view(s.ws, s.pid).ticket.status, 'invalidated');
-  assert.equal(T.nextStep(s.ws, s.pid).step, 'done');
+  // Eric's Undo is one of his stops (fix/stop-halts-pilot): nothing automated
+  // acts on the project, the pilot's next step included, until he rearms it.
+  const stopped = T.nextStep(s.ws, s.pid);
+  assert.equal(stopped.step, 'blocked');
+  assert.equal(stopped.stopped, 'SUSPENDED');
+  assert.match(stopped.why, /suspended by Eric's Undo/);
+  T.setAutonomy(s.ws, s.pid, { action: 'rearm', by: 'eric' });
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'done', 'after his rearm, the ticket reads done again');
 });
 
 test('reopen: a ticket sized under @1 while @2 is in force can be re-opened; nothing re-opens by itself', (t) => {

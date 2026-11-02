@@ -115,7 +115,10 @@ const KIND_WORDS = { veto: 'veto', undo: 'Undo', archive: 'archive', stop: 'auto
 function suspensionWords(pid, open) {
   const x = open[0];
   const more = open.length > 1 ? ` (and ${open.length - 1} more intervention${open.length === 2 ? '' : 's'})` : '';
-  return `Autonomous execution on ${pid} is suspended by Eric's ${KIND_WORDS[x.kind] || x.kind}${x.id && !String(x.id).startsWith('archive:') ? ` ${x.id}` : ''}${x.at ? ` at ${x.at}` : ''}${more}. It stays suspended through new exit quotes, tickets and reports until he rearms it: on the desk POST /api/projects/${pid}/autonomy {"action":"rearm"}, or locally node dashboard/cli.js tickets autonomy ${pid} --rearm.`;
+  const what = x.kind === 'archive'
+    ? `Eric's archive (the project was archived${x.at ? ` at ${x.at}` : ''})`
+    : `Eric's ${KIND_WORDS[x.kind] || x.kind}${x.id ? ` ${x.id}` : ''}${x.at ? ` at ${x.at}` : ''}`;
+  return `Autonomous execution on ${pid} is suspended by ${what}${more}: no pilot session, claim, paper-mandate grant or automatic admission acts on it. It stays suspended through new exit quotes, tickets and reports until he rearms it: on the desk POST /api/projects/${pid}/autonomy {"action":"rearm"}, or locally node dashboard/cli.js tickets autonomy ${pid} --rearm.`;
 }
 
 // { suspended, unreadable, interventions (not cleared), all, rearmed_at, words }.
@@ -134,6 +137,37 @@ function autonomyOf(ws, pid, { project = null, decisions = null } = {}) {
   } catch (err) {
     return { ...base, suspended: true, unreadable: true, interventions: [], all: [], rearmed_at: null, words: `Autonomous execution on ${pid} is held: ${String(err && err.message || err).slice(0, 240)}` };
   }
+}
+
+// The one answer to "may anything automated act on this project now?"
+// (cr-automation-gate@1, fix/stop-halts-pilot, 2026-11-02). Every automated
+// path asks it, through this module's exports, and no path keeps a predicate
+// of its own:
+//   - the pilot: the step it derives (tickets.nextStep), its claim, prepare,
+//     bind and complete (pilot-claims.js, pilot-worker.js);
+//   - the paper mandate: its sweep, its grant inside decide()'s lock, whether
+//     it is due, and a grant's authority at each opening and hour
+//     (tickets.js, grantAuthority below);
+//   - automatic admission: before each further effect and in its backlog
+//     (leads.delegatedGate, lead-admission.pipelineOf).
+// It is closed by two things, both always read:
+//   the project stop  Eric's latch on the project (autonomyOf: a veto or Undo
+//                     of his, an archive, an explicit stop) until his explicit
+//                     rearm, or history that does not read (never read as
+//                     empty): project_stopped, code SUSPENDED or UNREADABLE;
+//   the pause         Eric's desk-wide pause (settings automation.paused):
+//                     paused, code PAUSED when the project is not stopped.
+// A caller that treats the two differently (the pause lets work already
+// dispatched settle; a project stop does not) reads project_stopped first.
+// { ok, code, words, paused, project_stopped, autonomy }. Reads only.
+const GATE_VERSION = 'cr-automation-gate@1';
+const PAUSE_WORDS = 'Automation is paused: nothing automated acts on any project until Eric resumes it.';
+function automationGate(ws, pid, { project = null, decisions = null } = {}) {
+  const autonomy = autonomyOf(ws, pid, { project, decisions });
+  const paused = require('./workspace').automationPaused(ws);
+  const stopped = autonomy.suspended === true;
+  const code = stopped ? (autonomy.unreadable ? 'UNREADABLE' : 'SUSPENDED') : paused ? 'PAUSED' : null;
+  return { version: GATE_VERSION, ok: code === null, code, words: stopped ? autonomy.words : paused ? PAUSE_WORDS : null, paused, project_stopped: stopped, autonomy };
 }
 
 // Eric's explicit stop or rearm. Only the signed-in desk's route and the CLI
@@ -276,10 +310,10 @@ function grantAuthority(ws, d, { now = Date.now(), asOfMs = null, project = null
     return no('MANDATE_REVOKED', `This grant was made under the paper mandate's generation ${au.generation}; generation ${m.generation} is in force now${m.generation === au.generation ? ' with other limits' : ''}, and a new arming never revives an earlier grant.`);
   }
   const pid = d.project_id;
-  const st = autonomyOf(ws, pid, { project });
-  if (st.suspended) return no('MANDATE_SUSPENDED', st.words, !st.unreadable);
+  const g = module.exports.automationGate(ws, pid, { project });
+  if (!g.ok) return no(g.project_stopped ? 'MANDATE_SUSPENDED' : 'MANDATE_HELD', g.words, g.code === 'SUSPENDED');
   const t0 = Date.parse(d.decided_at);
-  const after = st.all.find((x) => x.id !== d.decision_id && x.at && Number.isFinite(Date.parse(x.at)) && Number.isFinite(t0) && Date.parse(x.at) >= t0);
+  const after = g.autonomy.all.find((x) => x.id !== d.decision_id && x.at && Number.isFinite(Date.parse(x.at)) && Number.isFinite(t0) && Date.parse(x.at) >= t0);
   if (after) return no('MANDATE_SUSPENDED', `Eric intervened (${KIND_WORDS[after.kind] || after.kind} ${after.id} at ${after.at}) after this grant: it opens nothing, rearmed or not.`);
   let r = receipt;
   if (!r) {
@@ -399,6 +433,8 @@ module.exports = {
   readDecisionsStrict,
   readAutonomyStrict,
   autonomyOf,
+  GATE_VERSION,
+  automationGate,
   setAutonomy,
   prosecutionHoldOf,
   authorityNext,
