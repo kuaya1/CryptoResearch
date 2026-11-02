@@ -317,35 +317,24 @@ function asOf(reports, decidedAt) {
 }
 
 // Execution context, beside the basis and never merged into it: what the
-// trader's Paper Book recorded for this decision's orders, read from its
-// journal as written (the book's own events; nothing here writes to it). The
+// trader's Paper Book recorded for this decision's orders, read through the
+// desk's one adapter (trader-desk.js executionFor), which runs the book's own
+// integrity checks over the bytes it shows (audit F5). A journal the book
+// refuses is refused here in the book's own words: state 'integrity' and no
+// values, never an empty list (unknown is not none). Nothing writes. The
 // engine revision, FILL_SHARE_MAX and the trader rules' digest are not in
 // those events, so they are said to be not recorded (blueprint §5.3 option B
 // until Eric decides Q4).
 const NOT_RECORDED = Object.freeze(['engine revision', 'fill_share_max', 'trader.rules digest']);
 function executionOf(ws, decisionId) {
-  // The path comes through the desk's one adapter; nothing here calls the
-  // book (trader-boundary.test.js).
-  const { JOURNAL } = require('./trader-desk');
-  let text = null;
-  try { text = fs.readFileSync(ws.abs(JOURNAL), 'utf8'); } catch (_) { text = null; }
-  const out = { label: 'execution_time', source: JOURNAL, reserved: [], fills: [], exits: [], not_recorded: [...NOT_RECORDED] };
-  if (text === null) return { ...out, state: 'no_book' };
-  const events = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } });
-  if (events.some((e) => e === null)) return { ...out, state: 'unreadable', words: `${JOURNAL} has a line that does not read; execution is not shown from a partial journal.` };
-  const coids = new Set();
-  const positions = new Set();
-  for (const e of events) {
-    if (e.type !== 'reserved' || !e.intent || e.intent.decision_id !== decisionId) continue;
-    coids.add(e.client_order_id);
-    if (e.position_id) positions.add(e.position_id);
-    out.reserved.push({ at: e.at, intent_id: e.intent_id, intent_sha256: e.intent_sha256 || null, side: e.intent.side || null, client_order_id: e.client_order_id, position_id: e.position_id || null, quantity: e.quantity, notional_usd: e.notional_usd || null, loss_at_stop_usd: e.loss_at_stop_usd || null, valid_until_effective: e.valid_until_effective || null, venue: e.venue || null, grant: e.grant || null });
+  const TD = require('./trader-desk');
+  const out = { label: 'execution_time', source: TD.JOURNAL, not_recorded: [...NOT_RECORDED] };
+  try {
+    return { ...out, ...TD.executionFor(ws, decisionId) };
+  } catch (err) {
+    if (!err || err.code !== 'INTEGRITY') throw err;
+    return { ...out, state: 'integrity', code: 'INTEGRITY', words: err.message, reserved: null, fills: null, exits: null };
   }
-  for (const e of events) {
-    if (e.type === 'fill' && coids.has(e.client_order_id)) out.fills.push({ at: e.at, hour: e.hour, client_order_id: e.client_order_id, quantity: e.quantity, price: e.price, notional_usd: e.notional_usd, fee_usd: e.fee_usd, fee_kind: e.fee_kind });
-    if (e.type === 'exit' && positions.has(e.position_id)) out.exits.push({ at: e.at, hour: e.hour, position_id: e.position_id, reason: e.reason, quantity: e.quantity, price: e.price, proceeds_usd: e.proceeds_usd, fee_usd: e.fee_usd });
-  }
-  return { ...out, state: out.reserved.length ? 'recorded' : 'none' };
 }
 
 function viewOf(ws, pid, decisionId) {
