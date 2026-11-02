@@ -49,7 +49,9 @@ function mandateDesk(t, { grade = 52, mandate = true, settings = {} } = {}) {
     ...settings,
   });
   t.after(w.cleanup);
-  const setGrade = stubGrade(t, grade);
+  // grade: null leaves the desk's own rubric in place (audit F8: the
+  // input-blindness tests must exercise the real grader, not a stand-in).
+  const setGrade = grade === null ? null : stubGrade(t, grade);
   noHoldings(t);
   const pid = addFixtureProject(w.ws).project_id;
   importAllFixtures(w.ws);
