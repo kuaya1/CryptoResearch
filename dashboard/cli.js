@@ -120,6 +120,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets decide-gates --action pass|watch [--dry-run] [--request-id <id>] [--note <text>] [--json]   decide every desk-gate card waiting for you, one decision each (pass archives unheld projects; held ones never)
   tickets batch-gate [--below 40] [--dry-run] [--json]   desk gate receipts for every unheld, verified project graded under 40 (no exit quote, no Prosecutor, no model)
   tickets exit-matrix [--json]         every verified active project by grade: exit cost at each of your exit sizes (Preferences > Screening), completeness, chain, quote age, native L1 status (writes nothing)
+  tickets basis <id> <decision_id> [--json]   what a decision stood on (cr.decision-basis.v1), each record checked by its SHA-256, beside its execution in the trader's book; a decision from before it reads "reconstructed" (writes nothing)
   tickets reconcile [<id>] [--dry-run] [--json]   complete a recorded decision's missing paper position or journal entry (never archives, voids or edits a decision)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets claim|bind|release <id>        the pilot runner's one execution claim per project (release --reconciled after an expired dispatch)
@@ -909,6 +910,7 @@ async function run(argv) {
       const tid = rest[1];
       if (sub === 'view' || sub === 'status') return tk.read(ws, need(pid, `tickets ${sub} <project>`), { receiptId: one(flags.receipt) || null, includeText: Boolean(flags['include-text'] || flags.include_text) });
       if (sub === 'exit-matrix') return tk.exitMatrix(ws);
+      if (sub === 'basis') return require('./core/decision-basis').viewOf(ws, need(pid, 'tickets basis <project> <decision_id>'), need(tid, 'tickets basis <project> <decision_id>'));
       if (sub === 'reconcile') {
         const one = pid && !String(pid).startsWith('--') ? pid : null;
         const dryRun = Boolean(flags['dry-run'] || flags.dry_run);
