@@ -16,7 +16,8 @@
 //   - capability classes C1–C7 and, for each, its controllers resolved to a
 //     class K1–K6 by state reads at the same block (Safe threshold, owners,
 //     modules and guard; timelock delay; AccessControl members with the
-//     DEFAULT_ADMIN_ROLE edges followed; EOAs and EIP-7702 accounts);
+//     DEFAULT_ADMIN_ROLE edges followed; the minter() a mint with no
+//     MINTER_ROLE names; EOAs and EIP-7702 accounts);
 //   - totalSupply against the previous observation and the mint/burn
 //     Transfer events between them;
 //   - the ERC-1967 slots read again at "latest", to say when the state is
@@ -64,7 +65,7 @@ const SLOTS = Object.freeze({
 });
 
 const READS = Object.freeze(Object.fromEntries([
-  'owner()', 'totalSupply()', 'decimals()', 'name()', 'symbol()', 'implementation()',
+  'owner()', 'minter()', 'totalSupply()', 'decimals()', 'name()', 'symbol()', 'implementation()',
   'getThreshold()', 'getOwners()', 'getModulesPaginated(address,uint256)', 'getMinDelay()', 'delay()', 'admin()',
   'hasRole(bytes32,address)', 'getRoleAdmin(bytes32)', 'getRoleMemberCount(bytes32)', 'getRoleMember(bytes32,uint256)', 'facets()',
 ].map((s) => [s, K.selector(s)])));
@@ -134,6 +135,12 @@ const CLASS_WORDS = Object.freeze({
 // Worst first, for a capability with several controllers.
 const CLASS_RANK = Object.freeze({ K5: 6, K4: 5, K6: 4, K3: 3, K2: 2, K1: 1 });
 const worst = (classes) => classes.reduce((a, b) => (CLASS_RANK[b] > CLASS_RANK[a] ? b : a), 'K1');
+// Two resolved controllers of one power (a minter and an owner): the worse
+// class, both paths kept, the delay of the one that sets the class.
+function worseOf(m, o) {
+  const lead = CLASS_RANK[o.class] > CLASS_RANK[m.class] ? o : m;
+  return { class: lead.class, path: [...m.path, ...o.path], delay_hours: lead.delay_hours, words: `minter(): ${m.words} owner(): ${o.words} The worse of the two counts: an owner may be able to change the minter.` };
+}
 
 // Solana programs (published program IDs).
 const SOL = Object.freeze({
@@ -565,6 +572,23 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev, market 
       }
       return ownerRes;
     };
+    // A mint guarded by a minter() getter (the Compound and Uniswap pattern):
+    // the address it names is resolved like any other controller. Read once,
+    // only for a mint no MINTER_ROLE answers for; a revert or no answer is
+    // null, and the guard then stays as before (the owner, else unknown).
+    let minterRes;
+    const minterCtl = async () => {
+      if (minterRes === undefined) {
+        const hex = await rd.view(addr, callData('minter()'));
+        const m = hex === null ? null : decAddress(hex);
+        if (hex === null) minterRes = null;
+        else {
+          const c = await resolveController(rd, m || 'malformed', 1, ctx);
+          minterRes = { ...c, address: m, path: [{ address: m, node: 'minter', via: 'minter()' }, ...c.path] };
+        }
+      }
+      return minterRes;
+    };
     obs.roles = { enumeration: accessControl ? 'pending' : 'none', members: [] };
     for (const cap of ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7'].filter((c) => caps.has(c))) {
       const fn = (surface.functions.find((f) => f.capability === cap) || {}).signature || (cap === 'C1' ? `proxy ${kind}` : cap === 'C7' ? 'SELFDESTRUCT in code' : null);
@@ -581,6 +605,11 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev, market 
         const rc = await roleControllers(rd, addr, ROLE_FOR[cap], 0, ctx);
         obs.roles.enumeration = rc.enumeration === 'none' ? 'none' : obs.roles.enumeration === 'none' ? 'none' : 'enumerable';
         res = { class: worst(rc.classes), path: rc.path, words: rc.words.join(' ') || `${ROLE_FOR[cap]} has no member.` };
+      } else if (cap === 'C2' && await minterCtl()) {
+        // With an owner too, the worse of the two counts: an owner may be able
+        // to change the minter.
+        const o = owner ? await ownerCtl() : null;
+        res = o ? worseOf(minterRes, o) : minterRes;
       } else if (owner) {
         res = await ownerCtl();
       } else res = { class: 'K6', path: [], words: accessControl ? 'Guarded by roles the desk cannot attribute to this function.' : 'No owner or role answered: the guard is not known.' };
@@ -615,6 +644,10 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev, market 
     if (owner) {
       const res = await session.call('eth_call', [{ to: addr, data: callData('owner()') }], { latest: true });
       if (res.ok && decAddress(res.result) !== owner) latestMatch = false;
+    }
+    if (minterRes && minterRes.address) {
+      const res = await session.call('eth_call', [{ to: addr, data: callData('minter()') }], { latest: true });
+      if (res.ok && decAddress(res.result) !== minterRes.address) latestMatch = false;
     }
     block.latest_slots_match = latestMatch;
 
@@ -820,9 +853,9 @@ async function transferProbe(session, rd, { token, pool, decimals, priceUsd, blo
   return { ...base, status: 'ok', sender, sell_path: { to: pool.pool, sent: amount.toString(), received: received.toString(), tax_bps: Number(((amount - received) * 10000n) / amount) } };
 }
 
-// Who a probe calls as: the authority path's first owner or role member.
+// Who a probe calls as: the authority path's first owner, minter or role member.
 function senderOf(a) {
-  const hop = (a.path || []).find((p) => p && p.address && ['owner', 'role_member'].includes(p.node));
+  const hop = (a.path || []).find((p) => p && p.address && ['owner', 'minter', 'role_member'].includes(p.node));
   return hop ? hop.address : null;
 }
 
@@ -1209,7 +1242,7 @@ function planFor(subject) {
     return { base, more: 'plus up to 2 getAccountInfo reads when a transfer-hook program is set' };
   }
   const base = [['eth_chainId', 1], ['eth_getBlockByNumber', 2], ['eth_getCode', 1], ['eth_getStorageAt', 5], ['eth_call', 6]];
-  return { base, more: 'plus the implementation\'s code, each controller (code, Safe or timelock reads, up to your authority depth), role members, three slots at latest, and two eth_getLogs when the supply moved' };
+  return { base, more: 'plus the implementation\'s code, each controller (code, Safe or timelock reads, up to your authority depth), role members, minter() for a mint no MINTER_ROLE guards, three slots at latest, and two eth_getLogs when the supply moved' };
 }
 
 function dryRun(ws, pid) {
