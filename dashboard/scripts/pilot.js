@@ -69,6 +69,7 @@ function parse(argv) {
     else if (k === 'max-agents') out.maxAgents = Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10 ? Number(v) : out.maxAgents;
     else if (k === 'desk-url') out.deskUrl = v || null;
     else if (k === 'check-isolation') out.checkIsolation = true;
+    else if (k === 'unattended') out.unattended = true;
     else if (k === 'help') out.help = true;
   }
   return out;
@@ -654,7 +655,22 @@ const sha256 = (t) => require('crypto').createHash('sha256').update(t, 'utf8').d
 
 // The worker token, from %USERPROFILE%\.cryptoresearch\secrets.json
 // (pilot_worker_token). Never printed or logged, never given to a session.
-function readWorkerToken(file = path.join(homeDir(), 'secrets.json')) {
+// The desk's bearers stay in the runner (blueprint 2026-11-02 §6.4): from the
+// environment first (CR_PILOT_WORKER_TOKEN, CR_PILOT_POLL_TOKEN, as an
+// unattended host holds them), else secrets.json. No CR_* name is on the
+// session's environment allowlist (ENV_KEEP), so neither reaches a session;
+// neither is ever put in argv, a log line, the prompt or the run's log.
+const POLL_TOKEN_ENV = 'CR_PILOT_POLL_TOKEN';
+const WORKER_TOKEN_ENV = 'CR_PILOT_WORKER_TOKEN';
+function bearerFromEnv(env, name) {
+  const v = env && typeof env[name] === 'string' ? env[name].trim() : '';
+  if (!v) return null;
+  if (v.length < 16) throw new Error(`${name} is set but too short to be the desk's token.`);
+  return v;
+}
+function readWorkerToken(file = path.join(homeDir(), 'secrets.json'), env = process.env) {
+  const fromEnv = bearerFromEnv(env, WORKER_TOKEN_ENV);
+  if (fromEnv) return fromEnv;
   let s = null;
   try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw new Error(`The worker token could not be read from ${file} (${err.code || 'unreadable'}).`); }
   const t = s && typeof s.pilot_worker_token === 'string' ? s.pilot_worker_token.trim() : '';
@@ -723,6 +739,15 @@ function savePendingSubmission(dir, rec) {
   return f;
 }
 
+// The stdout record of an answer whose complete was lost (cr-pilot-lost-complete@1).
+const LOST_FORMAT = 'cr-pilot-lost-complete@1';
+const LOST_FIELDS = Object.freeze(['project_id', 'attempt_id', 'key', 'claim_expires_at', 'role', 'run_id', 'ticket_id', 'prompt_sha256', 'text_sha256', 'attempts']);
+function lostComplete(rec) {
+  const out = { format: LOST_FORMAT };
+  for (const k of LOST_FIELDS) out[k] = rec[k] === undefined ? null : rec[k];
+  return out;
+}
+
 async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fetch, token = null, env = process.env, sleep = pause, now = Date.now, pendingDir = null, completeDelays = COMPLETE_BACKOFF_MS } = {}) {
   if (o.forceProsecution) throw new Error('Eric\'s override (--force-prosecution) is local only: the online worker never forces a Prosecutor.');
   const desk = deskUrlOf(o, env);
@@ -733,7 +758,7 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
   }
   // The session's tool boundary, before the token is read or a claim taken.
   await preflightOf(run, o);
-  const tok = token || readWorkerToken();
+  const tok = token || readWorkerToken(undefined, env);
   const post = (op, body, opts) => workerCall(fetchImpl, desk, tok, op, { project_id: o.project, ...body }, opts);
   const stop = (kind, words) => { Object.assign(result, { stop: kind, words }); out(`    Not dispatched: ${words}`); return result; };
   for (let i = 0; i < MAX_STEPS; i++) {
@@ -787,6 +812,10 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
       } catch (e2) {
         kept = ` (The pending-submission copy could not be written: ${String(e2 && (e2.code || e2.message) || e2).slice(0, 120)}.)`;
       }
+      // On a host whose disk does not outlive the run (Render cron), the one
+      // record that survives is stdout: identifiers and hashes only, never the
+      // answer's text or the claim token (blueprint §6.4, build plan row 4).
+      out(`Lost complete: ${JSON.stringify(lostComplete({ project_id: o.project, attempt_id: c.attempt_id, key: c.key, claim_expires_at: c.expires_at, role: p.role, run_id: p.run_id || null, ticket_id: p.ticket_id || null, prompt_sha256: p.prompt_sha256, text_sha256: sha256(answer), attempts: (err.attempts || []).length }))}`);
       return stop('reconcile', `${err.message} The session's answer is kept at ${f}.${kept} ${ONLINE_RECONCILE(o.project)}`);
     }
     out(`    ${done.status === 'stopped' ? 'not saved' : 'saved'}: ${done.status} ${done.report_id || done.receipt_id || ''}${done.words ? ` — ${done.words}` : ''}`);
@@ -814,6 +843,79 @@ const CLAIM_SKIP = new Set(['claimed', 'reconcile', 'correction_limit']);
 const LOCK_STALE_MS = 3 * 3600000;
 const DEFAULT_DESK_URL = 'https://cryptoresearch.onrender.com';
 const RECONCILE_WORDS = 'An earlier dispatch expired with no known outcome (often after the PC slept). Check the desk, then release it: node dashboard/cli.js tickets release <project> --reconciled.';
+// Each run's health (cr-pilot-health@1, blueprint 2026-11-02 §6.1): the exit
+// code keeps its meaning (0 done or nothing to do, 3 needs Eric, 1 an error);
+// the class says what the 0 was. It comes from the row's stop, never from its
+// outcome word, so a refused save or a failed session is never success.
+//   ok         something was saved (a done dispatch)
+//   idle       nothing to do: paused, stopped by Eric, cap, session ceiling, dry run
+//   attention  nothing broke, but something is in the way: another runner
+//              holds the project or the lock, the one correction is used, the
+//              step changed under the claim, or the re-poll did not answer
+//   reconcile  an outcome is unknown: Eric reconciles it (exit 3)
+//   failure    a session, a prompt, a prepare or a save failed, or the run erred
+const HEALTH_FORMAT = 'cr-pilot-health@1';
+const HEALTH_ORDER = Object.freeze(['idle', 'ok', 'attention', 'reconcile', 'failure']);
+const IDLE_STOPS = new Set(['cap', 'paused', 'stopped', 'session_ceiling', 'nothing']);
+const ATTENTION_STOPS = new Set(['claimed', 'correction_limit', 'changed']);
+function rowHealth(row) {
+  if (!row) return 'failure';
+  if (row.outcome === 'error' || row.error) return 'failure';
+  if (row.outcome === 'dry_run' || row.outcome === 'session_ceiling' || row.outcome === 'cap') return 'idle';
+  if (row.stop) {
+    if (row.stop === 'reconcile') return 'reconcile';
+    if (IDLE_STOPS.has(row.stop)) return 'idle';
+    if (ATTENTION_STOPS.has(row.stop)) return 'attention';
+    // agent_failed, integrity, refused, sessions_unknown, a prepare's or a
+    // save's refusal code, or any answer this runner does not know.
+    return 'failure';
+  }
+  if (row.repoll_error) return 'attention';
+  return row.outcome === 'done' ? 'ok' : 'failure';
+}
+const worstOf = (classes) => classes.reduce((w, c) => (HEALTH_ORDER.indexOf(c) > HEALTH_ORDER.indexOf(w) ? c : w), 'idle');
+// The run's class: the worst of its rows and of the run's own state.
+function runHealth(log) {
+  if (!log) return 'failure';
+  const own = [];
+  if (log.error || log.exit === 1) own.push('failure');
+  if (log.skipped === 'locked') own.push('attention');
+  if (Array.isArray(log.needs_eric) && log.needs_eric.length) own.push('reconcile');
+  if (log.exit === 3) own.push('reconcile');
+  return worstOf([...own, ...(log.dispatches || []).map((d) => d.health || rowHealth(d))]);
+}
+// The heartbeat (blueprint 2026-11-02 §6.1, build plan row 7; optional, Q2):
+// when CR_HEALTHCHECK_URL holds a Healthchecks ping URL, a run sends at most
+// two bare GETs, /start?rid= and one final ping by the run's health class
+// (ok and idle /0, attention /fail, failure /1, reconcile /3; Healthchecks
+// reads 0 as success and every other value as failure), each with a 5 s
+// timeout. A ping that fails is ignored: it never changes the exit code,
+// releases a claim or touches authority. The URL is a secret: never printed,
+// logged or given to a session (no CR_* name is on ENV_KEEP). A dry run
+// sends nothing.
+const HEARTBEAT_ENV = 'CR_HEALTHCHECK_URL';
+const HEARTBEAT_TIMEOUT_MS = 5000;
+const HEARTBEAT_FINAL = Object.freeze({ ok: '0', idle: '0', attention: 'fail', failure: '1', reconcile: '3' });
+function heartbeatBase(env = process.env) {
+  const v = env && typeof env[HEARTBEAT_ENV] === 'string' ? env[HEARTBEAT_ENV].trim() : '';
+  if (!v) return { base: null, words: null };
+  let u = null;
+  try { u = new URL(v); } catch (_) { u = null; }
+  if (!u || u.protocol !== 'https:' || u.username || u.password || u.search || u.hash || u.pathname.length < 2) {
+    return { base: null, words: `${HEARTBEAT_ENV} is set but is not an https ping URL; no heartbeat is sent.` };
+  }
+  return { base: `${u.origin}${u.pathname.replace(/\/+$/, '')}`, words: null };
+}
+const heartbeatFinal = (health) => HEARTBEAT_FINAL[health] || '1';
+async function sendPing(fetchImpl, url, timeoutMs = HEARTBEAT_TIMEOUT_MS) {
+  try {
+    const res = await fetchImpl(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
+    return { sent: true, status: res && typeof res.status === 'number' ? res.status : null };
+  } catch (err) {
+    return { sent: false, status: null, reason: err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : 'unreachable' };
+  }
+}
+
 const homeDir = () => path.join(os.homedir(), '.cryptoresearch');
 const lockPath = () => path.join(os.tmpdir(), 'cr-pilot', 'pilot-all.lock');
 const pilotLogPath = () => path.join(homeDir(), 'pilot-all.jsonl');
@@ -845,7 +947,9 @@ function dropLock(file, pid = process.pid) {
 
 // The poll token from %USERPROFILE%\.cryptoresearch\secrets.json
 // (pilot_poll_token). Never printed or logged.
-function readPollToken(file = path.join(homeDir(), 'secrets.json')) {
+function readPollToken(file = path.join(homeDir(), 'secrets.json'), env = process.env) {
+  const fromEnv = bearerFromEnv(env, POLL_TOKEN_ENV);
+  if (fromEnv) return fromEnv;
   let s = null;
   try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw new Error(`The poll token could not be read from ${file} (${err.code || 'unreadable'}).`); }
   const t = s && typeof s.pilot_poll_token === 'string' ? s.pilot_poll_token.trim() : '';
@@ -869,6 +973,27 @@ async function pollOnline(o, { fetchImpl = globalThis.fetch, token, env = proces
   if (!body || body.format !== 'cr-pilot-poll@1' || !Array.isArray(body.steps)) throw new Error('The online desk\'s pilot poll did not answer cr-pilot-poll@1.');
   return { paused: body.paused === true, sessions: body.sessions || null, steps: body.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })) };
 }
+// The production poll (blueprint 2026-11-02 row 6): an unattended online run
+// polls through the worker route `poll` under the worker bearer, so the desk
+// records the sighting on its own clock after it computed the same snapshot.
+// The runner's ID is CR_PILOT_RUNNER_ID, else this host's name; the
+// invocation's ID is new for each run. Attended and dry runs keep the GET.
+const RUNNER_ID_ENV = 'CR_PILOT_RUNNER_ID';
+const RUNNER_ID_RE = /^[A-Za-z0-9 ._:@-]{1,80}$/;
+function runnerIdOf(env = process.env, host = os.hostname()) {
+  const set = env && typeof env[RUNNER_ID_ENV] === 'string' ? env[RUNNER_ID_ENV].trim() : '';
+  if (set) {
+    if (!RUNNER_ID_RE.test(set)) throw new Error(`${RUNNER_ID_ENV} is letters, digits, space, . _ : @ - only, at most 80.`);
+    return set;
+  }
+  return String(host || '').replace(/[^A-Za-z0-9._:@-]/g, '-').slice(0, 80) || 'pilot';
+}
+async function sightOnline(o, { fetchImpl = globalThis.fetch, token, env = process.env, runnerId, invocationId } = {}) {
+  const body = await workerCall(fetchImpl, deskUrlOf(o, env), token, 'poll', { runner_id: runnerId, invocation_id: invocationId, max_agents: o.maxAgents }, { timeoutMs: 30000 });
+  const p = body && body.poll;
+  if (!p || p.format !== 'cr-pilot-poll@1' || !Array.isArray(p.steps)) throw new Error('The online desk\'s production poll did not answer cr-pilot-poll@1.');
+  return { paused: p.paused === true, sessions: p.sessions || null, steps: p.steps.map((s) => ({ project_id: s.project_id, step: s.step, claim: s.claim || null })), sighting: body.sighting || null };
+}
 function pollLocal(call) {
   const q = call(['tickets', 'queue']);
   const claims = (q && q.claims) || {};
@@ -878,12 +1003,35 @@ function pollLocal(call) {
 async function runAll(o, {
   call = cli, agent = claude, fetchImpl = globalThis.fetch, token = null, workerToken = null, env = process.env,
   lockFile = lockPath(), logFile = pilotLogPath(), out = say, now = () => Date.now(), pid = process.pid,
-  runLocalImpl = runLocal, runOnlineImpl = runOnline,
+  runLocalImpl = runLocal, runOnlineImpl = runOnline, newInvocationId = () => require('crypto').randomUUID(),
+  pingFetch = globalThis.fetch, newRid = () => require('crypto').randomUUID(),
 } = {}) {
   const log = { format: 'cr-pilot-all@1', started_at: new Date(now()).toISOString(), desk: o.desk, max_agents: o.maxAgents, dry_run: Boolean(o.dryRun), paused: null, polled: [], dispatches: [], needs_eric: [], error: null, exit: null };
-  const finish = (code) => {
+  // The heartbeat: at most two pings, never the URL in a line or the log.
+  const hb = o.dryRun ? { base: null, words: null } : heartbeatBase(env);
+  if (hb.words) out(hb.words);
+  const rid = hb.base ? newRid() : null;
+  if (hb.base) {
+    const r = await sendPing(pingFetch, `${hb.base}/start?rid=${encodeURIComponent(rid)}`);
+    log.heartbeat = { rid, start: r.sent ? 'sent' : r.reason, final: null };
+  }
+  const production = o.desk === 'online' && Boolean(o.unattended) && !o.dryRun;
+  let finished = false;
+  const finish = async (code) => {
     log.exit = code;
     log.finished_at = new Date(now()).toISOString();
+    for (const d of log.dispatches) d.health = rowHealth(d);
+    log.health_format = HEALTH_FORMAT;
+    log.health = runHealth(log);
+    out(`Health: ${log.health} (exit ${code}).`);
+    if (hb.base && !finished) {
+      const ping = heartbeatFinal(log.health);
+      const r = await sendPing(pingFetch, `${hb.base}/${ping}?rid=${encodeURIComponent(rid)}`);
+      log.heartbeat.final = ping;
+      log.heartbeat.final_sent = r.sent ? 'sent' : r.reason;
+      if (!r.sent) out(`The heartbeat's final ping was not delivered (${r.reason}); the run's result is unchanged.`);
+    }
+    finished = true;
     try {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
       fs.appendFileSync(logFile, `${JSON.stringify(log)}\n`);
@@ -893,6 +1041,10 @@ async function runAll(o, {
     return code;
   };
   if (!['local', 'online'].includes(o.desk)) { log.error = '--desk is local or online.'; out(`pilot-all: ${log.error}`); return finish(1); }
+  // Unattended (a scheduled host), the model is named on the command line,
+  // never left to whatever the host's Claude Code settings choose.
+  if (o.unattended && !o.model) { log.error = 'An unattended run names its model: --model=<id>. Nothing was claimed or dispatched.'; out(`pilot-all: ${log.error}`); return finish(1); }
+  if (o.unattended) log.unattended = true;
   const lock = takeLock(lockFile, { now: now(), pid });
   if (!lock.ok) {
     out(`Another run is in progress (pid ${lock.held.pid}, since ${lock.held.started_at}); nothing is dispatched.`);
@@ -902,9 +1054,19 @@ async function runAll(o, {
   if (lock.took_over) out(`A lock ${lock.took_over.unreadable ? 'that did not read' : `from pid ${lock.took_over.pid} since ${lock.took_over.started_at}`} was older than 3 hours; taken over.`);
   try {
     let tok = null;
+    let sight = null;
+    if (production) {
+      sight = { runner_id: runnerIdOf(env), invocation_id: newInvocationId(), token: workerToken || readWorkerToken(undefined, env) };
+      log.sighting = { runner_id: sight.runner_id, invocation_id: sight.invocation_id, last_polled_at: null };
+    }
     const poll = async () => {
       if (o.desk === 'local') return pollLocal(call);
-      if (!tok) tok = token || readPollToken();
+      if (sight) {
+        const q = await sightOnline(o, { fetchImpl, token: sight.token, env, runnerId: sight.runner_id, invocationId: sight.invocation_id });
+        if (q.sighting && q.sighting.last_polled_at) log.sighting.last_polled_at = q.sighting.last_polled_at;
+        return q;
+      }
+      if (!tok) tok = token || readPollToken(undefined, env);
       return pollOnline(o, { fetchImpl, token: tok, env });
     };
     const q = await poll();
@@ -1003,19 +1165,20 @@ async function main() {
   if (o.pilotAll) { process.exitCode = await runAll(o); return; }
   if (o.help || !o.project) {
     say('npm run pilot -- --project=<id> [--desk=local|online] [--dry-run] [--force-prosecution [--owner-words="…"]] [--model=<id>] [--timeout-min=60] [--connector=mcp__claude_ai_CryptoResearch]');
-    say('npm run pilot -- --pilot-all [--desk=local|online] [--max-agents=2] [--dry-run] [--timeout-min=60] [--desk-url=https://…]');
+    say('npm run pilot -- --pilot-all [--desk=local|online] [--max-agents=2] [--dry-run] [--timeout-min=60] [--desk-url=https://…] [--unattended --model=<id>]');
     say('npm run pilot -- --check-isolation [--model=<id>]   the session launch check only (no claim, no generation)');
     process.exitCode = o.help ? 0 : 2;
     return;
   }
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(o.project)) throw new Error(`"${o.project}" is not a project ID.`);
+  if (o.unattended && !o.model) throw new Error('An unattended run names its model: --model=<id>. Nothing was claimed or dispatched.');
   if (o.desk === 'online') { const r = await runOnline(o); if (r && r.stop === 'reconcile') process.exitCode = 3; return; }
   if (o.desk !== 'local') throw new Error('--desk is local or online.');
   await preflightOf(claude, o);
   runLocal(o);
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {
