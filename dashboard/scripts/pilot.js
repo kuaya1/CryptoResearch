@@ -847,21 +847,34 @@ const RECONCILE_WORDS = 'An earlier dispatch expired with no known outcome (ofte
 // code keeps its meaning (0 done or nothing to do, 3 needs Eric, 1 an error);
 // the class says what the 0 was. It comes from the row's stop, never from its
 // outcome word, so a refused save or a failed session is never success.
-//   ok         something was saved (a done dispatch)
-//   idle       nothing to do: paused, stopped by Eric, cap, session ceiling, dry run
+//   ok         an agent's answer was saved (a done dispatch that ran a session)
+//   idle       nothing to do: no work, the ticket waits at PM review, the desk
+//              gate closed with no session, paused, stopped by Eric, cap,
+//              session ceiling, dry run
 //   attention  nothing broke, but something is in the way: another runner
 //              holds the project or the lock, the one correction is used, the
 //              step changed under the claim, or the re-poll did not answer
 //   reconcile  an outcome is unknown: Eric reconciles it (exit 3)
 //   failure    a session, a prompt, a prepare or a save failed, or the run erred
+// A failed re-poll is a failed observation: it makes any row at least
+// attention, so an idle stop (paused, stopped) or a save never hides it
+// (audit F10, 2026-11-02). The label names what an idle or attention run was
+// (§6.1's idle-paused and idle-stopped; attention-overlap for the local lock
+// held by another run); the class alone picks the ping, and the exit code is
+// unchanged.
 const HEALTH_FORMAT = 'cr-pilot-health@1';
 const HEALTH_ORDER = Object.freeze(['idle', 'ok', 'attention', 'reconcile', 'failure']);
 const IDLE_STOPS = new Set(['cap', 'paused', 'stopped', 'session_ceiling', 'nothing']);
 const ATTENTION_STOPS = new Set(['claimed', 'correction_limit', 'changed']);
-function rowHealth(row) {
-  if (!row) return 'failure';
+const worstOf = (classes) => classes.reduce((w, c) => (HEALTH_ORDER.indexOf(c) > HEALTH_ORDER.indexOf(w) ? c : w), 'idle');
+const ranSession = (row) => (Array.isArray(row.sessions) && row.sessions.length > 0) || row.agents > 0;
+function stopHealth(row) {
   if (row.outcome === 'error' || row.error) return 'failure';
-  if (row.outcome === 'dry_run' || row.outcome === 'session_ceiling' || row.outcome === 'cap') return 'idle';
+  if (row.outcome === 'dry_run' || row.outcome === 'session_ceiling') return 'idle';
+  // The cap is met only at the top of a pass: after a session that saved (a
+  // session that did not save ends the dispatch with its own stop), or before
+  // any session. With --max-agents=1 every save ends this way (audit F10).
+  if (row.outcome === 'cap') return ranSession(row) ? 'ok' : 'idle';
   if (row.stop) {
     if (row.stop === 'reconcile') return 'reconcile';
     if (IDLE_STOPS.has(row.stop)) return 'idle';
@@ -870,10 +883,19 @@ function rowHealth(row) {
     // save's refusal code, or any answer this runner does not know.
     return 'failure';
   }
-  if (row.repoll_error) return 'attention';
-  return row.outcome === 'done' ? 'ok' : 'failure';
+  if (row.outcome !== 'done') return 'failure';
+  // Done with no session run (no work, PM review, a closed desk gate): idle.
+  return ranSession(row) ? 'ok' : 'idle';
 }
-const worstOf = (classes) => classes.reduce((w, c) => (HEALTH_ORDER.indexOf(c) > HEALTH_ORDER.indexOf(w) ? c : w), 'idle');
+function rowHealth(row) {
+  if (!row) return 'failure';
+  const c = stopHealth(row);
+  return row.repoll_error ? worstOf([c, 'attention']) : c;
+}
+const IDLE_LABELS = Object.freeze({ paused: 'idle-paused', stopped: 'idle-stopped' });
+function rowLabel(row, health = rowHealth(row)) {
+  return health === 'idle' && row && IDLE_LABELS[row.stop] ? IDLE_LABELS[row.stop] : health;
+}
 // The run's class: the worst of its rows and of the run's own state.
 function runHealth(log) {
   if (!log) return 'failure';
@@ -883,6 +905,15 @@ function runHealth(log) {
   if (Array.isArray(log.needs_eric) && log.needs_eric.length) own.push('reconcile');
   if (log.exit === 3) own.push('reconcile');
   return worstOf([...own, ...(log.dispatches || []).map((d) => d.health || rowHealth(d))]);
+}
+function runLabel(log, health = runHealth(log)) {
+  if (!log) return health;
+  if (health === 'attention' && log.skipped === 'locked') return 'attention-overlap';
+  if (health !== 'idle') return health;
+  const rows = log.dispatches || [];
+  if (log.paused === true || rows.some((d) => d.stop === 'paused')) return 'idle-paused';
+  if (rows.some((d) => d.stop === 'stopped')) return 'idle-stopped';
+  return 'idle';
 }
 // The heartbeat (blueprint 2026-11-02 §6.1, build plan row 7; optional, Q2):
 // when CR_HEALTHCHECK_URL holds a Healthchecks ping URL, a run sends at most
@@ -1020,10 +1051,11 @@ async function runAll(o, {
   const finish = async (code) => {
     log.exit = code;
     log.finished_at = new Date(now()).toISOString();
-    for (const d of log.dispatches) d.health = rowHealth(d);
+    for (const d of log.dispatches) { d.health = rowHealth(d); d.health_label = rowLabel(d, d.health); }
     log.health_format = HEALTH_FORMAT;
     log.health = runHealth(log);
-    out(`Health: ${log.health} (exit ${code}).`);
+    log.health_label = runLabel(log, log.health);
+    out(`Health: ${log.health_label} (exit ${code}).`);
     if (hb.base && !finished) {
       const ping = heartbeatFinal(log.health);
       const r = await sendPing(pingFetch, `${hb.base}/${ping}?rid=${encodeURIComponent(rid)}`);
@@ -1178,7 +1210,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

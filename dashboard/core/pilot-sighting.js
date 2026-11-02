@@ -13,11 +13,14 @@
 // cron and --max-agents=1 (Q2); a runner that declares a larger cap raises
 // it to max_agents × 95 + 15 min (§6.3: one claim from its claim to its
 // last complete reply takes up to about 95 min). A record that does not
-// read, does not hold its shape, or stands ahead of the desk's clock is
-// unknown, never fresh and never "never polled".
+// read, does not hold its shape, or stands ahead of the desk's clock by any
+// amount is unknown, never fresh and never "never polled" (audit F9,
+// 2026-11-02: a record a minute ahead used to read fresh).
 //
 // One file under .cr/ (runner state, not a research record), replaced
-// atomically inside the workspace lock; it never moves backward.
+// atomically inside the workspace lock; it never moves backward: a poll at
+// a desk clock behind the record keeps the record as it is, however far
+// ahead it stands, and the view says unknown until the clock passes it.
 
 const path = require('path');
 const { withLock } = require('./ops');
@@ -29,7 +32,6 @@ const STALE_MIN = 120;
 const PER_AGENT_MIN = 95;
 const MARGIN_MIN = 15;
 const MAX_AGENTS = 10;
-const SKEW_MS = 5 * 60000;
 const RUNNER_RE = /^[A-Za-z0-9 ._:@-]{1,80}$/;
 const INVOCATION_RE = /^[A-Za-z0-9-]{8,64}$/;
 
@@ -60,15 +62,16 @@ function readRecord(ws) {
 }
 
 // Called by the worker route after the snapshot is computed, with the
-// route's own clock. The record never moves backward; one that does not
-// read or stands ahead of the clock is replaced by this real sighting.
+// route's own clock. The record never moves backward: one ahead of the
+// clock is kept as it is; one that does not read is replaced by this real
+// sighting.
 function record(ws, body, { now = Date.now() } = {}) {
   const f = fieldsOf(body);
   if (!f.runner_id || !f.invocation_id || f.max_agents === null) return null;
   return withLock(ws, 'pilot sighting', () => {
     const cur = readRecord(ws);
     const ok = cur.rec ? wellFormed(cur.rec) : null;
-    if (ok && ok.at > now && ok.at - now <= SKEW_MS) return ok.rec;
+    if (ok && ok.at > now) return ok.rec;
     const rec = { format: FORMAT, last_polled_at: new Date(now).toISOString(), runner_id: f.runner_id, invocation_id: f.invocation_id, max_agents: f.max_agents };
     const abs = ws.abs(REL);
     mkdirp(path.dirname(abs));
@@ -76,6 +79,8 @@ function record(ws, body, { now = Date.now() } = {}) {
     return rec;
   });
 }
+
+const aheadWords = (ms) => (ms < 60000 ? `${Math.ceil(ms / 1000)} s` : `${Math.floor(ms / 60000)} min`);
 
 // What the desk can say about the production poll, read only.
 function view(ws, { now = Date.now() } = {}) {
@@ -86,10 +91,10 @@ function view(ws, { now = Date.now() } = {}) {
   const ok = wellFormed(cur.rec);
   if (!ok) return { ...base, state: 'unknown', words: 'The production poll\'s record does not hold its shape; whether the runner is polling is unknown.' };
   const facts = { last_polled_at: ok.rec.last_polled_at, runner_id: ok.rec.runner_id, invocation_id: ok.rec.invocation_id, max_agents: ok.rec.max_agents, stale_after_min: staleAfterMin(ok.rec.max_agents) };
-  if (ok.at - now > SKEW_MS) return { ...base, ...facts, state: 'unknown', words: `The production poll's record (${ok.rec.last_polled_at}) is ahead of the desk's clock; whether the runner is polling is unknown.` };
-  const age = Math.max(0, Math.floor((now - ok.at) / 60000));
+  if (ok.at > now) return { ...base, ...facts, state: 'unknown', ahead_ms: ok.at - now, words: `The production poll's record (${ok.rec.last_polled_at}) is ahead of the desk's clock by ${aheadWords(ok.at - now)}; whether the runner is polling is unknown. A later poll does not move it back.` };
+  const age = Math.floor((now - ok.at) / 60000);
   if (age > facts.stale_after_min) return { ...base, ...facts, age_min: age, state: 'stale', words: `STALE: the production poll is overdue. Last seen ${ok.rec.last_polled_at} (${age} min ago; stale after ${facts.stale_after_min} min). This is not proof that no grade exists or that no session is running.` };
   return { ...base, ...facts, age_min: age, state: 'fresh', words: `The production poll last reached the desk ${age} min ago (${ok.rec.last_polled_at}).` };
 }
 
-module.exports = { FORMAT, REL, STALE_MIN, PER_AGENT_MIN, MARGIN_MIN, SKEW_MS, staleAfterMin, fieldsOf, record, view };
+module.exports = { FORMAT, REL, STALE_MIN, PER_AGENT_MIN, MARGIN_MIN, staleAfterMin, fieldsOf, record, view };

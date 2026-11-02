@@ -54,10 +54,11 @@ test('no work at all is idle, exit 0', async (t) => {
   assert.equal(log.health, 'idle');
 });
 
-test('a closed desk gate saved with no session is a done dispatch: ok', async (t) => {
+test('a closed desk gate saved with no session is idle (§6.1), never ok', async (t) => {
   const { code, log } = await runWith(t, { sessions: [], stop: null, claims: [] }, { poll: { steps: [{ project_id: 'a-fictional', step: 'gate_closed', claim: null }] } });
   assert.equal(code, 0);
-  assert.equal(log.dispatches[0].health, 'ok');
+  assert.equal(log.dispatches[0].health, 'idle');
+  assert.equal(log.health, 'idle');
 });
 
 test('automation paused is idle, exit 0', async (t) => {
@@ -185,4 +186,10 @@ test('an answer the runner does not know is failure, never success', () => {
   assert.equal(P.rowHealth({ outcome: 'FICTIONAL' }), 'failure');
   assert.equal(P.rowHealth(null), 'failure');
   assert.equal(P.rowHealth({ outcome: 'done', repoll_error: 'FICTIONAL' }), 'attention');
+  // A failed re-poll is never hidden by an idle stop (audit F10).
+  for (const stop of ['paused', 'stopped', 'cap', 'session_ceiling']) assert.equal(P.rowHealth({ outcome: 'not_dispatched', stop, repoll_error: 'FICTIONAL' }), 'attention', stop);
+  assert.equal(P.rowHealth({ outcome: 'done', sessions: [{ role: 'researcher' }], repoll_error: 'FICTIONAL' }), 'attention');
+  // A worse class stays worse.
+  assert.equal(P.rowHealth({ outcome: 'not_dispatched', stop: 'refused', repoll_error: 'FICTIONAL' }), 'failure');
+  assert.equal(P.rowHealth({ outcome: 'not_dispatched', stop: 'reconcile', repoll_error: 'FICTIONAL' }), 'reconcile');
 });
