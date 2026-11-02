@@ -1868,11 +1868,13 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     const lines = cur.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
     // A replay names whether the decision is still the one in force, so its
     // consequences are completed once, never for a decision taken back (A06).
+    // It also says the basis as recorded; nothing is built for it now.
     const replay = (d) => {
       const mine = lines.filter((l) => l.receipt_id === rid);
-      if (d.action === 'undo') return { status: 'unchanged', decision: d, live: mine[mine.length - 1] === d, undone: lines.find((l) => l.decision_id === d.undoes) || null };
+      const basis = require('./decision-basis').stateOf(ws, pid, d);
+      if (d.action === 'undo') return { status: 'unchanged', decision: d, live: mine[mine.length - 1] === d, undone: lines.find((l) => l.decision_id === d.undoes) || null, basis };
       const now = decisionFor(lines, rid);
-      return { status: 'unchanged', decision: d, live: Boolean(now && now.decision_id === d.decision_id), undone: null };
+      return { status: 'unchanged', decision: d, live: Boolean(now && now.decision_id === d.decision_id), undone: null, basis };
     };
     const prior = reqId ? lines.find((l) => l.request_id === reqId) : null;
     if (prior) return replay(prior);
@@ -1975,8 +1977,21 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     // operation: the line and its basis commit together or not at all. The
     // line stays cr.ticket-decision.v1 (the Paper Book reads only that).
     const DB = require('./decision-basis');
-    op.writeJson(DB.basisRel(pid, full.decision_id), DB.buildBasis(ws, { decision: full, receipt: r, receiptText: fs.readFileSync(ws.abs(receiptRel(pid, rid))), decisions: lines }), { mode: 'create' });
-    return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null };
+    // Eric's stop actions (his veto and Undo, which latch the project, and his
+    // pass on a project he does not hold, which archives it) are never held
+    // back by a basis that cannot be built (audit F1, 2026-11-02): the failure
+    // is recorded in the basis's place as unavailable, in this same operation,
+    // and read back as such. A grant, any mandate line, a watch, a trim, a
+    // re-open and a pass on a held project still commit only with their basis.
+    let basis;
+    try {
+      basis = DB.buildBasis(ws, { decision: full, receipt: r, receiptText: fs.readFileSync(ws.abs(receiptRel(pid, rid))), decisions: lines });
+    } catch (err) {
+      if (mandateLine || !DB.stopsProject(full)) throw err;
+      basis = DB.unavailableBasis({ decision: full, error: err });
+    }
+    op.writeJson(DB.basisRel(pid, full.decision_id), basis, { mode: 'create' });
+    return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null, basis: DB.describe(basis, full) };
   });
   const res = out.result || {};
   if (res.live) Object.assign(res, effectsOf(ws, pid, rid, res.decision, res.undone));
