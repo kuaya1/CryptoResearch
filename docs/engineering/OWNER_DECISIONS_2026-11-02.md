@@ -2,15 +2,15 @@
 
 A proposal for Eric to answer, edit or close. Nothing here is an approval, and no code reads it. Each answer takes effect only when Eric records it, by merging the change that carries it or by setting the value himself.
 
-Basis: `main` at `fb529e5`; the implementation audit of 2026-11-02 (§8, §9); the combined blueprint's §11, which is a proposal (PR #134, closed unmerged at `b462db6`).
+Basis: `main` at `8b79e3a`; the implementation audit of 2026-11-02 (§8, §9); the combined blueprint's §11, which is a proposal (PR #134, closed unmerged at `b462db6`).
 
 ## Status now
 
 | | State |
 |---|---|
 | Rows T0, 1–8, 10–12 | Merged. Deployment not verified: no deployed SHA has been read back. |
-| Audit fixes F1, F2, F4, F5, F6 | Merged (#146, #147, #148, #149, #150). |
-| Audit fixes F3, F7–F11 | Open pull requests, one each. |
+| Audit fixes F1–F7 | Merged: F1 #146, F2 #147, F3 #151 (`7d98b5b`), F4 #148, F5 #149, F6 #150, F7 #152 (`8b79e3a`). |
+| Audit fixes F8–F11 | Open pull requests, one each (#153, #154, #155, #157). |
 | Row 9 (protected stamp), Ops-1, B0–B3 | Proposed. No operating record exists. |
 
 Canary readiness: **not ready.** Nothing merged is verified as deployed, no unattended run has an operating record, and B0 has not started.
@@ -59,7 +59,7 @@ Canary readiness: **not ready.** Nothing merged is verified as deployed, no unat
 
 - **Recommendation.** Hold B2 until all three hold:
   - row 8 (the decision basis) is merged and deployed;
-  - F1, F3 and F6 are merged and deployed (F1 and F6 are merged; F3 is open);
+  - F1, F3 and F6 are merged and deployed (all three are merged; none is verified as deployed);
   - the deployed SHA is read back by Eric.
 - B0 and B1 can proceed without it.
 
