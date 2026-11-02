@@ -1448,6 +1448,15 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // The seven-day Track 2 digest (tickets.digest, item 34): read only.
   route('GET', '/api/tickets/digest', () => coherent(() => tickets.digest(ws, { days: 7 })));
   route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
+  // The attribution view (core/grade-outcome-view.js, blueprint 2026-11-02
+  // row 12): each decision that granted risk beside what the Trader Sim
+  // recorded, with every denominator and no rate. Read only.
+  route('GET', '/api/research/attribution', (m, req, res, body, url) => {
+    const from = url.searchParams.get('from') || null;
+    const to = url.searchParams.get('to') || null;
+    for (const v of [from, to]) if (v !== null && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new HttpError(400, 'from and to are days (YYYY-MM-DD).');
+    return coherent(() => require('./core/grade-outcome-view').view(ws, { from, to }));
+  });
   // Grok Scout's list (core/scout.js): read only; the sweep's own route is
   // the front door's.
   route('GET', '/api/scout', () => coherent(() => require('./core/scout').view(ws)));
