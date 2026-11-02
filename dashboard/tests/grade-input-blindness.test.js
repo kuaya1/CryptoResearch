@@ -9,6 +9,13 @@
 //
 // This proves those code paths only. It cannot prove a model never meets an
 // outcome on the open web. FICTIONAL temporary workspaces only.
+//
+// The desk here is mandateDesk's, whose grader is a stand-in (audit F8,
+// 2026-11-02), and its mandate line is decided with the grade the test hands
+// it: neither proves the real rubric or the mandate's sweep blind. Those, the
+// Claude API request, the connector's handoffs and automatic admission are
+// proved through their real paths in input-blindness-real.test.js and
+// lead-admission.test.js.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -113,8 +120,8 @@ test('no outcome, evaluation or other model\'s opinion reaches a research or Pro
   const r2 = T.saveTicket(ws, { project_id: pid, ticket_id: tk2.ticket_id, text: answer(handed, {}, require('./mandate-fixture').CONSISTENT) }).receipt;
   clean('the gate and admission the desk computed', JSON.stringify(r2.desk));
   clean('the researcher grade the gate read', JSON.stringify(r2.researcher));
-  const { gradeAssessment } = require('../core/rubrics');
-  clean('the rubric\'s grade', JSON.stringify(gradeAssessment(ws, reports.find((r) => r.report_id === r2.researcher.report_id).assessment)));
+  // The rubric's own result is not checked here: on this desk it is the
+  // stand-in's (input-blindness-real.test.js checks the real rubric).
   // The mandate reads the receipt's own grade and the desk's caps.
   T.decide(ws, pid, { receipt_id: r1.receipt_id, action: 'undo', by: 'eric' });
   T.setAutonomy(ws, pid, { action: 'rearm', request_id: 'req_blind_rearm01', by: 'eric' });

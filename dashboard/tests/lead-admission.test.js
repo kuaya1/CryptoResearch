@@ -956,3 +956,63 @@ test('settings: off by default, bounded, armed only by its own write, revoked by
   assert.ok(A.leftOpen(A.armPatch({ admissionDays: 2 }), null).some((l) => /Automatic admission of scout leads is on until/.test(l)));
   assert.ok(A.leftOpen(A.armPatch({}), null).some((l) => /Automatic admission of scout leads is off/.test(l)));
 });
+
+// Audit F8 (2026-11-02): automatic admission's real path, nothing of it stood
+// in, reads no outcome, decision or other model's opinion, and what it hands
+// to research carries none of them, nor the scout's own words. The canaries
+// sit on another project of the desk; the read spy watches the whole sweep
+// (plan, the locked reservation and its effects, lead-admission.js sweep).
+test('automatic admission reads no outcome, decision or opinion, and its research run carries none of them nor the scout\'s words', async (t) => {
+  const s = desk(t);
+  noHoldings(t);
+  const NOTE = 'CANARY-DECISION-NOTE-a41f';
+  const OTHER_MODEL = 'CANARY-OTHER-MODEL-77e0';
+  const OUTCOME_NOTE = 'CANARY-OUTCOME-NOTE-3c9d';
+  const made = projects.addProject(s.ws, { name: 'Canary Holdings (FICTIONAL)', symbol: 'CNRY', official_website: 'https://canary-fictional.example/', coingecko_id: 'canary-fictional', assets: [{ chain: 'example-chain', contract_address: 'FICTIONAL-CANARY-1' }], evidence: [{ url: 'https://canary-fictional.example/docs', note: 'fictional' }] });
+  const cp = made.project_id;
+  const put = (rel, text) => { fs.mkdirSync(path.dirname(s.ws.abs(rel)), { recursive: true }); fs.writeFileSync(s.ws.abs(rel), text); };
+  put(`projects/${cp}/tickets/decisions.jsonl`, `${JSON.stringify({ schema_version: 'cr.ticket-decision.v1', decision_id: 'td_20270115T150000Z_canry', project_id: cp, receipt_id: 'tr_20270115T140000Z_canry', action: 'veto', note: NOTE, decided_by: 'eric', decided_at: iso(Date.now() - HR) })}\n`);
+  put(`projects/${cp}/forensics/outcome-notes.jsonl`, `${JSON.stringify({ at: iso(Date.now()), note: OUTCOME_NOTE })}\n`);
+  put(`projects/${cp}/reports/2027-01-14_chatgpt_canary0/report.json`, JSON.stringify({ assessment: { summary: OTHER_MODEL, verdict_reason: OTHER_MODEL } }));
+  const canaries = [NOTE, OTHER_MODEL, OUTCOME_NOTE];
+  const clean = (what, text) => { for (const c of canaries) assert.ok(!String(text).includes(c), `${what} carries ${c}`); };
+  for (const c of canaries) assert.throws(() => clean('control', c), 'the check catches a canary');
+
+  await xmplLead(s.ws);
+  arm(s.ws);
+  const names = ['readFileSync', 'openSync', 'readdirSync', 'statSync', 'existsSync'];
+  const orig = Object.fromEntries(names.map((n) => [n, fs[n]]));
+  const reads = [];
+  const spy = (fn) => {
+    for (const n of names) fs[n] = function read(p, ...a) { if (typeof p === 'string') reads.push(path.relative(s.root, p).split(path.sep).join('/')); return orig[n].call(fs, p, ...a); };
+    try { return fn(); } finally { for (const n of names) fs[n] = orig[n]; }
+  };
+  const out = spy(() => LA.sweep(s.ws));
+  assert.equal(out.status, 'reserved', JSON.stringify(out.plan || out).slice(0, 400));
+  const a = L.listAdmissions(s.ws).find((x) => x.admission_id === out.admission_id);
+  assert.equal(a.state, 'complete', `${a.words} ${JSON.stringify(a.errors)}`);
+  // Allowed beside the leads: the other project's identity (project.json, for
+  // duplicates), its monitoring opt-in (forensics/profile.json, which the
+  // exit-quote budget counts), the candle-source bindings (paper/candles) and
+  // Eric's own holdings ledger (portfolio/, which says whether he holds it),
+  // none of them an outcome of the desk's decisions or a model's opinion.
+  const OUTCOME = new RegExp(`^projects/${cp}/(tickets|reports|research|journal)|^projects/${cp}/forensics/(?!profile\.json$)|^paper/(?!candles/)`);
+  assert.ok(reads.some((r) => r.startsWith('scout/leads/')), `control: the spy sees the sweep read its leads (${reads.length} reads)`);
+  assert.ok(reads.includes(`projects/${cp}/forensics/profile.json`) && !OUTCOME.test(`projects/${cp}/forensics/profile.json`) && OUTCOME.test(`projects/${cp}/forensics/outcome-notes.jsonl`), 'control: the allowance is exactly the opt-in file');
+  assert.deepEqual(reads.filter((r) => OUTCOME.test(r)), [], 'admission reads no outcome, decision, book or report');
+  reads.length = 0;
+  spy(() => fs.readFileSync(s.ws.abs(`projects/${cp}/tickets/decisions.jsonl`)));
+  assert.ok(reads.some((r) => OUTCOME.test(r)), 'control: an outcome read is caught');
+
+  // What admission handed on: its record, the new project's frozen research
+  // prompt and packet. The scout's words stay on the lead.
+  clean('the admission record', JSON.stringify(a));
+  const run = research.loadRun(s.ws, a.project_id, a.run_id);
+  const dir = path.dirname(s.ws.abs(run.prompt.path));
+  const frozen = fs.readdirSync(dir).filter((f) => /prompt|packet/i.test(f)).map((f) => fs.readFileSync(path.join(dir, f), 'utf8'));
+  assert.ok(frozen.length >= 2, 'the run froze its prompt and packet');
+  for (const text of frozen) {
+    clean('the admitted project\'s research prompt and packet', text);
+    assert.ok(!text.includes(SIGNAL), 'the scout\'s words never enter a research prompt');
+  }
+});

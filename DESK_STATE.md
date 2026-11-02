@@ -326,6 +326,21 @@ Every value was read back from the chain on 2026-10-30. Rows and ceilings alread
 - **In flight.** A claim still `claimed` or `preparing` is let go as `autonomy_stopped` and no session starts. A session already `dispatched` runs to its end, but its answer is not saved: the claim is let go as `autonomy_stopped`, never `saved`, and the session still counts against the day. The worker asks the gate again inside the save's own locked operation, before anything is written (audit F2; `pilot-claims.js` `stopGuard`, `tests/stop-save-atomic.test.js`). A stop that lands at any point before the commit leaves no report or receipt, no completed job and no grant. A copy the import already put in the inbox is set aside: kept, never imported. The desk-wide pause does not refuse the save. A dispatch whose outcome is unknown stays `reconcile` for Eric.
 - **The pause is unchanged.** It stops new claims, prepares and binds; work already dispatched may still settle.
 - **A missing basis never holds a stop back** (audit F1, 2026-11-02; `tickets.decide`, `decision-basis.js` `unavailableBasis`, `tests/decision-basis-stop.test.js`). If the decision basis cannot be built (a report that does not load, a rubric that does not read, anything else it calls), Eric's veto or Undo is still recorded and stops the project, and so is his pass on a project he does not hold, which archives it (a pass on a held project stays watched, stops nothing and still needs its basis). In the basis's place goes `cr.decision-basis-unavailable.v1`: the decision, the failure and nothing else, written in the same operation and create-only. `tickets basis` reads it as `unavailable`, never `decision_time` or `reconstructed`, and it is never rebuilt. The decision's answer and any replay say `basis.state` (`frozen`, `unavailable`, `integrity` or `none`): how the basis was recorded, never whether the decision is still in force (the replay's `live` says that). Every reader, the view, the replay and the decision's answer, holds the record to one identity check (`identityProblems`: schema, decision, project, receipt, time, action, and for the unavailable record its state and failure): one that does not match is `INTEGRITY`, never `unavailable` or a basis. Approve, halve, a held pass, watch, trim, re-open and every mandate line still commit only with their basis.
+- **Input blindness is proved on the real paths** (audit F8, 2026-11-02; `tests/input-blindness-real.test.js`, `tests/lead-admission.test.js`). With outcomes and opinions planted (Eric's decision note, both paper books filled, a forensic outcome note, ChatGPT's report in its own words and grade), and no function under proof replaced, the tests show:
+  - **The rubric** (`rubrics.gradeAssessment`) gives the same grade and reads only its own rubric files.
+  - **The paper mandate's real sweep** grants the same tier and size with or without that history, and moves with Claude's own grade.
+  - **What reaches a model carries no canary:** the Claude API request body the research runner sends, the connector's `pending_research`, `get_research` and `pending_tickets`, and the Prosecutor's prompt as the pilot worker takes it.
+  - **Automatic admission** reads no other project's decisions, reports, research or outcome notes, and no paper book but the candle-source bindings. It does read that project's identity, its monitoring opt-in and Eric's holdings ledger. Its run's prompt and packet carry no canary and none of the scout's words.
+
+  Each proof has a control that shows it can fail (a read spy that catches an outcome read, a desk whose own grade moves the answer, a canary check that catches a canary). `tickets.mandateContractEvidence`, the live contract read, is the one seam stood in.
+
+  Not proved by these tests:
+  - the ChatGPT and Gemini API requests;
+  - the ChatGPT ticket challenge, which freezes the ticket by design;
+  - the forensic prompts;
+  - the scout's and the leads' Grok prompts;
+  - copying a prompt from the dashboard or CLI, and the Cowork request queue;
+  - anything a model meets on the open web.
 - **Un-stopping** is only Eric's rearm (`{"action":"rearm"}`, `--rearm`), one logged line with who, when and what it clears. Resuming, re-enrolling in the pilot or re-arming the mandate never clears a stop.
 
 ## Automatic admission of scout leads (`cr-lead-admission@1`, 2026-10-31)
