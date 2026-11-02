@@ -279,6 +279,16 @@ node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the 
 - **Needs Eric.** An expired dispatch with no known outcome (`reconcile`) is listed for Eric and the run exits 3. It is never released by the runner. Online, Eric checks the project on the desk, then releases it signed in: `POST /api/projects/<id>/pilot-claim/release` with `{"reconciled":true,"attempt_id":"pa_…"}`, naming the attempt he checked. The release compares it with the current claim inside its own lock: another attempt is 409 `CHANGED`, naming both, with nothing written, so a stale click about an attempt already settled never releases a newer one; without an attempt it is 400. Desk controls posts the attempt it shows and reads back that same attempt as released (audit F4, 2026-11-02).
 - **The log.** One JSON line per run in `%USERPROFILE%\.cryptoresearch\pilot-all.jsonl`.
 - **Exit codes.** 0 done or nothing to do; 3 needs Eric; 1 an error.
+- **Health** (`cr-pilot-health@1`, blueprint §6.1; `health` and `health_label` on each row and on the run, `Health: <label> (exit n)`). The class says what an exit 0 was, and the optional heartbeat (`CR_HEALTHCHECK_URL`) pings by it: ok and idle `/0`, attention `/fail`, failure `/1`, reconcile `/3`. The class never changes the exit code.
+  - **ok:** an agent's answer was saved. That includes a save after which the one-agent cap ended the loop, the usual end at `--max-agents=1`.
+  - **idle:** no work; the ticket waits at PM review; a closed desk gate with no session; the session ceiling or cap before any session; a dry run.
+    - Paused is labeled `idle-paused`, and a project Eric stopped `idle-stopped`.
+  - **attention:** another runner holds the claim, the one correction is used, the step changed under the claim, or a re-poll did not answer.
+    - A failed re-poll makes any row at least attention, so an idle stop or a save never hides it.
+    - The local lock held by another run, normal overlap included, is attention, labeled `attention-overlap`. It sends its own `/start` and `/fail`. Whether a normal overlap should alarm is Eric's open decision.
+  - **reconcile:** an outcome is unknown.
+  - **failure:** a session, prompt, prepare or save failed, an unknown answer came back, or the run erred.
+  - Audit F10, 2026-11-02; `tests/pilot-health-flow.test.js`.
 
 **The poll route** (`core/pilot-poll.js`, answered in `frontdoor.js` before the sign-in and the session token):
 

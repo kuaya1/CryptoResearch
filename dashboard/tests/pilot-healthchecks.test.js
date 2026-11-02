@@ -80,7 +80,7 @@ test('a run with nothing to do sends /start then /0, both with the same rid, as 
 
 test('the final ping follows the run\'s class, and the exit code stays as it was', async (t) => {
   const cases = [
-    { name: 'ok', steps: [['olas', 'research']], stop: null, final: '0', code: 0 },
+    { name: 'idle (a dispatch that ran no session; a save is ok, also /0: pilot-health-flow.test.js)', steps: [['olas', 'research']], stop: null, final: '0', code: 0 },
     { name: 'idle (paused)', paused: true, final: '0', code: 0 },
     { name: 'attention (claimed)', steps: [['olas', 'research']], stop: 'claimed', final: 'fail', code: 0 },
     { name: 'failure (refused)', steps: [['olas', 'research']], stop: 'refused', final: '1', code: 0 },
