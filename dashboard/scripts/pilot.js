@@ -884,6 +884,38 @@ function runHealth(log) {
   if (log.exit === 3) own.push('reconcile');
   return worstOf([...own, ...(log.dispatches || []).map((d) => d.health || rowHealth(d))]);
 }
+// The heartbeat (blueprint 2026-11-02 §6.1, build plan row 7; optional, Q2):
+// when CR_HEALTHCHECK_URL holds a Healthchecks ping URL, a run sends at most
+// two bare GETs, /start?rid= and one final ping by the run's health class
+// (ok and idle /0, attention /fail, failure /1, reconcile /3; Healthchecks
+// reads 0 as success and every other value as failure), each with a 5 s
+// timeout. A ping that fails is ignored: it never changes the exit code,
+// releases a claim or touches authority. The URL is a secret: never printed,
+// logged or given to a session (no CR_* name is on ENV_KEEP). A dry run
+// sends nothing.
+const HEARTBEAT_ENV = 'CR_HEALTHCHECK_URL';
+const HEARTBEAT_TIMEOUT_MS = 5000;
+const HEARTBEAT_FINAL = Object.freeze({ ok: '0', idle: '0', attention: 'fail', failure: '1', reconcile: '3' });
+function heartbeatBase(env = process.env) {
+  const v = env && typeof env[HEARTBEAT_ENV] === 'string' ? env[HEARTBEAT_ENV].trim() : '';
+  if (!v) return { base: null, words: null };
+  let u = null;
+  try { u = new URL(v); } catch (_) { u = null; }
+  if (!u || u.protocol !== 'https:' || u.username || u.password || u.search || u.hash || u.pathname.length < 2) {
+    return { base: null, words: `${HEARTBEAT_ENV} is set but is not an https ping URL; no heartbeat is sent.` };
+  }
+  return { base: `${u.origin}${u.pathname.replace(/\/+$/, '')}`, words: null };
+}
+const heartbeatFinal = (health) => HEARTBEAT_FINAL[health] || '1';
+async function sendPing(fetchImpl, url, timeoutMs = HEARTBEAT_TIMEOUT_MS) {
+  try {
+    const res = await fetchImpl(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
+    return { sent: true, status: res && typeof res.status === 'number' ? res.status : null };
+  } catch (err) {
+    return { sent: false, status: null, reason: err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : 'unreachable' };
+  }
+}
+
 const homeDir = () => path.join(os.homedir(), '.cryptoresearch');
 const lockPath = () => path.join(os.tmpdir(), 'cr-pilot', 'pilot-all.lock');
 const pilotLogPath = () => path.join(homeDir(), 'pilot-all.jsonl');
@@ -951,15 +983,33 @@ async function runAll(o, {
   call = cli, agent = claude, fetchImpl = globalThis.fetch, token = null, workerToken = null, env = process.env,
   lockFile = lockPath(), logFile = pilotLogPath(), out = say, now = () => Date.now(), pid = process.pid,
   runLocalImpl = runLocal, runOnlineImpl = runOnline,
+  pingFetch = globalThis.fetch, newRid = () => require('crypto').randomUUID(),
 } = {}) {
   const log = { format: 'cr-pilot-all@1', started_at: new Date(now()).toISOString(), desk: o.desk, max_agents: o.maxAgents, dry_run: Boolean(o.dryRun), paused: null, polled: [], dispatches: [], needs_eric: [], error: null, exit: null };
-  const finish = (code) => {
+  // The heartbeat: at most two pings, never the URL in a line or the log.
+  const hb = o.dryRun ? { base: null, words: null } : heartbeatBase(env);
+  if (hb.words) out(hb.words);
+  const rid = hb.base ? newRid() : null;
+  if (hb.base) {
+    const r = await sendPing(pingFetch, `${hb.base}/start?rid=${encodeURIComponent(rid)}`);
+    log.heartbeat = { rid, start: r.sent ? 'sent' : r.reason, final: null };
+  }
+  let finished = false;
+  const finish = async (code) => {
     log.exit = code;
     log.finished_at = new Date(now()).toISOString();
     for (const d of log.dispatches) d.health = rowHealth(d);
     log.health_format = HEALTH_FORMAT;
     log.health = runHealth(log);
     out(`Health: ${log.health} (exit ${code}).`);
+    if (hb.base && !finished) {
+      const ping = heartbeatFinal(log.health);
+      const r = await sendPing(pingFetch, `${hb.base}/${ping}?rid=${encodeURIComponent(rid)}`);
+      log.heartbeat.final = ping;
+      log.heartbeat.final_sent = r.sent ? 'sent' : r.reason;
+      if (!r.sent) out(`The heartbeat's final ping was not delivered (${r.reason}); the run's result is unchanged.`);
+    }
+    finished = true;
     try {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
       fs.appendFileSync(logFile, `${JSON.stringify(log)}\n`);
@@ -1096,7 +1146,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {
