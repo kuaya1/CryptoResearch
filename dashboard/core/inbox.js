@@ -260,7 +260,7 @@ function ingestLocked(ws, provider, filename, opts = {}) {
   const {
     projectHint = null, force = false, allowProviderMismatch = false,
     runId = null, channel = null, attested = null, promptSha256 = null, evidenceSha256 = null,
-    runCheck = null, revision = null,
+    runCheck = null, revision = null, guard = null,
   } = opts;
   const rel = `inbox/${provider}/${filename}`;
   const abs = ws.abs(rel);
@@ -457,6 +457,8 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     raw_json: built ? built.raw : null,
   };
   const out = runOp(ws, { type: 'ingest_report', summary: `Import ${PROVIDER_LABELS[provider]} report for ${projectId}` }, (op) => {
+    // The pilot worker's stop check, under this operation's lock (audit F2).
+    if (guard) guard();
     op.write(`${dir}/${originalName}`, bytes, { mode: 'create' });
     op.writeJson(`${dir}/meta.json`, meta, { mode: 'create' });
     op.writeJson(`${dir}/report.json`, record, { mode: 'create' });
@@ -554,13 +556,18 @@ function saveToInbox(ws, provider, { content, filename = null, projectId = null,
 }
 
 function importContent(ws, provider, opts) {
+  // A caller's guard (the pilot worker's stop check, audit F2) is asked
+  // before the inbox copy too, so a stop already in place writes nothing.
+  if (opts && opts.guard) opts.guard();
   const saved = saveToInbox(ws, provider, opts);
   if (saved.replayed && !exists(ws.abs(saved.rel))) {
     // The earlier attempt already imported (or set aside) this text.
     const st = readJson(ws.abs(STATE_REL), emptyState()).files[stateKey(provider, saved.filename)] || {};
     return { saved, result: { status: st.status === 'ingested' ? 'duplicate' : st.status || 'missing', key: stateKey(provider, saved.filename), project_id: st.project_id || null, report_id: st.report_id || null, message: st.status === 'ingested' ? `Already imported as ${st.project_id}/${st.report_id}.` : st.error || 'The saved text is no longer in the inbox.' } };
   }
-  const result = ingestFile(ws, provider, saved.filename, {
+  let result;
+  try {
+    result = ingestFile(ws, provider, saved.filename, {
     projectHint: opts.projectId || null,
     force: true,
     runId: opts.runId || null,
@@ -570,7 +577,14 @@ function importContent(ws, provider, opts) {
     evidenceSha256: opts.evidenceSha256 || null,
     runCheck: opts.runCheck || null,
     revision: opts.revision || null,
-  });
+    guard: opts.guard || null,
+    });
+  } catch (err) {
+    // The guard refused the report: the caller is told which inbox copy it
+    // left, so it can set it aside rather than leave it to be imported.
+    if (err && err.details && err.details.stop_guard) err.details.inbox_key = stateKey(provider, saved.filename);
+    throw err;
+  }
   return { saved, result };
 }
 
