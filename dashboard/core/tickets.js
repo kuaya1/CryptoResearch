@@ -90,6 +90,12 @@ const MIN_TEXT = 600;
 const MAX_TEXT = 400 * 1024;
 const MAX_DRAFT = 400 * 1024;
 const AS_OF_SLACK_MS = 10 * 60000;
+// A Prosecutor's as_of ahead of the save by up to 30 minutes is the model's
+// guess at its own clock, not a later fact: it is saved, recorded as the time
+// of saving, and the receipt keeps what was written (as_of_clamped). Further
+// ahead is refused. (2026-11-02: UNI's ticket wrote 11:52Z and was saved
+// about 19 minutes before that.)
+const AS_OF_AHEAD_MS = 30 * 60000;
 const OPEN = new Set(['waiting', 'running']);
 const HOUR = 3600000;
 
@@ -1413,7 +1419,7 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
   }
   const basis = frozenBasis(ticket, packet);
   const asOf = c.as_of ? Date.parse(c.as_of) : NaN;
-  if (Number.isFinite(asOf) && asOf > Date.now() + AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is after the time of saving.`);
+  if (Number.isFinite(asOf) && asOf > Date.now() + AS_OF_AHEAD_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is after the time of saving by more than ${AS_OF_AHEAD_MS / 60000} minutes.`);
   if (Number.isFinite(asOf) && asOf < Date.parse(ticket.created_at) - AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is before the ticket was opened (${ticket.created_at}).`);
   const exits = basis.exits;
   const at500 = exits.find((x) => x.size_usd === ticket.sizing.exit_size_usd) || null;
@@ -1447,6 +1453,7 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
       project_id: pid,
       saved_at: savedAt,
       as_of: Number.isFinite(asOf) ? iso(Math.min(asOf, now)) : savedAt,
+      ...(Number.isFinite(asOf) && asOf > now ? { as_of_clamped: { written: c.as_of, recorded: savedAt } } : {}),
       model: { provider: 'claude', role: 'prosecutor', model_version: c.model_version, channel: channel || ws.actor || null, saved_by: ws.actor || null },
       versions: ticket.versions,
       prompt_sha256: ticket.prompt.sha256,
@@ -1501,6 +1508,7 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
   if (out.result && out.result.replay) return { status: 'unchanged', receipt_id: out.result.replay.receipt_id, receipt: out.result.replay, verified: true, message: `This exact text is already saved as ${out.result.replay.receipt_id}.` };
   const rid = receipt.receipt_id;
   const capped = g.capped ? ` The desk capped ${g.capped.from} to ${g.proposal_type}: ${g.capped.reason}` : '';
+  const clamped = receipt.as_of_clamped ? ` Its as_of (${receipt.as_of_clamped.written}) was after the save; the receipt records the time of saving and keeps what was written.` : '';
   return {
     status: out.verified ? 'saved' : 'unverified',
     receipt_id: rid,
@@ -1508,7 +1516,7 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
     verified: out.verified,
     files: out.files,
     message: out.verified
-      ? `Saved ticket ${rid} for ${project.name}: ${g.proposal_type}, suggested risk ${usd(g.suggested_risk_usd)}. Waiting for Eric's PM review.${capped}${rev ? ` A revision of ${rev.of}; the original is unchanged.` : ''}${norm.errors.length ? ` ${norm.errors.length} format note${norm.errors.length === 1 ? '' : 's'} kept with it.` : ''}`
+      ? `Saved ticket ${rid} for ${project.name}: ${g.proposal_type}, suggested risk ${usd(g.suggested_risk_usd)}. Waiting for Eric's PM review.${capped}${clamped}${rev ? ` A revision of ${rev.of}; the original is unchanged.` : ''}${norm.errors.length ? ` ${norm.errors.length} format note${norm.errors.length === 1 ? '' : 's'} kept with it.` : ''}`
       : `The desk wrote ${rid} but could not confirm it read back as written. Save the same text again; if it landed, nothing changes.`,
   };
 }
