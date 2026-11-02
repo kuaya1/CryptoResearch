@@ -814,6 +814,47 @@ const CLAIM_SKIP = new Set(['claimed', 'reconcile', 'correction_limit']);
 const LOCK_STALE_MS = 3 * 3600000;
 const DEFAULT_DESK_URL = 'https://cryptoresearch.onrender.com';
 const RECONCILE_WORDS = 'An earlier dispatch expired with no known outcome (often after the PC slept). Check the desk, then release it: node dashboard/cli.js tickets release <project> --reconciled.';
+// Each run's health (cr-pilot-health@1, blueprint 2026-11-02 §6.1): the exit
+// code keeps its meaning (0 done or nothing to do, 3 needs Eric, 1 an error);
+// the class says what the 0 was. It comes from the row's stop, never from its
+// outcome word, so a refused save or a failed session is never success.
+//   ok         something was saved (a done dispatch)
+//   idle       nothing to do: paused, stopped by Eric, cap, session ceiling, dry run
+//   attention  nothing broke, but something is in the way: another runner
+//              holds the project or the lock, the one correction is used, the
+//              step changed under the claim, or the re-poll did not answer
+//   reconcile  an outcome is unknown: Eric reconciles it (exit 3)
+//   failure    a session, a prompt, a prepare or a save failed, or the run erred
+const HEALTH_FORMAT = 'cr-pilot-health@1';
+const HEALTH_ORDER = Object.freeze(['idle', 'ok', 'attention', 'reconcile', 'failure']);
+const IDLE_STOPS = new Set(['cap', 'paused', 'stopped', 'session_ceiling', 'nothing']);
+const ATTENTION_STOPS = new Set(['claimed', 'correction_limit', 'changed']);
+function rowHealth(row) {
+  if (!row) return 'failure';
+  if (row.outcome === 'error' || row.error) return 'failure';
+  if (row.outcome === 'dry_run' || row.outcome === 'session_ceiling' || row.outcome === 'cap') return 'idle';
+  if (row.stop) {
+    if (row.stop === 'reconcile') return 'reconcile';
+    if (IDLE_STOPS.has(row.stop)) return 'idle';
+    if (ATTENTION_STOPS.has(row.stop)) return 'attention';
+    // agent_failed, integrity, refused, sessions_unknown, a prepare's or a
+    // save's refusal code, or any answer this runner does not know.
+    return 'failure';
+  }
+  if (row.repoll_error) return 'attention';
+  return row.outcome === 'done' ? 'ok' : 'failure';
+}
+const worstOf = (classes) => classes.reduce((w, c) => (HEALTH_ORDER.indexOf(c) > HEALTH_ORDER.indexOf(w) ? c : w), 'idle');
+// The run's class: the worst of its rows and of the run's own state.
+function runHealth(log) {
+  if (!log) return 'failure';
+  const own = [];
+  if (log.error || log.exit === 1) own.push('failure');
+  if (log.skipped === 'locked') own.push('attention');
+  if (Array.isArray(log.needs_eric) && log.needs_eric.length) own.push('reconcile');
+  if (log.exit === 3) own.push('reconcile');
+  return worstOf([...own, ...(log.dispatches || []).map((d) => d.health || rowHealth(d))]);
+}
 const homeDir = () => path.join(os.homedir(), '.cryptoresearch');
 const lockPath = () => path.join(os.tmpdir(), 'cr-pilot', 'pilot-all.lock');
 const pilotLogPath = () => path.join(homeDir(), 'pilot-all.jsonl');
@@ -884,6 +925,10 @@ async function runAll(o, {
   const finish = (code) => {
     log.exit = code;
     log.finished_at = new Date(now()).toISOString();
+    for (const d of log.dispatches) d.health = rowHealth(d);
+    log.health_format = HEALTH_FORMAT;
+    log.health = runHealth(log);
+    out(`Health: ${log.health} (exit ${code}).`);
     try {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
       fs.appendFileSync(logFile, `${JSON.stringify(log)}\n`);
@@ -1015,7 +1060,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {
