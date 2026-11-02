@@ -619,9 +619,17 @@ function localSteps(o, cli, h, agent = claude) {
 // save and verify (complete). The Researcher's and the Prosecutor's sessions
 // are separate processes that share nothing but the desk's frozen records.
 //
-// Uncertainty is kept, never retried: a lost or timed-out answer from the
+// Uncertainty is kept, never re-run: a lost or timed-out answer from the
 // desk, or a session that timed out, leaves the claim dispatched for Eric to
-// reconcile on the online desk; nothing is run again by itself. A session
+// reconcile on the online desk; no session is run again by itself. The one
+// request asked again is complete (OP-2, 2026-11-02: JUP's answer was lost to
+// "fetch failed" at the last step): the desk's save is idempotent under the
+// claim (the same report imports as a duplicate; a claim already released
+// answers CHANGED), so a lost answer is asked again 5 times, at 1, 2, 4, 8 and
+// 16 s, while the claim is live. A refusal is not asked again. If every try
+// fails, the answer, its run and the claim's token are kept together under
+// %USERPROFILE%\.cryptoresearch\pending-submissions (never the worker token)
+// and the claim waits for Eric to reconcile, as before. A session
 // that failed outright (it could save nothing: it has no desk tools) is
 // released as agent_failed; its session still counts against the day.
 // Eric's override (--force-prosecution) is local only.
@@ -647,7 +655,10 @@ async function workerCall(fetchImpl, desk, token, op, body, { timeoutMs = 120000
   try {
     res = await fetchImpl(`${desk}/api/pilot/worker/${op}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
-    throw Object.assign(new Error(`The online desk did not answer ${op} (${err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : String(err && err.message || err).slice(0, 120)}).`), { uncertain: true });
+    // undici's "fetch failed" hides the reason in err.cause (ECONNRESET,
+    // ENOTFOUND, UND_ERR_CONNECT_TIMEOUT, ...): it is kept in the words.
+    const cause = err && err.cause ? String(err.cause.code || err.cause.message || '').slice(0, 80) : '';
+    throw Object.assign(new Error(`The online desk did not answer ${op} (${err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : String(err && err.message || err).slice(0, 120)}${cause ? `: ${cause}` : ''}).`), { uncertain: true });
   }
   let json = null;
   try { json = await res.json(); } catch (_) { json = null; }
@@ -656,7 +667,48 @@ async function workerCall(fetchImpl, desk, token, op, body, { timeoutMs = 120000
   return json;
 }
 
-async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fetch, token = null, env = process.env } = {}) {
+// complete, asked again only while its answer is uncertain and the claim is
+// live (see above). A refusal after a lost answer is CHANGED when the lost
+// try already saved it; either way the claim is Eric's to check.
+const COMPLETE_BACKOFF_MS = Object.freeze([1000, 2000, 4000, 8000, 16000]);
+const PENDING_FORMAT = 'cr-pilot-pending@1';
+const pendingDirOf = () => path.join(homeDir(), 'pending-submissions');
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function completeOnline(post, body, { expiresAt = null, delays = COMPLETE_BACKOFF_MS, sleep = pause, now = Date.now, out = () => {} } = {}) {
+  const attempts = [];
+  for (let i = 0; ; i++) {
+    try {
+      return { done: await post('complete', body, { timeoutMs: 300000 }), attempts };
+    } catch (err) {
+      attempts.push({ at: new Date(now()).toISOString(), uncertain: Boolean(err && err.uncertain), status: (err && err.status) || null, error: String(err && err.message || err).slice(0, 300) });
+      if (!(err && err.uncertain)) {
+        if (i > 0 && err && err.code === 'CHANGED') err.message = `${err.message} An earlier try whose answer was lost may have saved it.`;
+        throw Object.assign(err, { attempts });
+      }
+      const wait = delays[i];
+      const exp = expiresAt ? Date.parse(expiresAt) : NaN;
+      if (wait === undefined || (Number.isFinite(exp) && now() + wait >= exp)) {
+        if (attempts.length > 1) err.message = `${err.message} (${attempts.length} tries.)`;
+        throw Object.assign(err, { attempts });
+      }
+      out(`    complete: ${err.message} Asking again in ${wait / 1000} s (retry ${i + 1} of ${delays.length}).`);
+      await sleep(wait);
+    }
+  }
+}
+
+// The answer complete could not deliver, with what can still deliver it: the
+// run or ticket, the prompt's SHA-256 and the claim (its token works only on
+// this attempt, only until it expires). Never the worker token.
+function savePendingSubmission(dir, rec) {
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, `${rec.project_id}__${rec.attempt_id}.json`);
+  fs.writeFileSync(f, `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
+  return f;
+}
+
+async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fetch, token = null, env = process.env, sleep = pause, now = Date.now, pendingDir = null, completeDelays = COMPLETE_BACKOFF_MS } = {}) {
   if (o.forceProsecution) throw new Error('Eric\'s override (--force-prosecution) is local only: the online worker never forces a Prosecutor.');
   const desk = deskUrlOf(o, env);
   const result = { sessions: [], stop: null, words: null, claims: [] };
@@ -711,9 +763,16 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
     const f = scratch(p.role, p.role === 'researcher' ? 'agent1-report.md' : 'agent2-ticket.md', answer);
     let done;
     try {
-      done = await post('complete', { token: c.token, prompt_sha256: p.prompt_sha256, text: answer }, { timeoutMs: 300000 });
+      done = (await completeOnline(post, { token: c.token, prompt_sha256: p.prompt_sha256, text: answer }, { expiresAt: c.expires_at, delays: completeDelays, sleep, now, out })).done;
     } catch (err) {
-      return stop('reconcile', `${err.message} The session's answer is kept at ${f}. ${ONLINE_RECONCILE(o.project)}`);
+      let kept = '';
+      try {
+        const pf = savePendingSubmission(pendingDir || pendingDirOf(), { format: PENDING_FORMAT, saved_at: new Date(now()).toISOString(), desk, project_id: o.project, attempt_id: c.attempt_id, key: c.key, claim_token: c.token, claim_expires_at: c.expires_at, role: p.role, run_id: p.run_id || null, ticket_id: p.ticket_id || null, prompt_sha256: p.prompt_sha256, text_sha256: sha256(answer), text_file: f, attempts: err.attempts || [], text: answer });
+        kept = ` The unsent answer, its record and the claim are kept together at ${pf}.`;
+      } catch (e2) {
+        kept = ` (The pending-submission copy could not be written: ${String(e2 && (e2.code || e2.message) || e2).slice(0, 120)}.)`;
+      }
+      return stop('reconcile', `${err.message} The session's answer is kept at ${f}.${kept} ${ONLINE_RECONCILE(o.project)}`);
     }
     out(`    saved: ${done.status} ${done.report_id || done.receipt_id || ''}${done.words ? ` — ${done.words}` : ''}`);
     if (done.status === 'unverified') return stop('reconcile', `${done.words || 'The save did not verify.'} The session's answer is kept at ${f}.`);
@@ -939,7 +998,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, runOnline, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, workerCall, deskUrlOf, pollOnline, pollLocal, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

@@ -63,9 +63,12 @@ const O = (over = {}) => ({ project: 'olas', desk: 'online', deskUrl: DESK, mode
 const shaOf = (t) => require('crypto').createHash('sha256').update(t, 'utf8').digest('hex');
 
 // steps: what each claim finds, in order. answers[op] overrides per call.
-function workerDesk(steps, { prepare = {}, complete = {}, lose = new Set() } = {}) {
+// completeSeq: what each complete call does in turn ('lose', 'changed',
+// 'busy' for a 503, 'refuse' for a 400, 'ok'); past its end, 'ok'.
+function workerDesk(steps, { prepare = {}, complete = {}, lose = new Set(), completeSeq = null, expires = '2099-01-01T00:00:00.000Z' } = {}) {
   const calls = [];
   let n = 0;
+  let k = 0;
   const prompts = { research: 'FROZEN RESEARCH PROMPT (FICTIONAL) cr-research-prompt@6', ticket: 'FROZEN PROSECUTOR PROMPT (FICTIONAL) cr-ticket-prompt@1' };
   const fetchImpl = async (url, init) => {
     const op = url.slice(`${DESK}/api/pilot/worker/`.length);
@@ -78,7 +81,7 @@ function workerDesk(steps, { prepare = {}, complete = {}, lose = new Set() } = {
       n += 1;
       if (['pm_review', 'done'].includes(step)) return json({ status: 'nothing', step });
       if (['paused', 'claimed', 'session_ceiling', 'reconcile'].includes(step)) return json({ status: step, step: 'research', words: `FICTIONAL ${step}` });
-      return json({ status: 'claimed_now', step, key: `${step}:-`, token: 'a'.repeat(20), attempt_id: `pa_${n}`, expires_at: '2099-01-01T00:00:00.000Z' });
+      return json({ status: 'claimed_now', step, key: `${step}:-`, token: 'a'.repeat(20), attempt_id: `pa_${n}`, expires_at: expires });
     }
     if (op === 'prepare') {
       const step = steps[n - 1];
@@ -86,7 +89,14 @@ function workerDesk(steps, { prepare = {}, complete = {}, lose = new Set() } = {
       const text = step === 'research' ? prompts.research : prompts.ticket;
       return json({ status: 'prepared', role: step === 'research' ? 'researcher' : 'prosecutor', attempt_id: `pa_${n}`, run_id: step === 'research' ? 'run_FICTIONAL' : null, ticket_id: step === 'research' ? null : 'tk_FICTIONAL', prompt: text, prompt_sha256: shaOf(text), sessions: { used: n, ceiling: 6 } });
     }
-    if (op === 'complete') return json(complete[steps[n - 1]] || { status: 'saved', report_id: 'rp_FICTIONAL', receipt_id: 'tr_FICTIONAL' });
+    if (op === 'complete') {
+      const what = completeSeq ? completeSeq[k++] || 'ok' : 'ok';
+      if (what === 'lose') throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+      if (what === 'busy') return { status: 503, ok: false, json: async () => ({ format: 'cr-pilot-worker@1', error: 'FICTIONAL busy', code: 'WORKSPACE_BUSY' }) };
+      if (what === 'changed') return { status: 409, ok: false, json: async () => ({ format: 'cr-pilot-worker@1', error: 'This runner no longer holds the claim; nothing was dispatched.', code: 'CHANGED' }) };
+      if (what === 'refuse') return { status: 400, ok: false, json: async () => ({ format: 'cr-pilot-worker@1', error: 'FICTIONAL refusal', code: 'INVALID' }) };
+      return json(complete[steps[n - 1]] || { status: 'saved', report_id: 'rp_FICTIONAL', receipt_id: 'tr_FICTIONAL' });
+    }
     if (op === 'release') return json({ status: 'released', outcome: body.outcome });
     return { status: 404, ok: false, json: async () => ({ error: 'Unknown API route' }) };
   };
@@ -111,17 +121,77 @@ test('online: research then a ticket are two sessions on the desk\'s frozen prom
   assert.deepEqual(done.map((c) => c.body.prompt_sha256), [shaOf(d.prompts.research), shaOf(d.prompts.ticket)], 'each answer names the prompt it answered');
 });
 
-test('online: a lost answer to complete keeps the claim dispatched and runs nothing again', async () => {
+// OP-2 (2026-11-02): JUP's report was lost to "fetch failed" at complete.
+const os = require('os');
+const pendingTmp = (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-pending-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
+
+test('online: a lost answer to complete is asked again 5 times (1, 2, 4, 8, 16 s); the claim stays dispatched, the answer and claim are kept, no session runs again', async (t) => {
   const d = workerDesk(['research'], { lose: new Set(['complete']) });
+  const dir = pendingTmp(t);
   let sessions = 0;
-  const lines = [];
-  const r = await runOnline(O(), { run: () => { sessions += 1; return 'Report (FICTIONAL).'; }, out: (s) => lines.push(s), fetchImpl: d.fetchImpl, token: WTOKEN });
+  const waits = [];
+  const r = await runOnline(O(), { run: () => { sessions += 1; return 'Report (FICTIONAL).'; }, out: () => {}, fetchImpl: d.fetchImpl, token: WTOKEN, sleep: async (ms) => { waits.push(ms); }, pendingDir: dir });
   assert.equal(r.stop, 'reconcile');
   assert.equal(sessions, 1, 'no second session');
   assert.ok(!d.calls.some((c) => c.op === 'release'), 'an unknown outcome is never released by the runner');
-  assert.equal(d.calls.filter((c) => c.op === 'complete').length, 1, 'complete is not retried');
+  assert.equal(d.calls.filter((c) => c.op === 'complete').length, 6, 'one try and 5 retries');
+  assert.deepEqual(waits, [1000, 2000, 4000, 8000, 16000]);
+  assert.ok(d.calls.filter((c) => c.op === 'complete').every((c) => c.body.text === 'Report (FICTIONAL).' && c.body.token === 'a'.repeat(20)), 'the same answer under the same claim each time');
   assert.match(r.words, /online desk.*pilot-claim\/release.*reconciled/);
   assert.match(r.words, /kept at .*agent1-report\.md/);
+  const files = fs.readdirSync(dir);
+  assert.deepEqual(files, ['olas__pa_1.json']);
+  assert.ok(r.words.includes(path.join(dir, 'olas__pa_1.json')));
+  const raw = fs.readFileSync(path.join(dir, files[0]), 'utf8');
+  assert.ok(!raw.includes(WTOKEN), 'the worker token is never written');
+  const rec = JSON.parse(raw);
+  assert.equal(rec.format, 'cr-pilot-pending@1');
+  assert.deepEqual([rec.project_id, rec.attempt_id, rec.role, rec.run_id, rec.claim_token, rec.text], ['olas', 'pa_1', 'researcher', 'run_FICTIONAL', 'a'.repeat(20), 'Report (FICTIONAL).']);
+  assert.equal(rec.prompt_sha256, shaOf(d.prompts.research));
+  assert.equal(rec.text_sha256, shaOf('Report (FICTIONAL).'));
+  assert.equal(rec.attempts.length, 6);
+});
+
+test('online: complete that lands on a retry is saved and the runner goes on', async (t) => {
+  const d = workerDesk(['research', 'pm_review'], { completeSeq: ['lose', 'busy', 'ok'] });
+  const dir = pendingTmp(t);
+  const waits = [];
+  const lines = [];
+  const r = await runOnline(O(), { run: () => 'Report (FICTIONAL).', out: (s) => lines.push(s), fetchImpl: d.fetchImpl, token: WTOKEN, sleep: async (ms) => { waits.push(ms); }, pendingDir: dir });
+  assert.equal(r.stop, null);
+  assert.deepEqual(waits, [1000, 2000]);
+  assert.deepEqual(d.calls.map((c) => c.op), ['claim', 'prepare', 'complete', 'complete', 'complete', 'claim']);
+  assert.ok(lines.some((s) => /fetch failed: ECONNRESET/.test(s)), 'the lost answer\'s cause is kept in the words');
+  assert.ok(lines.some((s) => /saved: saved rp_FICTIONAL/.test(s)));
+  assert.deepEqual(fs.readdirSync(dir), [], 'nothing pending');
+});
+
+test('online: a claim no longer held after a lost answer stops for Eric (the lost try may have saved it); a refusal is never asked again', async (t) => {
+  const a = workerDesk(['research'], { completeSeq: ['lose', 'changed'] });
+  const r1 = await runOnline(O(), { run: () => 'Report (FICTIONAL).', out: () => {}, fetchImpl: a.fetchImpl, token: WTOKEN, sleep: async () => {}, pendingDir: pendingTmp(t) });
+  assert.equal(r1.stop, 'reconcile');
+  assert.match(r1.words, /may have saved it/);
+  assert.equal(a.calls.filter((c) => c.op === 'complete').length, 2);
+  const b = workerDesk(['research'], { completeSeq: ['refuse'] });
+  const waits = [];
+  const r2 = await runOnline(O(), { run: () => 'Report (FICTIONAL).', out: () => {}, fetchImpl: b.fetchImpl, token: WTOKEN, sleep: async (ms) => { waits.push(ms); }, pendingDir: pendingTmp(t) });
+  assert.equal(r2.stop, 'reconcile');
+  assert.equal(b.calls.filter((c) => c.op === 'complete').length, 1, 'a 4xx is the desk\'s answer, not asked again');
+  assert.deepEqual(waits, []);
+});
+
+test('online: complete is not asked again past the claim\'s expiry', async (t) => {
+  let clock = Date.parse('2026-11-02T00:00:00.000Z');
+  const d = workerDesk(['research'], { lose: new Set(['complete']), expires: '2026-11-02T00:00:05.000Z' });
+  const waits = [];
+  const r = await runOnline(O(), { run: () => 'Report (FICTIONAL).', out: () => {}, fetchImpl: d.fetchImpl, token: WTOKEN, now: () => clock, sleep: async (ms) => { waits.push(ms); clock += ms; }, pendingDir: pendingTmp(t) });
+  assert.equal(r.stop, 'reconcile');
+  assert.deepEqual(waits, [1000, 2000], 'the 4 s wait would reach the expiry at 5 s');
+  assert.equal(d.calls.filter((c) => c.op === 'complete').length, 3);
 });
 
 test('online: a lost answer to prepare is uncertain too; nothing runs, nothing is released', async () => {
