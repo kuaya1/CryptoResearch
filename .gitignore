@@ -48,6 +48,8 @@
 !/docs/history/
 # The architectural constitution (Eric, 2026-10-27)
 !/docs/CONSTITUTION.md
+# The desk on one sheet (CONSTITUTION Part 4, question 2)
+!/docs/ONE-SHEET.md
 
 # Claude Code sub-agents and commands for the pilot (never settings,
 # launch configs or worktrees)
