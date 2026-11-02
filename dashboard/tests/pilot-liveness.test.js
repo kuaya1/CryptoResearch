@@ -187,13 +187,17 @@ test('STALE at 120 min for one agent and max_agents × 95 + 15 above it; a recor
   assert.equal(S.record(s.ws, fields({ max_agents: null }), { now: t0 + 20 * MIN }), null);
   assert.equal(stored(s.ws), kept);
 
-  // A record ahead of the desk's clock is unknown, and a real sighting replaces it.
-  fs.writeFileSync(sightingFile(s.ws), JSON.stringify({ ...JSON.parse(kept), last_polled_at: '2099-01-01T00:00:00.000Z' }));
+  // A record ahead of the desk's clock is unknown, and a poll at the earlier
+  // clock never moves it back (audit F9; ahead-of-clock-sighting.test.js
+  // covers the offsets and the routes).
+  const far = `${JSON.stringify({ ...JSON.parse(kept), last_polled_at: '2099-01-01T00:00:00.000Z' })}`;
+  fs.writeFileSync(sightingFile(s.ws), far);
   const ahead = S.view(s.ws, { now: t0 + 20 * MIN });
   assert.equal(ahead.state, 'unknown');
   assert.equal(ahead.age_min, null);
-  S.record(s.ws, fields(), { now: t0 + 20 * MIN });
-  assert.equal(S.view(s.ws, { now: t0 + 21 * MIN }).state, 'fresh');
+  assert.equal(S.record(s.ws, fields(), { now: t0 + 20 * MIN }).last_polled_at, '2099-01-01T00:00:00.000Z');
+  assert.equal(stored(s.ws), far, 'the record was not moved back');
+  assert.equal(S.view(s.ws, { now: t0 + 21 * MIN }).state, 'unknown');
 
   // Corrupt, or not its shape: unknown, never fresh and never "never".
   for (const text of ['{ not json', JSON.stringify({ format: S.FORMAT, last_polled_at: 'yesterday', runner_id: 'x', invocation_id: INV, max_agents: 1 }), JSON.stringify({ format: 'other@1' }), JSON.stringify({ format: S.FORMAT, last_polled_at: '2026-11-02T12:00:00.000Z', runner_id: 'x', invocation_id: INV })]) {
