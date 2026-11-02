@@ -182,6 +182,9 @@ function view(ws, { now, from = null, to = null } = {}) {
     const inputs = inputsOf(basisOf(ws, req.project_id, req.decision_id));
     const exec = inputs.execution || null;
     delete inputs.execution;
+    // The book refused its journal on this read (audit F5): the view refuses
+    // as the trader's own view does, never counting the order as absent.
+    if (exec && exec.state === 'integrity') throw new (require('./ops').OpError)('INTEGRITY', exec.words);
     const order = fillOf(req, exec);
     const row = {
       decision_id: req.decision_id,

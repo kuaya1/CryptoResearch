@@ -907,8 +907,54 @@ function gapOf(ws, pair, hour, now) {
   }
 }
 
-// The book's journal path, for read-only views that show its events as data
-// (core/decision-basis.js); they read the file and never call the book.
 const JOURNAL = PT.JOURNAL;
 
-module.exports = { VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, pending, step, applyHours };
+// One decision's execution as the book recorded it, for the read-only
+// decision basis view (core/decision-basis.js), read only through the book's
+// own integrity checks (audit F5). In one consistent read: the journal, its
+// head and the venue's records as bytes; then the book's validated read
+// (PT.intents: the hash chain line by line, the head record, every venue
+// order sent); then the same three files again, which must be byte for byte
+// what the book checked. A damaged journal is the book's own INTEGRITY
+// refusal, thrown, never a partial or empty reading. Each reservation shown
+// must be one the book holds with the same order, position and quantity.
+// Nothing here writes, and the book itself is unchanged.
+function executionFor(ws, decisionId) {
+  const fs = require('fs');
+  const { readConsistent } = require('./ops');
+  const RELS = [PT.JOURNAL, PT.HEAD, PT.VENUE];
+  const bytes = () => RELS.map((rel) => {
+    try { return fs.readFileSync(ws.abs(rel)); } catch (err) {
+      if (err && err.code === 'ENOENT') return null;
+      throw new OpError('INTEGRITY', `${rel} could not be read (${(err && err.code) || 'error'}). Nothing is read or written until it is repaired.`);
+    }
+  });
+  const same = (a, b) => (a === null ? b === null : b !== null && a.equals(b));
+  return readConsistent(ws, () => {
+    const before = bytes();
+    const book = PT.intents(ws);
+    const after = bytes();
+    if (!before.every((b, i) => same(b, after[i]))) throw new OpError('INTEGRITY', `${PT.JOURNAL} changed while it was read, so its execution is not shown from a mix of two versions. Read it again.`);
+    if (before[0] === null) return { state: 'no_book', reserved: [], fills: [], exits: [] };
+    const events = before[0].toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const held = new Map(book.map((i) => [i.intent_id, i]));
+    const out = { reserved: [], fills: [], exits: [] };
+    const coids = new Set();
+    const positions = new Set();
+    for (const e of events) {
+      if (e.type !== 'reserved' || !e.intent || e.intent.decision_id !== decisionId) continue;
+      const b = held.get(e.intent_id);
+      if (!b || b.client_order_id !== e.client_order_id || (b.position_id || null) !== (e.position_id || null) || b.quantity !== e.quantity) throw new OpError('INTEGRITY', `${PT.JOURNAL} reserves ${e.client_order_id} for ${decisionId}, but the book does not hold that order as recorded. Nothing is shown until it is repaired.`);
+      coids.add(e.client_order_id);
+      if (e.position_id) positions.add(e.position_id);
+      out.reserved.push({ at: e.at, intent_id: e.intent_id, intent_sha256: e.intent_sha256 || null, side: e.intent.side || null, client_order_id: e.client_order_id, position_id: e.position_id || null, quantity: e.quantity, notional_usd: e.notional_usd || null, loss_at_stop_usd: e.loss_at_stop_usd || null, valid_until_effective: e.valid_until_effective || null, venue: e.venue || null, grant: e.grant || null });
+    }
+    for (const e of events) {
+      if (e.type === 'fill' && coids.has(e.client_order_id)) out.fills.push({ at: e.at, hour: e.hour, client_order_id: e.client_order_id, quantity: e.quantity, price: e.price, notional_usd: e.notional_usd, fee_usd: e.fee_usd, fee_kind: e.fee_kind });
+      if (e.type === 'exit' && positions.has(e.position_id)) out.exits.push({ at: e.at, hour: e.hour, position_id: e.position_id, reason: e.reason, quantity: e.quantity, price: e.price, proceeds_usd: e.proceeds_usd, fee_usd: e.fee_usd });
+    }
+    return { state: out.reserved.length ? 'recorded' : 'none', ...out };
+  });
+}
+
+module.exports = { VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, pending, step, applyHours, executionFor };

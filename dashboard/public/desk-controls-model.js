@@ -86,11 +86,18 @@ export function controlIn(v, id, projectId = null) {
 const DONE = { pause: 'automation is paused', mandate_off: 'the paper mandate is off', admission_off: 'automatic admission is off', stop: 'the project is stopped' };
 
 // What the view read back after an action: { ok, words }.
-export function readback(v, id, projectId = null) {
+// The body of a reconcile click: the attempt the panel shows, or nothing to
+// post when none is shown (audit F4).
+export function reconcileBody(rc) {
+  return rc && typeof rc.attempt_id === 'string' && rc.attempt_id ? { reconciled: true, attempt_id: rc.attempt_id } : null;
+}
+
+export function readback(v, id, projectId = null, attemptId = null) {
   if (id === 'reconcile') {
     const p = v && (v.projects || []).find((x) => x.project_id === projectId);
-    const ok = Boolean(p && p.dispatch && p.dispatch.state === 'released' && p.dispatch.outcome === 'reconciled');
-    return { ok, words: ok ? `Read back: attempt ${p.dispatch.attempt_id} released as reconciled.` : 'The desk does not read the claim as reconciled yet; check it again.' };
+    const d = p && p.dispatch;
+    const ok = Boolean(attemptId && d && d.attempt_id === attemptId && d.state === 'released' && d.outcome === 'reconciled');
+    return { ok, words: ok ? `Read back: attempt ${attemptId} released as reconciled.` : `The desk does not read attempt ${attemptId || '(none named)'} as reconciled${d && d.attempt_id && d.attempt_id !== attemptId ? `; it now shows attempt ${d.attempt_id}` : ''}. Check it again.` };
   }
   const c = controlIn(v, id, projectId);
   const ok = Boolean(c && c.done === true);
