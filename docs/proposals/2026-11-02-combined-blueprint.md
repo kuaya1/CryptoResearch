@@ -1,205 +1,468 @@
 # Combined implementation blueprint: borrowed tools × grade outcomes
 
-**Date:** 2026-11-02 (EST). **Status:** design only; no code. **Supersedes:** PR #132 (Codex, base) and PR #133 (Claude, grafts).
-**Repo state read:** `main` at `84cb28a`; PR #131 head `71c4c1a` (open). Citations are `path:line` at `84cb28a` unless marked `#131`. Lines in `pilot-claims.js`, `pilot-worker.js`, `mandate-authority.js` and `tickets.js` move when #131 merges, so re-verify at current main before acting. Anything marked **UNVERIFIED** was not confirmed against source or vendor docs.
+**Date:** 2026-11-02 (EST). **Revision:** 3. It replaces revision 2 (`effac8c`) in the same PR, #134. **Status:** design only and proposed; this PR implements nothing.
+**Supersedes:** PR #132 (Codex, `aa5ad1d`) and PR #133 (Claude, `a90676e`). Both stay open and unchanged until Eric decides.
+**Baseline:** `main` at `84cb28a`. Every `path:line` refers to `84cb28a` unless it is marked **#131**, which means PR #131's head `71c4c1a`. Vendor facts cite the vendor's page, read on 2026-11-02. **UNVERIFIED** marks anything not confirmed in source or on a primary page.
+
+**Status words:**
+- **Proposed:** written here only.
+- **Implemented on a branch:** code exists in an open PR.
+- **Merged:** in `main`.
+- **Deployed:** running on the online desk.
+- **Proven in operation:** shown by records from a real run.
+
+Everything here is proposed, except #131. #131 is implemented on a branch; it is not merged, deployed or proven.
 
 ## 1. Decision summary
 
-Keep the desk and borrow only a runner and a watcher. Task 1 (stop halts everything) is **done by PR #131**, which is open, not merged. It covers the claimed, preparing and dispatched states (§8, row T1). Task 2 is one docs-only canon PR. Task 3 moves the existing `pilot.js --pilot-all --desk=online` to **one Render cron service at `--max-agents=1`**. It authenticates with `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`) and a pinned `--model`, and pings Healthchecks with `/fail` whenever a session fails while the exit code still reads 0. The desk records a runner sighting only through a **narrow worker POST**; GET polling stays read-only. Task 4 freezes a **decision-time snapshot** (exact report IDs and sha256, mandate generation, book and fill-assumption version). It attributes **whole-position** outcomes in decimal USD, and its leakage tests make sure no model ever sees outcomes. There is no new npm dependency, engine, queue, MCP server or claim state. Eight numbered Eric questions (§9) gate every new threshold, schema or band.
+Keep the desk. Borrow only a scheduler and an external heartbeat. Freeze grade lineage at the point where the desk already freezes decisions.
 
-## 2. Canon conflicts to resolve first (Task 2, docs-only, before any arming)
+1. **Stop halts everything.**
+   - PR #131 implements one shared gate on a branch.
+   - Until Eric merges it, the pilot still ignores an autonomy stop (`DESK_STATE.md:392`).
+2. **Honest liveness.**
+   - Today `runAll` exits 0 after an agent failure, a prompt-integrity failure, a refused prepare, and a report or ticket the desk refused (§6.1). So neither the exit code nor `agent_failed` alone can say "research is flowing".
+   - Proposed: the runner classifies every outcome, and the desk shows five separate facts.
+   - An optional external heartbeat pings from that classification, not from the exit code.
+3. **Decision-time basis.**
+   - Each decision already commits under one lock, and its effects run afterwards (§5.1).
+   - The research and authority basis is staged as one create-only file in the **same operation** as the decision line. A later effect never rebuilds it from current settings.
+   - Execution assumptions come from the book's own reservation and fill events. No second ledger is added.
+4. **Attribution identity is not a cohort.**
+   - A decision is the unique attribution identity.
+   - Statistical grouping is defined separately, and a group can hold many positions.
+   - No rate is shown until Eric sets the count (Q3). The 20-report research threshold does not carry over to trades.
+5. **No order-lifetime PR.** `trader-desk.assess` already waits until an order's life holds a whole hour after it is sent (`dashboard/core/trader-desk.js:548-552`).
+6. **The canary does not wait for metrics or UI.**
+   - B0 and B1 need none of the attribution work.
+   - B2 (a fill) waits for the decision-basis PR to be deployed (Q5). Otherwise its lineage reads "reconstructed".
+
+No npm dependency, engine, queue, MCP server, claim state or grade band is added. Five Eric questions (§11) gate the policy choices.
+
+## 2. One-sheet lifecycle (CONSTITUTION Part 4 Q2, `docs/CONSTITUTION.md:75`)
+
+```mermaid
+flowchart TD
+  L[Scout lead] -->|Eric's click, or auto-admission inside caps he armed| A[Admission]
+  A --> R1[Agent 1 research: one report per model, separate grades]
+  R1 -->|Claude's report is the ticket's basis| P[Agent 2 prosecution: conviction and typed spread]
+  P --> T[Ticket receipt: create-only, frozen packet]
+  T -->|Eric's decision, or the paper mandate inside his armed generation| D[Decision line + decision basis: one operation]
+  D --> I[Intent: one attempt per decision]
+  I --> O[Order: reserved, sent, acked]
+  O -->|only hours starting at or after the send| F[Causal fills, stop, target, expiry]
+  F --> V1[Trader Sim outcome: fee-bearing]
+  R1 --> V2[Research vs BTC: every eligible report]
+  D -->|Eric's own grants only| V3[PM Cohort benchmark]
+  V1 --> E[Eric's review]
+  V2 --> E
+  V3 --> E
+  S{{Stop: pause, mandate off, admission off, project stop #131}} -.halts.-> A
+  S -.halts.-> R1
+  S -.halts.-> D
+  S -.halts.-> I
+  H{{Liveness: poll sighting, run outcome, heartbeat}} -.observes only.-> R1
+  E -.no automatic path.-> R1
+```
+
+Outcomes reach Eric only. No arrow runs from an outcome to a grade, a rubric, the mandate or admission. Changing any of those is Eric's own act, under the desk's existing versioning (published templates are never edited, per `CLAUDE.md`).
+
+## 3. Canon conflicts to resolve first (docs-only PR)
 
 | # | Conflict | Lines | Resolution proposed for Eric |
 |---|---|---|---|
-| C1 | Scout leads are admitted "only by Eric's click", but bounded auto-admission exists | `CLAUDE.md:36` vs `DESK_STATE.md:322`, `dashboard/core/lead-admission.js:2-13` | CLAUDE.md states auto-admission within caps under Eric's arming |
-| C2 | Invariant: "Eric's grants route to it, and nothing else does", but mandate grants route too | `DESK_STATE.md:465` vs `DESK_STATE.md:54-58`, `dashboard/core/tickets.js:1882-1918` | Reword: Eric's grants, or grants under an active, expiring mandate he armed |
-| C3 | "The pilot ignores an autonomy stop" | `DESK_STATE.md:392` | Removed by #131. If #131 does not merge, this line stays true and Task 3 must not start |
-| C4 | #131 makes a PM veto or Undo also stop research sessions, which no canon says yet | #131 body "Residuals" | CLAUDE.md latch text covers pilot, mandate and admission alike; rearm is the only un-stop |
-| C5 | No one-sheet state diagram exists (CONSTITUTION Part 4 Q2) | `docs/CONSTITUTION.md:75` | The same docs PR commits §7 of this doc as the sheet |
+| C1 | Scout leads are admitted "only by Eric's click", yet bounded auto-admission exists | `CLAUDE.md:36` vs `DESK_STATE.md:322`, `dashboard/core/lead-admission.js:2-13` | CLAUDE.md states auto-admission inside caps Eric armed |
+| C2 | "Eric's grants route to it, and nothing else does", yet mandate grants route too | `DESK_STATE.md:465` vs `DESK_STATE.md:54-58`, `dashboard/core/tickets.js:1882-1918` | Reword: Eric's grants, or grants under an unexpired mandate generation he armed |
+| C3 | "The pilot ignores an autonomy stop" | `DESK_STATE.md:392` | True at `84cb28a`. #131 removes it on merge. Until then no unattended runner change ships |
+| C4 | Under #131 a PM veto or Undo also stops research sessions | #131 body, "Residuals" | CLAUDE.md latch text covers pilot, mandate and admission; rearm is the only un-stop |
+| C5 | No one-sheet diagram exists | `docs/CONSTITUTION.md:75` | Commit §2 |
 
-`package.json:4` (server has no npm dependencies) is consistent with every choice here and needs no change.
+`package.json:4` (the server has no npm dependencies) is consistent with every proposal here.
 
-## 3. Candidates: adopted, pattern-only, rejected (CONSTITUTION Part 4, `docs/CONSTITUTION.md:74-77`)
+## 4. Borrowed candidates
 
-Q1 asks whether a candidate directly serves the research or trading desk, and says to kill anything that is DevOps meta-tooling to manage AI agents. Q2 asks whether it fits on one sheet, Q3 asks what fails when the network drops, and Q4 asks whether the math is deterministic.
-
-| Candidate | Verdict | Q1 (serve the desk?) | Q2 one sheet | Q3 network drop | Q4 deterministic |
-|---|---|---|---|---|---|
-| Render Cron running existing `pilot.js` | **ADOPT, gated** (cutover drill first) | **Yes.** The research agents are the desk's producers (Agent 1/2, `DESK_STATE.md:14-17`). Today grades stop whenever Eric's PC sleeps, and cron is only the clock for the existing command. It adds no orchestration, queue or agent manager. **Cut if** it ever needs a new lease, queue or auto-retry agent. | +1 Render service (existing vendor) | Run dies → claim expires or reads reconcile → exit 3 next run. No timer writes LOST (`docs/CONSTITUTION.md:37-38`) | n/a (no math) |
-| `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` | **ADOPT** | **Yes.** It is the documented headless credential for the research sessions themselves. | +1 secret | 401s every session → F3 | n/a |
-| Healthchecks.io (`/start`, `/0`, `/fail`, `/1`, `/3`) | **ADOPT, narrow** | **Yes, narrowly.** It is the only alert when grades silently stop: agent_failed exits 0 (`dashboard/scripts/pilot.js:749-761`, `:948`, `:962`) and the desk's STALE line cannot see it (F3). **Cut if** it grows beyond 2 pings per run or any desk data. | +1 vendor, +1 secret URL | Ping fails → ignored, 5 s timeout; missed pings → Healthchecks itself alerts | n/a |
-| Narrow worker POST "poll" sighting | **ADOPT, narrow** | **Yes.** Eric needs to read "research is flowing / STALE" on the desk in his few minutes a day (`DESK_STATE.md:14-17`). It is a desk view, not agent management. **Cut if** it needs a new token or state. | +1 worker op, +1 bounded record | No POST → sighting ages → STALE (honest) | Server clock only |
-| Freqtrade / Hummingbot fill models | **PATTERN ONLY** (checklist; no code, Freqtrade GPLv3 not re-fetched, UNVERIFIED) | Only as a checklist against our own fills (§4.4) | 0 | n/a | n/a |
-| QuantStats / Nautilus metrics, parity | **PATTERN ONLY** (definitions only; Nautilus page not fetched, UNVERIFIED) | Yes, as definitions for §4.3 | 0 | n/a | decimal.js only |
-| CCXT, Alpaca/Hyperliquid/CCXT MCP, claude-code-action, Temporal/Trigger.dev, runtime data MCPs | **REJECT** | Custody surface, live-money switch, merge authority (Law 1), or a second state machine | — | — | — |
-
-Freqtrade's documented backtest **assumes no slippage** for in-range fills. Importing it would make fills less realistic than ours (`DESK_STATE.md:558`; `dashboard/core/paper-trader.js:148`, `:987`).
-
-## 4. Grade-to-outcome design (Task 4)
-
-### 4.1 Decision-time snapshot (closes the `reportsOf` temporal leak)
-`report-outcomes.reportsOf` picks the **latest** save or revision per run and provider (`dashboard/core/report-outcomes.js:78-94`). `startOf` keeps the original packet's T0 (`:95-105`). Joined to a fill, that pairing would credit a decision to a report revision written after it. **Rule:** attribution never calls `reportsOf`. Each decision writes one create-only snapshot as a decision effect (the same effect path as `tickets.js:1985`; a late write is repaired by `reconcileEffects`, `tickets.js:2111`):
-`projects/<id>/tickets/attribution/<decision_id>.json`, with these proposed fields (Eric Q4):
-`decision_id, decided_at, decided_by (eric | mandate:cr-paper-mandate@1), mandate_generation, agent1_report_id + sha256, agent2_receipt_id + sha256, rubric version, grade as recorded (range, never a midpoint: dashboard/core/scoring.js:2-8), ticket_id, intent_id, book version (paper-trader engine commit + rules hash), fill assumptions {fee rates, STOP_SLIPPAGE_BPS, FILL_SHARE_MAX, intent life}`.
-A newer report, generation change or quarantine never rewrites a snapshot; it starts a new cohort (F11-F13).
-
-### 4.2 Attribution
-- Unit = one **whole position**: exits fill the whole position (`dashboard/core/paper-trader.js:92-94`). Only entries can fill partially (`:1013-1018`).
-- Outcome = executed exit proceeds − executed entry notional − entry fee − exit fee. Slippage is never charged twice, because it is already in the fill price.
-- **Example (fixture, not an observed trade).** An order signals $10 × 100 units, and only 40 fill at $10.20 (fee $0.408). The 40 close at $10.80 (fee $0.432). Net = $432 − $408 − $0.408 − $0.432 = **$23.16**. The signal-price, full-size figure of **$80** is not the outcome, and it must never be shown as one (F16).
-- Unfilled, partial and unsettled positions are their own labelled rows, never zero (F14).
-- Agent 1 and Agent 2 are joined separately and never averaged (`DESK_STATE.md:39`).
-
-### 4.3 Metrics (read-only aggregator outside the protected core, `decimal.js`)
-Defaults (Eric Q5-Q7):
-- net realized USD, closed-position count, hit rate (closed trades, not periods);
-- R-multiple versus `loss_at_stop_usd` (`paper-trader.js:796-807`), MAE, fill ratio, fill price versus signal price, holding hours, versus BTC.
-
-**Max drawdown is absolute USD** from the book's hourly NAV, the existing `max_drawdown_usd` (`paper-trader.js:1077-1127`). Never relabel it as a percent, and never split book drawdown per model. Missing marks show as unknown. **Sample floor:** no rate is shown below 20 closed positions per cohort, mirroring `MIN_COMPARABLE = 20` (`report-outcomes.js:31`). No Sharpe or annualization exists at any n by default. **No grade bands** (Claude's "65+" band has no code backing and is dropped). Grades stay the ranges the rubric recorded, and outcomes are descriptive, never a ranking (`report-outcomes.js:218`).
-
-### 4.4 Fill-pattern rejection (why nothing is imported)
-| Borrowed idea | Already in protected core | Where |
+| Candidate | Verdict | Why (CONSTITUTION Q1-Q4, `docs/CONSTITUTION.md:74-77`) |
 |---|---|---|
-| Fees on every fill | frozen at reservation; entry and exit fees charged; unknown fee refuses | `paper-trader.js:771-775`, `:806`, `:990`, `:1025` |
-| Stop slippage and gaps | 25 bps frozen per order; gap fills adverse | `:148`, `:987`, `:1001-1004` |
-| Partial fills | ≤ 10% of hour volume | `:147`, `:1013-1018` |
-| Next-candle fill | only hours that start at or after send | `:986` |
-| Worst case inside the hour | stop before target; no fill-hour target | `:1001-1004`; in the entry's fill hour only the stop is checked, `:1029` |
+| Render Cron running the existing `pilot.js --pilot-all --desk=online` | Adopt only after Q1 and an outage drill | **Q1, serves the desk:** it is the clock for the research producers, so grades flow while Eric's PC sleeps. **Q2, one sheet:** one service. **Q3, network drop:** "Render guarantees that at most one run of a given cron job is active at a given time"; "Render delays the next scheduled run until the active run finishes"; a manual trigger "immediately cancels the active run"; "Render stops an active run after 12 hours"; cron jobs "can't provision or access a persistent disk"; "All day and time ranges use UTC" (https://render.com/docs/cronjobs). **Q4, deterministic math:** it touches none |
+| `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` | Adopt with the cron | A one-year OAuth token that "can only make model requests", so it "can't … fetch claude.ai connectors". Bare mode "does not read `CLAUDE_CODE_OAUTH_TOKEN`". `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` rank above it (https://code.claude.com/docs/en/authentication) |
+| Healthchecks.io | Optional (Q2) | "interprets 0 as a success and all other values as a failure". `rid` matches a start ping to its result. "Please do not ping a single check more than 5 times per minute" (https://healthchecks.io/docs/http_api/). Period and grace time are set per check, and cron schedules take a time zone (https://healthchecks.io/docs/configuring_checks/). The docs say nothing about alerting during Healthchecks' own outage, so this design assumes none |
+| Freqtrade, Hummingbot, QuantStats, Nautilus | Not adopted | No code or claim from them is relied on. The book already defines fills, fees and slippage (§5.6) |
+| CCXT, broker MCP servers, claude-code-action, Temporal/Trigger.dev | Reject | Each brings a custody or live-money surface, merge authority (Law 1, `docs/CONSTITUTION.md:13`), or a second state machine |
 
-**Gap:** `FILL_SHARE_MAX` is a module constant and is **not** frozen on the reserved record (`paper-trader.js:796-807` freezes fees and `stop_slippage_bps` only). The snapshot therefore records the book version (§4.1), and any change to the constant is a `[P]` protected-core PR.
+## 5. Grade-to-outcome contract
 
-### 4.5 Order-lifetime trap (a prerequisite to any outcome)
-Hours fill only if they start at or after the send (`paper-trader.js:986`). An order whose life ends before an hour's end expires before that hour is applied (`:996-999`; `DESK_STATE.md:566`). **A life under 60 min can never fill.** A life of 60-119 min fills only when it is sent close to an hour boundary. Arming accepts 1-10,080 min (`DESK_STATE.md:235`). Guard: arming refuses an intent life below a floor, enforced in the arming and rules validation, **not** in the protected core. Default floor 120 min (Eric Q3). The canary's 4,320 (`DESK_STATE.md:412-418`) passes.
+### 5.1 What the desk already freezes (verified at `84cb28a`)
 
-### 4.6 Leakage tests (canary strings)
-Insert unique canary strings into an own-model outcome record and into the other model's grade. Assert that neither appears in:
-- any Agent 1 packet or prompt (the packet already excludes other models' reports: `dashboard/core/research.js:874-909`);
-- the Prosecutor prompt, beyond the current frozen Agent 1 report;
-- mandate, admission or rubric inputs.
-
-Also assert that outcomes are readable only on authenticated desk routes. No model sees outcomes, ever (Eric Q8).
-
-## 5. Liveness and Healthchecks design (Task 3)
-
-### 5.1 Ping table (under `--pilot-all`, exit codes are only 0/1/3)
-`pilot.js --pilot-all` sets the exit code from `runAll` (`:986`). It exits 1 at `:880`, `:967` and when any dispatch errored (`:962`), 3 when anything needs Eric (`:962`), and 0 otherwise (`:885`, `:901`, `:962`). The cron command never exits 2: that code exists only on the usage path, when neither `--pilot-all` nor `--project` is given (`:991`). An uncaught error exits 1 (`:1006`).
-| Run result | Ping | Healthchecks reads |
+| Record | Immutable how | Evidence |
 |---|---|---|
-| Run starts | `<url>/start?rid=<invocation>` | grace timer |
-| 0 and no `agent_failed`, no isolation refusal | `<url>/0` | Up |
-| 0 with any `agent_failed` (released at `pilot.js:749-761`, outcome `not_dispatched` at `:948`) **or** isolation refusal (`ISOLATION`, `pilot.js:164`) | `<url>/fail` | Down |
-| 3 (reconcile or needs Eric) | `<url>/3` | Down: reconcile on the desk |
-| 1 | `<url>/1` | Down |
-Bare GET, no body, no desk data, 5 s timeout, failure ignored. Hourly pings stay far under the vendor's limit of more than 5 pings a minute. A #131 `stopped` outcome is Eric's own stop and exits 0, so it pings `/0`, which is correct.
+| Ticket receipt (the Prosecutor's ticket on one Claude report) | Create-only write | `dashboard/core/tickets.js:1503`. One ticket per Claude report: `:677-680` |
+| Receipt contents | The record itself | `tickets.js:1449-1501`: the Prosecutor's `model.model_version`, `prompt_sha256`, `packet` {path, sha256}, `text.sha256`, `researcher` {report_id, run_id, grade, analysis_at, horizon}, `prosecution.conviction_score`, and `agent_disagreement.spread_points` = gate grade − conviction. The gate grade reads a range at its low end (`:276-281`) |
+| Frozen packet | sha256 held in the receipt and checked on read | Includes the Claude report's `original_sha256`, rubric and profile (`tickets.js:684-688`) |
+| Decision line `cr.ticket-decision.v1` | Appended under the operation lock | Lock opens at `tickets.js:1863`; line written at `:1971-1972`. A mandate decision also carries its generation, `armed_at`, `policy_sha256`, tier and grade used (`:1917`) |
+| Decision effects (archive, journal, PM Cohort, trader) | Run **after** the lock; idempotent and repairable | `tickets.js:1976`, `:1985-2004`; repair by `reconcileEffects` (`:2111`) |
+| Operation atomicity | Staged files commit together, and recovery rolls a sealed operation forward | `dashboard/core/ops.js:3-8` |
+| Report original | `meta.original_sha256` and `meta.imported_at` (server save time) | `dashboard/core/inbox.js:153`, `:412` |
+| Report corrections | Immutable entries layered over the original, including `eligibility` and score fields | `dashboard/core/reports.js:1274-1277` |
+| Book reservation | Hash-chained journal event (`dashboard/core/paper-trader.js:690-711`) | Intent body and its sha256, quantity, notional, `loss_at_stop_usd`, effective expiry, the grant read under the lock, the exit cap, venue fee rates and `stop_slippage_bps` (`:796-806`) |
+| Book fills and exits | Same journal | Quantity, price, notional, fee and fee kind (`paper-trader.js:1027`); exit proceeds and fee (`:988-995`) |
 
-### 5.2 Sighting and STALE math
-- **GET stays read-only.** The poll route keeps in-memory rate buckets only (`dashboard/core/pilot-poll.js:2-15`, `:80-109`) and records nothing.
-- **POST sighting.** One new worker op `poll`, under the existing worker bearer (`pilot-worker.js:43-46`, four routes today), computes the same bounded queue snapshot. Only when that succeeds does it overwrite one bounded record `{last_polled_at (server clock), runner_id, invocation_id}`. Client timestamps are ignored.
-- **Display.** The desk shows disabled, recent, STALE, or unknown (absent or corrupt record).
-- **Poll gap (`pilot.js`).** A run polls at start and re-polls after each project (`:952`). Sessions in one invocation share `budget = { left: maxAgents }`, with default `maxAgents 2` and `timeoutMin 60` (`:56`). Each session is killed at `timeoutMin` (`:466`). The `complete` call may retry: up to 6 attempts with a 300 s timeout each (`:682`) and 31 s of backoff between them (`:673`, `:678-700`). It never retries past the claim's expiry (`:689-691`), and a claim lasts 90 min (`pilot-claims.js:57`). So one claim, from session start to the last `complete` attempt, takes at most about 90 min. Render runs at most one active run per cron service. (That it delays the next tick behind a running run is UNVERIFIED.) So the gap between two sightings is at most max(cron interval, the claims one project holds + prepare). For hourly cron at `--max-agents=1`, that is about 65 min normally. It reaches about 95 min (one 90-min claim plus polls) only when the `complete` attempts time out: a degraded desk, where STALE is honest. At the default `maxAgents 2`, one project can hold two claims back to back. That is about 125 min normally, and up to about 185 min when both `complete` calls are slow (a first call that fails outright stops the project at reconcile).
-- **Decision.** Run `--max-agents=1`, and set **STALE at 120 min** (Eric Q2). Raising `max-agents` requires STALE ≥ maxAgents × 90 + 5, one claim lifetime per agent plus polls, set by the same PR. Claude's "60-70 min gap" and its 30-min-cron 2 h formula are withdrawn.
-- **Sessions per day.** The daily session ceiling of 6 (`DESK_STATE.md:278`) still caps sessions, so most hourly runs dispatch nothing and only poll.
+**Not frozen anywhere today:**
+- other providers' reports available at decision time;
+- report eligibility and correction state at decision time;
+- the receipt's own hash;
+- the code revision at decision, reservation or fill;
+- `FILL_SHARE_MAX` (`paper-trader.js:147`);
+- the `trader.rules` used at reservation.
 
-### 5.3 Cron environment guards (grafted from #133)
-- `--model=<pinned>` is required on the cron command. The launcher validates model names (`pilot.js:191`). Pin the Claude Code CLI version in the build (F5, F6).
-- A test asserts that `launchEnv` passes the allowlist only (`pilot.js:152-159`, `:166-174`; `DESK_STATE.md:172`). It already does this today; the test pins it. That means `CLAUDE_CODE_OAUTH_TOKEN` and the model pass, and `ANTHROPIC_API_KEY` and every `CR_*` are stripped. The env must not contain `ANTHROPIC_API_KEY` at all, because it outranks the OAuth token (Anthropic auth docs). Never pass `--bare` (`DESK_STATE.md:171`), which does not read the token. The isolation probe already strips the token (`pilot.js:405`).
-- The runner reads its poll and worker bearers from env before `secrets.json` (today home-folder only: worker `pilot.js:640-647`, poll `:831-839`). No secret is ever placed in argv or logs.
-- Ephemeral disk: pending files (`pilot.js:704-775`) do not survive. stdout prints only claim IDs and `text_sha256` for a lost complete, never answer text (F7).
+### 5.2 Decision basis, frozen inside the decision transaction (proposed)
 
-## 6. Failure states (merged and deduped; Codex F-numbers kept where they exist)
+- **What and where.** One create-only file, `projects/<id>/tickets/basis/<decision_id>.json` (`cr.decision-basis.v1`).
+- **When.** `decide` stages it inside its existing `runOp` (`tickets.js:1863`), in the same operation as the decision line. Both commit or neither does (`ops.js:3-8`).
+- **What stays unchanged.** The decision line stays `v1`. The protected book reads decisions only as `cr.ticket-decision.v1` (`paper-trader.js:161`, `:315`).
+
+**Contents.** Everything is read under the lock, as of `decided_at`.
+- **Identity:** `decision_id` and `receipt_id`; `receipt_sha256`, the sha256 of the receipt bytes as read; and the receipt's `packet.sha256` and `text.sha256`, copied.
+- **`research[]`:** one entry per provider in `PROVIDERS`, from the desk's own selector (`dashboard/core/compare.js:24-33`) run on the records as read under the lock.
+  - Each entry holds: provider and role (`researcher`); `report_id` and `run_id`; `model_version`, or null with its `model_version_note`; `original_sha256`, `imported_at` and `analysis_at`; the prompt, rubric and profile versions.
+  - It also holds the grade from `gradeAssessment`: status, value or range, coverage, and the reason for any missing component. It lists the correction IDs applied and sets `eligible_at_decision: true`.
+  - A provider with no eligible report records `{state: none | held | excluded | pdf_only, reason}`. Unknown stays unknown, and no research is started to fill a gap.
+  - Each entry is labelled either `decision_input` (the Claude report the receipt names) or `available_context` (any other provider).
+- **`prosecutor`:** provider, `model_version`, `prompt_sha256`, `conviction_score`, verdict, and a typed spread copied from the receipt: `{kind: "researcher_gate_grade_minus_prosecutor_conviction", researcher_grade_used, conviction, points}`.
+- **`authority`:**
+  - For a mandate decision: the line's generation, `armed_at`, `policy_sha256`, tier and expiry.
+  - For Eric's decision: `decided_by` only.
+  - In both cases: the pause and project-stop state as the gate read them.
+- **`code_revision`:** the running commit (`dashboard/core/revision.js:36-47`).
+
+The basis never holds the current `trader.rules`, the fee or the book's funding. Those are execution context, applied when the intent is built (§5.3).
+
+**Reproducing the basis later.** No effect writes the basis, so there is no basis effect to fail and repair.
+- The attribution view is computed on read.
+- It joins the basis to the decision line by `decision_id`, then reads each referenced record by ID and checks its sha256 (receipt, packet, report original).
+- A mismatch is an `INTEGRITY` refusal (409) naming the record. This is the desk's existing rule for frozen records ("verifiedFrozen" in `CLAUDE.md`).
+- The view never substitutes current values.
+
+**Decisions made before this PR** have no basis file. Their view is built from the receipt, the packet and the report records that exist now, and is labelled `reconstructed`, never `decision_time`. Corrections dated after `decided_at` are listed as later annotations, never applied.
+
+### 5.3 Execution context, captured where execution happens
+
+**Where it is captured.**
+- `trader-desk.assess` builds the intent only when the book can answer (`trader-desk.js:554-559`).
+- The intent body holds `created_at`, the limit price (the lower of the book's price and the zone edge, `:402`), the stop, the target, the risk and `valid_until`. The reservation hashes that body (`paper-trader.js:752`, `:797`).
+- The reservation also records the fee rates, the frozen `stop_slippage_bps` (`:806`), and the decision as read under the book's lock (`:802`).
+
+**What is not recorded:** the engine revision, `FILL_SHARE_MAX` and the `trader.rules` digest. Two options (Q4):
+- **(A), recommended.** A protected-core PR adds `engine` (`VERSION`, `paper-trader.js:143`), `fill_share_max` and `rules_sha256` to the `reserved` event, and `engine` to `fill` and `exit` events. It needs Eric's deliberate review (`docs/CONSTITUTION.md:50`; `dashboard/tests/trader-boundary.test.js`).
+- **(B), if A is declined.** The view reports those three items as "not recorded at execution". It may show the current constant, labelled "current, not historical". Any deploy between `reserved.at` and a fill is listed from Render's deploy record as operating evidence.
+
+**The link.** `decision_id` → `intent_id` (derived from the decision, `trader-desk.js:119`) → `client_order_id` `cr2-<intent_id>` (`paper-trader.js:792`) → `position_id` `pos-<intent_id>` (`:798`). Decision context comes from the basis, and execution context from the book's events. They are shown side by side and never merged.
+
+**Acceptance scenario.** Proposed test `dashboard/tests/decision-basis.test.js`, in a fictional workspace:
+1. A mandate grant commits with its basis.
+2. The trader effect fails (stubbed).
+3. `trader.rules` and the fee change.
+4. `trader-desk.step` reserves, and an hour fills the order.
+5. `tickets reconcile` runs.
+
+It asserts that:
+- the basis bytes are unchanged;
+- the view shows the original report vector, generation and `policy_sha256`;
+- the view shows the new fee and rules from the reservation, labelled execution-time;
+- a corrupted basis or receipt is refused, never rebuilt;
+- a decision from before the PR reads `reconstructed`.
+
+### 5.4 Attribution identity and statistical grouping
+
+**Identity.**
+- One row per decision that grants risk, keyed by `decision_id` (`tickets.js:1971`). Its execution key is `position_id`.
+- A trade linked to several reports is still **one executed policy outcome**, and no model "earned" its profit or loss.
+- Claude's report and the Prosecutor were the decision's inputs. Any other provider's report was context.
+
+**Why revision 2's cohort fails.** Revision 2 grouped by mandate generation × the exact decision-time report vector, and required 20 closed positions per group. That can never accumulate:
+- Each Claude report gets one ticket (`tickets.js:677-680`), and the mandate grants a receipt once (`:1899`). So the exact vector is almost always unique per decision.
+- A generation lasts 1-30 days (`dashboard/cli.js:106`), at 1 grant a day by default (`tickets.js:1547`).
+- So a group holds about one position.
+
+The "20" was borrowed from `report-outcomes.js:31` (`MIN_COMPARABLE`, matured reports per model per horizon) and `paper.js:37` (`MIN_CLOSED`, PM Cohort). Neither one establishes a trade threshold.
+
+**Statistical grouping (proposed, Q3).**
+- A group key is the set of fields Eric chooses from:
+  - `decided_by` kind (Eric or mandate);
+  - the Claude researcher's `model_version`, prompt and rubric versions;
+  - the Prosecutor's `model_version`;
+  - the execution policy (engine, `rules_sha256`, fee tier).
+- Provider, model version and role are always separate dimensions, never pooled.
+- Agent 1 against Agent 2 (the spread) is a different comparison from Claude against ChatGPT.
+- ChatGPT's reports are never decision inputs here. They appear as context and in the research-vs-BTC view (§5.5).
+
+**Denominators, always shown.** Every rate states its numerator and its denominator:
+- decisions granted;
+- intents `not_opened` (final or not), `waiting` or `refused`;
+- orders reserved;
+- filled in full, filled in part, unfilled (expired or cancelled), or `UNKNOWN`;
+- positions open or closed;
+- closed with every fee known, or incomplete;
+- excluded, with the reason.
+
+No rate appears at any count until Eric sets a minimum number of closed positions (Q3). The rationale he weighs: for n closed trades, a hit rate's 95% interval is at worst about ±0.98/√n, so ±22 points at 20 and ±14 points at 50. No grade bands and no model ranking.
+
+### 5.5 History when eligibility changes; three views kept apart
+
+- **Book outcomes stand.** A later quarantine, exclusion, correction or revision never edits the basis or the book. A position's profit or loss stays in the Trader Sim totals.
+- **Changes become annotations.** The view adds a note such as "report r excluded on date d, after the decision", read from the correction entry (`reports.js:1274-1277`).
+- **Analytical exclusion** is an explicit filter with a stated rule, and it always prints "n excluded of N". It never quietly improves a sample.
+
+**The three views stay distinct:**
+1. **Research vs BTC:** every eligible report, traded or not (`dashboard/core/report-outcomes.js:31`, `:218`).
+2. **PM Cohort:** Eric's own grants only, at the signal price with unknown costs (`dashboard/core/paper.js:18`, `:37`). A mandate grant opens none (`tickets.js:1963-1964`).
+3. **Trader Sim:** fee-bearing fills (`paper-trader.js:1077-1127`).
+
+**Selection visibility.** The attribution view shows "traded k of n eligible Claude reports in the window", and lists the untraded and vetoed tickets and the desk's $0 gates. Selected trades never pass for an unbiased model comparison.
+
+### 5.6 Order timing and fills (no new guard)
+
+**When an order is live and when it expires.**
+- The intent is created at `created_at`, with `valid_until = created_at + life` (`trader-desk.js:556-558`).
+- The book's effective expiry is `min(valid_until, created_at + rules.max_validity_minutes)` (`paper-trader.js:791`).
+- `live_from` is the send time (`paper-trader.js:422`), or the venue's ack time when no send is on record (`:427`).
+- An hour starting at `t` can fill the order only if `t ≥ live_from` (`:986`).
+- An order whose effective expiry falls before the hour's end expires before that hour is applied (`:996-998`).
+- `assess` waits, in words, until the first whole hour after now fits inside the life (`trader-desk.js:548-552`). So a life under 60 minutes waits rather than expiring unfilled.
+
+**Revision 2's "order-lifetime trap" and `fix/intent-life-floor` PR are withdrawn: the guard exists.**
+- Arming accepts 1 to 10,080 minutes (`DESK_STATE.md:235`).
+- Refusing a life under 60 at arming would be an optional usability refinement.
+- A universal 120-minute floor would be a new policy, and nothing shows it is needed.
+
+**Fill mechanics, unchanged.**
+- A buy fills when the hour's low is below the limit, at the lower of the open and the limit (`paper-trader.js:1015`, `:1023`).
+- A fill is capped at `FILL_SHARE_MAX` (10%) of the hour's volume, in whole lots (`:147`, `:1017`).
+- The fee is charged, and cash must cover it (`:1025-1026`). An unknown fee refuses the reservation (`:771-775`).
+- In the entry's own fill hour, only the stop is checked (`:1029`).
+- For held positions, the stop is checked before the target, and a gap fills at the adverse price (`:1001-1004`).
+
+**Generic illustration.** This is not a recorded trade. The fee rate is assumed, since Eric's fee has no default. The order is a LIMIT buy of 100 units at $10.00, with a 0.10% taker fee.
+
+| Hour | Market | What the book does | Money |
+|---|---|---|---|
+| 1 | open $10.05, low $9.90, volume 400 | Cap is 40 units. 40 fill at min($10.05, $10.00) = $10.00. The stop at $9.50 is not touched | Notional $400.00; fee $0.40 |
+| 2 | open $10.70, high $10.90 | The $10.80 target exits all 40 units at max($10.70, $10.80) = $10.80. The unfilled 60 units are cancelled (`:994`) | Proceeds $432.00; fee $0.432 |
+
+Net is $432.00 − $400.00 − $0.40 − $0.432 = **$31.168**. The signal-price figure, 100 × ($10.80 − $10.00) = $80, is not the outcome.
+
+## 6. Liveness
+
+### 6.1 Runner outcomes, traced through `runOnline` (`pilot.js:711-782`) and `runAll` (`:863-970`)
+
+| Outcome | Where | Today: row, exit | Proposed class → ping |
+|---|---|---|---|
+| Report or ticket saved and verified | `pilot-worker.js:214`, `:235`; `pilot.js:777` | `done`, 0 | ok → `/0` |
+| No work, or the ticket waits at PM review | `pilot.js:727-730` | `done`, 0 | idle → `/0` |
+| Desk gate closed (risk hold, $0) | `pilot.js:741` | `done`, 0 | idle → `/0` |
+| Automation paused | `pilot.js:899-901`; claim at `pilot-claims.js:133` | 0 | idle-paused → `/0`; the desk shows paused |
+| Session ceiling or agent cap | `pilot.js:925`, `:930`, `:725` | `session_ceiling`/`cap`, 0 | idle → `/0` |
+| Another runner holds the claim | `pilot-claims.js:143`; `pilot.js:731` | `not_dispatched`, 0 | attention → `/fail` |
+| Local lock held | `pilot.js:882-885` | skipped, 0 | attention → `/fail` |
+| Agent authentication or generation failure | `pilot.js:759-761` | `not_dispatched`, **0** | failure → `/fail` |
+| Prompt integrity failure | `pilot.js:750` | `not_dispatched`, **0** | failure → `/fail` |
+| Prepare refused | `pilot.js:740`, `:746` | `not_dispatched`, **0** | failure → `/fail` |
+| Report or ticket refused by the desk | `pilot-worker.js:206`, `:223`; `pilot.js:779` | `not_dispatched`, **0** | failure → `/fail` |
+| Unverified save, or any uncertain step | `pilot.js:738`, `:745`, `:759`, `:775`, `:778` | needs Eric, **3** | reconcile → `/3` |
+| Project stopped by Eric | #131 `pilot.js:519`, `:965` | `stopped`, 0 (branch only) | idle-stopped → `/0`; the desk shows stopped |
+| Session isolation not established | preflight `pilot.js:486-489`, caught at `:964-967` | **1** | failure → `/1` |
+| Dispatch exception or poll failure | `pilot.js:943`, `:964-967` | `error`, 1 | failure → `/1` |
+| Process killed, or Render's 12-hour stop | — | no final ping | Healthchecks marks it late, if Healthchecks is up |
+
+**Proposed change.**
+- The runner keeps today's exit codes, so existing schedulers and the readiness runbook keep their meaning.
+- It adds a `health` class per row, and a run-level class (the worst row), to its log line. The class comes from `row.stop`, not `row.outcome`.
+- A refused grade is never reported as success.
+
+**Pings.**
+- At most two per invocation: `/start?rid=` and one final ping.
+- Bare GET, no body, 5-second timeout, and a failed ping is ignored.
+- A ping never changes the exit code, releases a claim or touches authority.
+- The ping URL is a secret held in the cron environment only. The `ENV_KEEP` allowlist (`pilot.js:152-159`) has no `CR_*` names, so the URL never reaches a session.
+
+### 6.2 Five separate facts on the desk (no new claim state)
+
+| Fact | Source |
+|---|---|
+| Last server-observed production poll | Proposed narrow worker `poll` POST under the existing worker bearer (`pilot-worker.js:43-46` lists four routes today). It writes `{last_polled_at (server clock), runner_id, invocation_id}` only after the queue snapshot is computed. GET stays read-only (`pilot-poll.js:80-109`) |
+| Latest dispatch and save outcome | The existing claim record per project, with its `outcome` on release (`pilot-claims.js:274`), plus the session ledger (`DESK_STATE.md:278`) |
+| Report save and analysis dates | `meta.imported_at`, `assessment.analysis_at` |
+| Data freshness | The existing price and ATR waits (`trader-desk.js:535-547`) |
+| Authority | Mandate generation and expiry, admission, pause, project stop: existing settings and `POST /api/projects/<id>/autonomy` (`dashboard/server.js:1279`) |
+
+STALE means the production poll is overdue. It is not proof that no grade exists or that no session is running.
+
+### 6.3 Timing: measured, estimated, bounded
+
+**Measured:** nothing yet; no production cron run exists.
+
+**Bounds from code.** These assume the child is killed at its timeout and that fetch aborts are honoured. Runtime is UNVERIFIED.
+
+| Step | Bound | Source |
+|---|---|---|
+| Poll | 30 s | `pilot.js:851` |
+| Claim or prepare | 120 s each | `pilot.js:653` |
+| Session | `timeoutMin`, 60 min by default | `pilot.js:56`, `:466` |
+| Each `complete` attempt | 300 s | `pilot.js:682` |
+| Backoff between `complete` attempts | 31 s in total | `pilot.js:673` |
+| Claim life | 90 min | `pilot-claims.js:57` |
+| Isolation probe | 60 s | `pilot.js:434` |
+
+- No `complete` retry starts after the claim's expiry (`pilot.js:689-691`).
+- Expiry does not cancel an attempt already in flight, so the last attempt can end about 5 min after expiry.
+- How the desk handles a `complete` that arrives after expiry is not traced here (UNVERIFIED).
+
+**Worst gap between two sightings at `--max-agents=1`: about 110 min.**
+- One claim, from the claim to its last `complete` reply, takes up to about 95 min.
+- Add up to 3 non-session iterations of claim and prepare (`MAX_STEPS` 4, `pilot.js:48`): a few minutes at worst, seconds in practice.
+- Add the 30 s re-poll (`:952`).
+- Render then starts the delayed run as soon as the active one finishes.
+- The conservative estimate for a healthy run is about 65 min.
+- At the default `maxAgents` of 2, two claims in one project reach about 200 min.
+
+**Proposed STALE threshold.** 120 min at hourly cron and `--max-agents=1` (Q2). Raising `--max-agents` requires STALE ≥ maxAgents × 95 + 15 min, set in the same PR.
+
+### 6.4 Credential boundaries
+
+**OAuth token: reaches the CLI, not the model.**
+- `CLAUDE_CODE_OAUTH_TOKEN` must reach the official CLI process, so it is on the allowlist (`pilot.js:157`).
+- Sessions get only WebSearch and WebFetch (`:45`). Bash, Read and MCP tools are denied (`:146`), and claude.ai MCP servers are disabled (`:172`). So the token sits in the process environment but cannot be read through a tool.
+- The isolation probe strips the token (`:405`).
+- The allowlist already drops `ANTHROPIC_API_KEY`. It must also be absent from the cron environment, because it outranks the OAuth token.
+- `--bare` is never passed; it does not read the OAuth token.
+
+**Desk bearers: runner only.**
+- The poll and worker bearers stay in the runner. Today they come from `secrets.json` (`pilot.js:640-647`, `:831-839`); the proposal reads env first.
+- They are never placed in argv, logs, the prompt or a session.
+
+## 7. Model blindness, scoped
+
+**Claim.** The inputs to initial research and to prosecution exclude historical evaluation and outcome material.
+- The research packet already excludes other models' reports (`dashboard/core/research.js:874-909`).
+- Report outcomes are computed on read and are not stored (`CLAUDE.md`, "Outcomes").
+
+**Proposed test** (`dashboard/tests/grade-input-blindness.test.js`).
+- Plant canary strings in an outcome view, a PM Cohort row, a Trader Sim position, and another provider's grade.
+- Assert that none appears in a research packet or prompt, a Prosecutor prompt, or the mandate, admission or rubric inputs.
+
+The test proves only those code paths. It cannot prove that a model never meets outcomes on the open web. A post-mortem Eric authorizes later is a separate, labelled exercise, and it never feeds an original grade.
+
+## 8. Failure states
 
 | ID | Failure | Guard |
 |---|---|---|
-| F01 | Two schedulers (cron plus PC task, or a manual run) | One production scheduler. Disable the PC task at cutover. Claim, prepare and bind are authoritative (`pilot-claims.js:131-176`). Render manual trigger cancels the active run: runbook says never trigger mid-session |
-| F03 | Ephemeral answer lost after a paid session | Cutover drill (Q1). Claim stays unknown and reads reconcile, exit 3. No new paid session until Eric reconciles |
-| F3 (#133) | Expired or revoked token → every session 401s, exit 0, no grade | `/fail` on agent_failed. Calendar reminder 30 days before the 1-year expiry. Session ceiling 6 bounds the waste. Desk STALE does **not** catch it |
-| F5/F6 | Unpinned model or CLI drifts behaviour | `--model` required on cron; CLI version pinned in build |
-| F7 | Lost complete on an ephemeral host | stdout IDs and sha256 only; reconcile |
-| F09-F12 | Token leaks to desk, browser, prompts or child env | Cron-service-only secret, not an env group shared with the desk. `launchEnv` test. Probe strips the token |
-| F13-F17 | False freshness (page visit, forged clock, wrong runner, failed poll) | POST-only sighting after a real queue read, server clock, unknown when corrupt |
-| — | #131 `stopped` after dispatch on cron | Answer kept only in scratch (#131 `pilot.js:519` stoppedSince). On cron it is lost by design; Eric's stop wins |
-| F11 | Mandate generation changes after a grant | Snapshot carries generation; new cohort |
-| F12 | Newer report revision appears | Snapshot pins report ID and sha256; `reportsOf` never used for attribution |
-| F13 | Quarantined or held report | Cohort excluded and labelled, never zeroed |
-| F14 | Unfilled, partial or unsettled position | Own labelled rows; never zero |
-| F16 | Signal-price result shown as outcome | Only executed fills ($23.16, not $80) |
-| F17 (#133) | Late snapshot write | Decision effect, repaired by `reconcileEffects` |
-| F19 | Fill assumption change silently reprices history | Book version and assumptions frozen in snapshot; `FILL_SHARE_MAX` change = `[P]` PR |
-| F26 | Period win rate shown as trade hit rate; cash flow masks drawdown | Versioned formulas; drawdown USD book-wide only |
-| F27 | Outcomes leak into a later grade | Canary tests (§4.6) |
-| F28 | Rates on tiny samples | Floor 20 closed positions |
-| LT | Intent life < 60 min never fills | Arming floor (Q3) |
+| F01 | Two schedulers, or a manual trigger mid-run | One production scheduler. Claim, prepare and bind are authoritative (`pilot-claims.js:131-176`). Render cancels the active run on a manual trigger, so the runbook forbids triggering while a session runs |
+| F03/F7 | A paid answer lost on an ephemeral host | Today the pending file holds the answer (`pilot.js:770`); on a cron host it is lost with the disk. Guards: the Q1 drill; the claim stays and reads reconcile, exit 3; proposed row 4 prints IDs and `text_sha256` only; no new session until Eric reconciles |
+| F3 | Expired or revoked token: every session fails, exit 0 | `health` = failure, so `/fail` (§6.1). A calendar reminder before the one-year expiry. The session ceiling (`DESK_STATE.md:278`) bounds the waste |
+| F5/F6 | The model or CLI drifts | `--model` required on unattended runs (validated, `pilot.js:191`); CLI version pinned |
+| F09-F12 | The token reaches the desk, the browser, a prompt or a child environment | Cron-only secrets; allowlist test (§6.4) |
+| F13-F17 | False freshness | A POST sighting only after a real queue read, on the server clock; unknown when the record is corrupt |
+| F18 | A refused grade shown as research done | `health` comes from `row.stop` (§6.1) |
+| F11-F12 | The mandate generation or report changes after a decision | Basis frozen in the decision's operation (§5.2) |
+| F13b | A report is quarantined later | Annotation only; profit and loss kept (§5.5) |
+| F14 | An unfilled, partial or unknown position | Its own denominator row, never zero (§5.4) |
+| F16 | A signal-price result shown as the outcome | Only executed fills count (§5.6) |
+| F19 | An engine or rules change reprices history | Q4 (A) stamps them at execution; otherwise "not recorded" |
+| F26 | A period win rate shown as a trade hit rate | The unit is a closed position; formulas are versioned |
+| F27 | Outcomes reach a grade | §7 tests, scoped to code paths |
+| F28 | Rates on tiny samples | No rate until Q3 |
 
-## 7. One-sheet cost total
+## 9. Ordered build plan (one PR each, Law 3)
 
-| Item | Added | Detail |
-|---|---|---|
-| Vendors | **+1** | Healthchecks (Render and Anthropic already used) |
-| Services | **+1** | Render cron service; −1 PC scheduled task |
-| Secrets | **+2 new** (+2 moved) | `CLAUDE_CODE_OAUTH_TOKEN`, Healthchecks ping URL. The existing poll and worker bearers move from `secrets.json` to cron env. No new bearer type |
-| Env vars | **+1 name** | `CR_HEALTHCHECK_URL` (name proposed; does not exist today). Model is a `--model` flag |
-| Records | **+2** | 1 create-only attribution snapshot per decision; 1 bounded runner-sighting record |
-| Statuses | **+4 display labels** | runner: disabled / recent / STALE / unknown. **0** new claim, order or ticket states |
-| Worker ops | **+1** | `poll` (POST) |
-| npm deps, engines, MCPs, queues | **0** | |
-| PRs | **#131 + 8 build + 1 design** | §8 |
+Every test named below is **proposed** and not yet passing. Each PR runs `node dashboard/cli.js test`. Protected files stay byte-identical unless the row says [P].
 
-## 8. Ordered build plan (one PR each; Law 3)
+| # | Outcome | Depends | Acceptance | Proof |
+|---|---|---|---|---|
+| T0 | One stop halts pilot, mandate and admission (**implemented on a branch, #131**) | Eric's merge and deploy | #131's residuals (a)-(e) acknowledged | #131's `stop-halts-pilot.test.js`. Its body reports 16 tests and 1543 pass / 0 fail on Windows. Not proven in operation |
+| 1 | Canon sync C1-C5 and the §2 diagram (docs) | T0 merged | Every §3 line resolved | Docs review; `test` unchanged |
+| 2 | Desk controls and evidence-based reconciliation | T0 | The five facts of §6.2 shown apart. Off-only pause, mandate, admission and project-stop controls with readback, reusing `server.js:1279`. Reconcile is explicit and signed in, through the existing release route (`server.js:1288`); never a blind retry | Proposed `pilot-controls.test.js`; a browser check that STALE and a fresh report show together |
+| 3 | Runner outcome classification | — | Every §6.1 row yields its class; exit codes unchanged | Proposed `pilot-outcome-class.test.js`, one case per row |
+| 4 | Runner env and credentials | 3 | Bearers from env first; `--model` required unattended; allowlist pinned; stdout carries IDs and `text_sha256` only for a lost complete | Extend `dashboard/tests/pilot-all.test.js` |
+| 5 | Host recovery on an ephemeral disk | 4 | Covers an answer saved but its reply lost, the desk down, and the runner killed. A restart never regenerates | Proposed `pilot-host-recovery.test.js` |
+| 6 | Production poll sighting | 4, Q2 | GET unchanged. A forged clock or a failed snapshot never freshens the record. STALE at the Q2 value | Proposed `pilot-liveness.test.js` |
+| 7 | Heartbeat pinger (only if Q2 adopts it) | 3 | At most 2 pings. A failed ping never changes the exit code or authority | Proposed `pilot-healthchecks.test.js` with a stubbed fetch |
+| 8 | Decision basis in the decision's operation | 1 | §5.2 contents. Atomic with the decision line; the v1 line unchanged; read-time join; the `reconstructed` label | Proposed `decision-basis.test.js` (the §5.3 scenario) |
+| 9 | [P] Execution stamp (only if Q4 is A) | 8 | `engine`, `fill_share_max` and `rules_sha256` on `reserved`; `engine` on `fill` and `exit`. Replays of old journals unchanged | Protected tests plus a proposed case in `trader-boundary.test.js`; Eric's manual review |
+| 10 | Same-engine continuous, restart and replay equivalence | 9, or option B | In a fictional workspace, the same bars, controls, clock, funding and decisions give identical events and results whether run continuously, restarted or replayed (`paper-trader.js:395-399`). Changed input is refused; missing history reads incomplete | Proposed `paper-replay-parity.test.js` |
+| 11 | Input blindness | 8 | §7 assertions | Proposed `grade-input-blindness.test.js` |
+| 12 | Attribution view (read-only) | 8, 10, Q3 | §5.4 denominators; the three views kept apart; the $31.168 illustration exact | Proposed `grade-outcome-view.test.js` |
+| Ops-1 | Render cron definition (disabled) and its runbook | 3-6, Q1 | UTC schedule, `--max-agents=1`, pinned model and CLI. Eric creates the service and its secrets. PC task disabled at cutover | Linux dry run; outage and kill drill recorded (operating evidence) |
+| B0 | Canary prerequisites | T0, 2 | Deployed SHA, meters, credentials through safe paths, readbacks (`docs/engineering/BOUNDED_PAPER_READINESS.md:607-652`) | Recorded readbacks (operating evidence) |
+| B1 | Cancellation proof | B0 | Lineage recorded; cancelled before the first causally eligible hour (`BOUNDED_PAPER_READINESS.md:654-665`) | Authoritative order records. A command's success is not proof |
+| B2 | One legitimate fill and its risk management | B1, row 8 deployed (Q5) | A supported successor with caps unchanged. Fill, fees, stop and basis recorded (`BOUNDED_PAPER_READINESS.md:683-698`) | Linked records. A correct no-trade is "held", not a fill |
+| B3 | Restart and idempotency | B2 | No duplicate session, grant, order or fill (`BOUNDED_PAPER_READINESS.md:700-713`) | IDs compared; a hosted restart only if authorized |
 
-| # | Task | Branch | Scope | Acceptance | Proving test | Depends |
-|---|---|---|---|---|---|---|
-| T1 | 1 | `fix/stop-halts-pilot` (**PR #131, open**) | Done by #131: `automationGate` (`mandate-authority.js:165` #131) read at claim, beginPreparation, assertPreparing, bind, complete and `stopIfHalted`, plus nextStep, mandate and admission | Residuals only: (a) a sub-second window between the claim-lock check and the save lock; (b) stopped run or ticket stays open until rearm; (c) `--force-prosecution` blocked on a stopped project; (d) exit-quote monitor and Eric-started API research not covered; (e) veto or Undo now stops research, so Eric acknowledges this behaviour change on merge. The PR reports 1545 tests run, 1543 pass and 0 fail, run on Windows | `dashboard/tests/stop-halts-pilot.test.js` (16 tests incl. the 13-path bypass) | Eric merge |
-| 2 | 2 | `docs/canon-sync-2026-11` | C1-C5; DESK_STATE header date; commit §7 as the one sheet | Every line in §2 resolved; no code | docs review; full `test` unchanged | T1 |
-| 3 | 4 (prereq) | `fix/intent-life-floor` | Arming and rules refuse intent life < floor (Q3), outside the protected core | `--intent-life=59` refused with words; 4,320 accepted | new case in the arm-desk/rules tests | Q3 |
-| 4 | 3 | `fix/pilot-runner-env` | bearers from env first; `--model` required when unattended online; a test pinning that launchEnv already strips `ANTHROPIC_API_KEY`/`CR_*`; stdout IDs/sha256 for a lost complete | no secret in argv, logs or child env; protected core byte-identical | extend `dashboard/tests/pilot-all.test.js` isolation tests | T1 |
-| 5 | 3 | `feat/pilot-healthchecks` | §5.1 table, `CR_HEALTHCHECK_URL` optional | each row of §5.1 pings exactly once; ping failure never changes exit code | new `pilot-healthchecks.test.js` with a stub fetch: agent_failed → `/fail`, exit 3 → `/3` | 4 |
-| 6 | 3 | `feat/pilot-runner-sighting` | worker op `poll`, bounded record, desk label | GET unchanged; forged clock and failed snapshot don't freshen; STALE at Q2 value | new `pilot-liveness.test.js` | 4, Q2 |
-| 7 | 3 | `ops/render-cron-cutover` | runbook + disabled cron definition (UTC schedule, `--max-agents=1`, pinned CLI/model); Eric creates the service and secrets himself | dry-run on Linux passes isolation; outage/kill drill recorded; PC task disabled | drill log in the PR body (Q1) | 4-6, Q1 |
-| 8 | 4 | `feat/grade-snapshot` | §4.1 snapshot as a decision effect + §4.6 canary tests | snapshot create-only, never rewritten; no canary in any packet or prompt | new `grade-snapshot.test.js`, `grade-leakage.test.js` | 2, Q4, Q8 |
-| 9 | 4 | `feat/grade-outcome-metrics` | §4.2-4.3 read-only aggregator + view | $23.16 fixture exact; partial, unfilled and unknown rows labelled; < 20 shows no rate; USD drawdown | new `grade-outcome-metrics.test.js` | 8, Q5-Q7 |
+**Canary ordering.**
+- The PC runner (`BOUNDED_PAPER_READINESS.md:612-616`) serves B0-B3, so the cron is off the canary's critical path.
+- The only attribution prerequisites are row 8, plus row 9 if Q4 is A, and only for B2.
+- Row 12 and any UI can follow the canary.
 
-Do not hold the live paper canary (B2, `docs/engineering/BOUNDED_PAPER_READINESS.md:683`) for rows 8-9. Rows 3 and 8 are enough to make its fill attributable.
+## 10. One-sheet cost
 
-## 9. Eric questions (recommended defaults)
+| Item | Added |
+|---|---|
+| Vendors | +1 only if Q2 adopts Healthchecks; Render and Anthropic are already in use |
+| Services | +1 Render cron (Q1); −1 PC scheduled task at cutover |
+| Secrets | `CLAUDE_CODE_OAUTH_TOKEN`, plus the ping URL if Q2. The existing poll and worker bearers move to the cron environment. No new bearer type |
+| Records | +1 create-only basis per decision; +1 bounded runner-sighting record; book event fields only if Q4 (A) |
+| Worker ops | +1 `poll` (POST) |
+| States | 0 new claim, order or ticket states; display labels only |
+| npm deps, engines, MCP servers, queues | 0 |
+| PRs | T0 (open), 12 build PRs, Ops-1, and the B0-B3 evidence records |
 
-1. **Cron answer durability.** Accept that a paid answer can be lost if the desk is unreachable until the cron run ends? *Default: yes, only after the row-7 outage/kill drill; claim reads reconcile, never auto-LOST.*
-2. **STALE threshold.** *Default: 120 min at hourly cron and `--max-agents=1`; sighting record durable (one overwrite record).*
-3. **Intent-life floor.** *Default: refuse < 120 min.*
-4. **Snapshot fields.** *Default: the §4.1 list, create-only, one file per decision.*
-5. **How an outcome judges a grade.** *Default: descriptive only; per agent, never averaged, never a rank or band; grades stay recorded ranges.*
-6. **Cohort and drawdown.** *Default: cohort = mandate generation × decision-time report vector; drawdown absolute USD, book-wide only.*
-7. **Sample floor.** *Default: 20 closed positions per cohort before any rate; no Sharpe.*
-8. **Alerts and model blindness.** *Default: Healthchecks email to Eric only; no model, mandate, admission or rubric ever reads outcomes (canary-tested).*
+## 11. Eric's questions (the defaults are proposals, not approvals)
 
-## 10. What to close
+1. **Runner host.** Move the production runner from the PC to Render cron?
+   - *Default:* yes, but only after rows 3-6 and the outage and kill drill.
+   - Accept that an answer can be lost if the desk is unreachable until the run ends. The claim then reads reconcile, never auto-LOST.
+   - Keep the PC runner for B0-B3.
+2. **External heartbeat and STALE.** Adopt Healthchecks (one vendor, one secret URL)?
+   - *Default:* yes, alerting Eric only.
+   - STALE at 120 min for hourly cron at `--max-agents=1`.
+3. **Statistical grouping and sample size.** Which §5.4 fields form a group, and how many closed positions before any rate is shown?
+   - *Default:* group by `decided_by` kind × Claude researcher model version × execution policy.
+   - Show counts and rows only until Eric names a number. The interval rationale is in §5.4.
+4. **Protected-core execution stamp.** Authorize the [P] PR (row 9) that records the engine, `fill_share_max` and the rules digest on book events?
+   - *Default:* yes (option A), reviewed by hand under `docs/CONSTITUTION.md:50`.
+5. **B2 gating.** Hold B2 until row 8 (the decision basis) is merged and deployed?
+   - *Default:* yes. B0 and B1 proceed without it.
 
-Open one design-only PR with this file as `docs/proposals/2026-11-02-combined-blueprint.md`. After Eric approves it, **close both #132 and #133** as superseded, without merging. #132's content is the base here, and #133's grafts are carried. #131 stays open as Task 1, for Eric to review and merge.
+## 12. What to close
 
-## Verification log (2026-11-02)
+This PR (#134) holds one file. After Eric approves the design, close #132 and #133 as superseded, without merging. #131 stays open as T0, for Eric to review and merge.
 
-**Main:** `84cb28a` (origin/main after `git fetch`; unchanged since the draft). **#131:** OPEN, head `71c4c1a`. §1, §2 C3 and §8 T1 already said open, so they are unchanged. Every `path:line` citation was re-read at `84cb28a`, and the lines marked #131 at `71c4c1a`.
+## Verification log
 
-Citations changed (old → new):
-- `tickets.js:1882-1916` → `:1882-1918` (the mandate block assigns `mandateLine` at `:1917` and closes at `:1918`).
-- `pilot-claims.js:131-174` → `:131-176` (`claim()` closes at `:176`).
-- `pilot.js:157` → `:152-159`, `:166-174` (`:157` is one row of `ENV_KEEP`; `launchEnv` is `:166-174`). The sentence now says the allowlist already strips `ANTHROPIC_API_KEY` and `CR_*`, and that the test only pins it (§5.3, T4).
-- `pilot.js:640-647` → worker `:640-647`, poll `:831-839` (`:640-647` reads only the worker token).
-- §4.4 "(UNVERIFIED: `:1029`)" → verified: `:1029` checks only the stop in the entry's fill hour.
+**Revision 3 (2026-11-02).**
+- **Repository state.** `main` is `84cb28a` after `git fetch`. #131 is OPEN at `71c4c1a`, #132 OPEN at `aa5ad1d`, #133 OPEN at `a90676e`. #134 was at `effac8c` before this revision.
+- **Governing files read:** `docs/CONSTITUTION.md`, `CLAUDE.md`, `DESK_STATE.md`.
 
-Citations added:
-- §5.1: `pilot.js:986`, `:991`, `:1006`. "There is no exit 2" was imprecise. Under `--pilot-all` the codes are only 0/1/3, as the step asked to confirm. Exit 2 exists only on the usage path without `--pilot-all` or `--project` (`:991`). `--check-isolation` and uncaught errors exit 1 (`:982`, `:1006`).
-- §5.2: `pilot.js:682` (300 s per `complete` attempt), `:689-691` (no retry past claim expiry), `pilot-claims.js:57` (claim TTL 90 min).
-- §6: #131 `pilot.js:519` (`stoppedSince`).
+**Findings in the revision brief, checked against source:**
+- **Effects run after the decision transaction:** confirmed (`tickets.js:1863`, `:1972`, `:1976`). The basis now moves inside the operation (§5.2). The decision line is not changed, because the protected book pins `v1` (`paper-trader.js:161`, `:315`).
+- **The cohort cannot reach 20:** confirmed (`tickets.js:677-680`, `:1899`, `:1547`; `cli.js:106`). Identity and grouping are now separate (§5.4).
+- **The lifetime-floor PR duplicates an existing guard:** confirmed (`trader-desk.js:548-552`). The PR is removed (§5.6).
+- **Exit 0 hides failures:** confirmed for agent failure, prompt-integrity failure, a refused prepare, and a desk-refused report or ticket (`pilot.js:948`, `:962`). They are classified in §6.1.
 
-§5.2 poll-gap math, recomputed from `pilot.js` at main:
-- `MAX_STEPS` 4 (`:48`); `maxAgents` 2 and `timeoutMin` 60 (`:56`).
-- A re-poll after each project (`:952`).
-- `COMPLETE_BACKOFF_MS` sums to 31 s, so there are 6 attempts at 300 s each, cut at the 90-min claim expiry.
-- At `--max-agents=1`: about 65 min normally and about 95 min degraded. These are unchanged, so STALE 120 still holds.
-- At the default 2: "125-155 min" → "about 125, up to about 185 min". Two back-to-back claims can each run to 90 min.
-- So the raise rule "STALE ≥ maxAgents × 60 + 60" → "≥ maxAgents × 90 + 5". No new threshold, schema or band was added.
+**Corrections to revision 2:**
+- **Isolation refusal row was wrong.** Revision 2 said exit 0 → `/fail`. Preflight throws, and `runAll` catches it as exit 1 (`pilot.js:964-967`).
+- **Fill example was wrong.** It filled a buy above its signal price, which a LIMIT buy cannot do (`paper-trader.js:1015`, `:1023`). It is replaced by a labelled illustration (§5.6).
+- **Timing was understated.** The last `complete` attempt can run past claim expiry (`pilot.js:682`, `:689-691`). Bounds recomputed: about 110 min at `--max-agents=1` and about 200 min at 2; the raise rule is now ≥ maxAgents × 95 + 15.
+- **"Proposed fields" snapshot written by a late effect:** replaced by an in-transaction basis.
+- **"20 closed positions per cohort":** removed; Q3 now asks for the threshold.
+- **Eight questions:** reduced to five.
+- **T1 reported as "done":** now stated as implemented on a branch, not merged.
 
-Still UNVERIFIED:
-- Freqtrade's licence and no-slippage backtest claim (§3; not re-fetched).
-- The Nautilus page (§3).
-- That Render delays the next cron tick behind an active run (§5.2). Its at-most-one-active-run limit and manual-trigger cancel were verified earlier.
+**Resolved UNVERIFIED items:**
+- Render: the delayed next run, the 12-hour stop and UTC scheduling (https://render.com/docs/cronjobs).
+- Healthchecks: period, grace time and cron time zone (https://healthchecks.io/docs/configuring_checks/).
+- The Freqtrade and Nautilus claims are removed rather than relied on.
+
+**Still UNVERIFIED:**
+- That the session child is killed at its timeout, and that fetch aborts are honoured, in production.
+- How the desk handles a `complete` that arrives after claim expiry.
+- Healthchecks alerting during its own outage: its docs say nothing.
+- Every operating milestone, B0 to B3: none is proven.
