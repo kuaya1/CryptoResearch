@@ -12,6 +12,7 @@ export const PREF_SECTIONS = [
   ['appearance', 'Appearance'],
   ['screening', 'Screening'],
   ['models', 'Models & budget'],
+  ['controls', 'Desk controls'],
   ['rubrics', 'Rubrics'],
   ['data', 'Data'],
   ['system', 'System'],

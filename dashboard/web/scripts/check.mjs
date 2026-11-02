@@ -109,6 +109,7 @@ try {
     ['preferences screening', '#/watchlist?prefs=screening', "document.querySelector('[data-key=\"prefs-screening-form\"]')"],
     ['preferences models', '#/watchlist?prefs=models', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
     ['preferences data', '#/watchlist?prefs=data', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
+    ['preferences controls', '#/watchlist?prefs=controls', "document.querySelector('[data-key=\"prefs-dc-poll\"]')"],
     ['research', '#/research', "document.querySelector('.lg-research .page-head')"],
     ['outcomes', '#/research?tab=outcomes', "document.querySelector('.lg-research .page-head')"],
     ['research evidence', '#/research?tab=evidence', "document.querySelector('.lg-research table')"],
@@ -422,6 +423,19 @@ try {
       report.raw_ids[name] = found;
       if (found.length) fail(`${name}: raw record IDs in the visible text`, found.slice(0, 5));
     }
+    await tab.close();
+  }
+
+  // ---- Desk controls (blueprint row 2): STALE and a fresh report, together -----------
+  {
+    const tab = await tabFor(1440);
+    const before = tab.writes.length;
+    const drawn = await go(tab, '#/watchlist?prefs=controls', "document.querySelector('[data-key=\"prefs-dc-poll\"]') && document.querySelector('[data-key^=\"prefs-dc-project-\"] [data-key$=\"-report-claude\"]')");
+    ok(Boolean(drawn), 'desk controls: the production poll and a pilot project\'s report both draw');
+    const facts = await tab.evalJs("(() => { const poll = document.querySelector('[data-key=\"prefs-dc-poll\"]'); const rep = document.querySelector('[data-key^=\"prefs-dc-project-\"] [data-key$=\"-report-claude\"]'); const st = (n) => n && n.querySelector('.dc-state') ? n.querySelector('.dc-state').textContent : null; return { poll: st(poll), report: st(rep), shown: [poll, rep].every((n) => n && n.getBoundingClientRect().height > 0), offOnly: [...document.querySelectorAll('.prefs [data-key^=\"prefs-dc-\"] button')].map((b) => b.textContent) }; })()");
+    ok(facts.poll === 'STALE' && /^Saved \d{4}-/.test(facts.report || '') && facts.shown, 'desk controls: STALE and a freshly saved report show together, each in its own row', facts);
+    ok(facts.offOnly.every((t) => /^(Pause automation|Turn the paper mandate off|Turn automatic admission off|Stop this project|Release as reconciled)$/.test(t)), 'desk controls: every button only turns something off', facts.offOnly);
+    ok(tab.writes.length === before, 'desk controls: opening it wrote nothing', tab.writes.slice(before));
     await tab.close();
   }
 

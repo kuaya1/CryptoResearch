@@ -126,10 +126,11 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
   }
 });
 
+const dcSrcOf = (files) => files.find(([n]) => n === 'shell/DeskControls.jsx')[1];
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/DailyBrief.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/PilotLine.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/DailyBrief.jsx', 'shell/DeskControls.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/PilotLine.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The re-audit's parts (2026-10-17) each post one path, from a button:
   // a judgment, an explicit fixed-token quote, an outcome note, and the
   // agenda's Done, Snooze and Reopen. The case package is a read.
@@ -148,6 +149,15 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // Imports > Scout leads: Confirm, Dismiss, Complete and Request research, each a click (leads.js).
   assert.deepEqual(uniq('views/review/Review.jsx'), ["/api/scopes/${enc(c.project_id || 'portfolio')}/events/${enc(c.event_id)}", '/api/scopes/${enc(scope)}/events', '/api/scout/leads/complete', '/api/scout/leads/confirm', '/api/scout/leads/dismiss', '/api/scout/leads/request-research']);
   assert.deepEqual(uniq('shell/Preferences.jsx'), ['/api/settings']);
+  // Preferences > Desk controls (blueprint row 2): off switches through the
+  // settings write, a project stop, and a release only as reconciled, each a
+  // click; never a rearm, a resume or a turn-on.
+  assert.deepEqual(uniq('shell/DeskControls.jsx'), ['/api/projects/${enc(projectId)}/autonomy', '/api/projects/${enc(projectId)}/pilot-claim/release', '/api/settings']);
+  assert.equal([...dcSrcOf(files).matchAll(/\bact\(/g)].length, [...dcSrcOf(files).matchAll(/onClick=\{\(\) => act\(/g)].length, 'every desk control is a click');
+  const dcSrc = dcSrcOf(files);
+  assert.doesNotMatch(dcSrc, /rearm|paused: false|enabled: true|autonomous_paper_loop: true/);
+  assert.match(dcSrc, /{ action: 'stop' }/);
+  assert.match(dcSrc, /{ reconciled: true }/);
   assert.deepEqual(uniq('views/watchlist/StatusStrip.jsx'), ['/api/market/refresh']);
   assert.doesNotMatch(files.find(([n]) => n === 'shell/CommandMenu.jsx')[1], /api\.post|sendReview\(/, 'the command menu writes nothing itself');
   const prefsSrc = files.find(([n]) => n === 'shell/Preferences.jsx')[1];
@@ -210,7 +220,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   for (const [f, s] of files.filter(([n]) => n !== 'lib/desk.js' && n !== 'lib/review.js' && n !== 'views/watchlist/state.js')) {
     for (const m of s.matchAll(/api\.post\(/g)) {
       const before = s.slice(Math.max(0, m.index - 900), m.index);
-      assert.match(before, /(onClick|onSelect)=\{async|const (mark|doRefresh|changeMonitoring|decide) = async|async \(\) => \{/, `${f}: a write outside an action`);
+      assert.match(before, /(onClick|onSelect)=\{async|const (mark|doRefresh|changeMonitoring|decide|act) = async|async \(\) => \{/, `${f}: a write outside an action`);
     }
   }
   // Nothing starts research: the research dialog is the only way, and it opens on a click.
