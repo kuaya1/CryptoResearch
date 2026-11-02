@@ -1992,7 +1992,9 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       if (mandateLine || !DB.stopsProject(full)) throw err;
       basis = DB.unavailableBasis({ decision: full, error: err });
     }
-    op.writeJson(DB.basisRel(pid, full.decision_id), basis, { mode: 'create' });
+    // The record and its digest line commit together (audit F3): its bytes
+    // are verified against the ledger every time it is read.
+    basis = DB.stageRecord(op, pid, basis);
     return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null, basis: DB.describe(basis, full) };
   });
   const res = out.result || {};
