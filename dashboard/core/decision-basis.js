@@ -403,4 +403,4 @@ function viewOf(ws, pid, decisionId) {
   };
 }
 
-module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, buildBasis, unavailableBasis, stopsProject, identityProblems, describe, stateOf, viewOf };
+module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, buildBasis, unavailableBasis, stopsProject, identityProblems, describe, stateOf, viewOf, executionOf };
