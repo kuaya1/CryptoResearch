@@ -511,7 +511,18 @@ function forcedTicket(step, ticket, o) {
 // The claim's answers that stop the runner (cr-pilot-claim@1): another runner
 // holds the project, an expired dispatch waits to be reconciled, the one
 // correction was used, or Eric paused automation.
-const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused', 'session_ceiling', 'sessions_unknown']);
+const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused', 'stopped', 'session_ceiling', 'sessions_unknown']);
+
+// Before a session's answer is saved: Eric's stop since the dispatch lets the
+// claim go as autonomy_stopped (tickets check); the answer stays in its
+// scratch file and nothing is saved. Null when the save may go on.
+function stoppedSince(cli, project, token, file) {
+  if (!token) return null;
+  const c = cli(['tickets', 'check', project, '--token', token]);
+  if (c.status !== 'stopped') return null;
+  say(`    Not saved: ${c.words} The session's answer is kept at ${file}.`);
+  return { stop: 'stopped', words: c.words || null, session_stopped: true };
+}
 
 // A claim not yet bound is let go when the runner stops; a bound one (an
 // agent was dispatched and its outcome is unknown) is left to expire, so the
@@ -572,6 +583,8 @@ function localSteps(o, cli, h, agent = claude) {
       say(`    Agent 1: claude -p on the frozen research prompt (${prompt.length} characters)…`);
       const report = run(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
       const f = scratch('researcher', 'agent1-report.md', report);
+      const halted = stoppedSince(cli, o.project, token, f);
+      if (halted) { Object.assign(h, { token: null, bound: false }); return halted; }
       const saved = cli(['import-text', '--provider', 'claude', '--project', o.project, '--text-file', f, '--run', runId]);
       say(`    saved: ${saved.status}${saved.report_id ? ` ${saved.report_id}` : ''}${saved.message ? ` — ${saved.message}` : ''}`);
       if (saved.verified === false) throw new Error('The report did not read back as written; run the pilot again (an identical save is recognized).');
@@ -596,6 +609,8 @@ function localSteps(o, cli, h, agent = claude) {
       say(`    Agent 2: claude -p on the frozen Prosecutor prompt ${t.ticket_id} (${prompt.length} characters)…`);
       const ticket = run(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
       const f = scratch('prosecutor', 'agent2-ticket.md', ticket);
+      const halted = stoppedSince(cli, o.project, token, f);
+      if (halted) { Object.assign(h, { token: null, bound: false }); return halted; }
       const saved = cli(['tickets', 'import', o.project, t.ticket_id, '--text-file', f]);
       say(`    saved: ${saved.status} ${saved.receipt_id || ''} — ${saved.message}`);
       if (saved.verified === false) throw new Error('The ticket did not read back as written; run the pilot again.');
@@ -774,7 +789,7 @@ async function runOnline(o, { run = claude, out = say, fetchImpl = globalThis.fe
       }
       return stop('reconcile', `${err.message} The session's answer is kept at ${f}.${kept} ${ONLINE_RECONCILE(o.project)}`);
     }
-    out(`    saved: ${done.status} ${done.report_id || done.receipt_id || ''}${done.words ? ` — ${done.words}` : ''}`);
+    out(`    ${done.status === 'stopped' ? 'not saved' : 'saved'}: ${done.status} ${done.report_id || done.receipt_id || ''}${done.words ? ` — ${done.words}` : ''}`);
     if (done.status === 'unverified') return stop('reconcile', `${done.words || 'The save did not verify.'} The session's answer is kept at ${f}.`);
     if (done.status !== 'saved') return stop(done.status || 'refused', `${done.words || 'The desk did not save it.'} The session's answer is also kept at ${f}.`);
   }
@@ -939,13 +954,15 @@ async function runAll(o, {
         if (r && r.stop) row.stop = r.stop;
         if (r && r.claims) row.claims = r.claims;
         if (r && r.sessions && r.sessions.length) row.sessions = r.sessions;
+        if (r && r.session_stopped) row.session_stopped = true;
       } catch (err) {
         row.outcome = 'error';
         row.error = String(err && err.message || err).slice(0, 300);
         out(`    ${s.project_id}: ${row.error}`);
       }
       row.agents = before - budget.left;
-      if (row.stop) row.outcome = row.stop === 'cap' ? 'cap' : 'not_dispatched';
+      // A session Eric's stop overtook ran but saved nothing: stopped, never done.
+      if (row.stop) row.outcome = row.stop === 'cap' ? 'cap' : row.stop === 'stopped' && (row.sessions || row.session_stopped) ? 'stopped' : 'not_dispatched';
       if (row.stop === 'reconcile' && !log.needs_eric.some((x) => x.project_id === s.project_id)) log.needs_eric.push({ project_id: s.project_id, step: s.step, words: reconcileWords(s.project_id) });
       // That project again, at zero tokens.
       try {

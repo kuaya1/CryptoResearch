@@ -319,6 +319,14 @@ Every value was read back from the chain on 2026-10-30. Rows and ceilings alread
 
 **Pause:** `automation.paused` now stops the online pilot too. The connector's `autonomous_pilot_queue` answers `paused` for every step, and `npm run pilot -- --desk=online` dispatches no further agent.
 
+**One stop per project stops everything on it** (`cr-automation-gate@1`, 2026-11-02; `mandate-authority.js` `automationGate`, `tests/stop-halts-pilot.test.js`):
+
+- **What stops a project.** A veto or Undo of Eric's, an archive (current or in its history), or his explicit stop (`POST /api/projects/<id>/autonomy {"action":"stop"}`, `tickets autonomy <project> --stop`). History that does not read stops it too.
+- **What it halts.** Every automated effect on that project: the pilot's next step (`blocked`, with the words), its claim, prepare and bind; paper-mandate grants, re-opens and openings; automatic admission's remaining effects. One function answers for all of them; no path keeps its own check.
+- **In flight.** A claim still `claimed` or `preparing` is let go as `autonomy_stopped` and no session starts. A session already `dispatched` runs to its end, but its answer is not saved: the claim is let go as `autonomy_stopped`, never `saved`, and the session still counts against the day. A dispatch whose outcome is unknown stays `reconcile` for Eric.
+- **The pause is unchanged.** It stops new claims, prepares and binds; work already dispatched may still settle.
+- **Un-stopping** is only Eric's rearm (`{"action":"rearm"}`, `--rearm`), one logged line with who, when and what it clears. Resuming, re-enrolling in the pilot or re-arming the mandate never clears a stop.
+
 ## Automatic admission of scout leads (`cr-lead-admission@1`, 2026-10-31)
 
 `core/lead-admission.js`, run by the existing `leads` job (no new scheduler or queue). Off by default. When armed, it admits at most `daily_limit` ELIGIBLE leads a New York day, one pipeline at a time. **ELIGIBLE means eligible for research, never approved to trade.** An admission does what Eric's "Confirm and request research" does (the intake record, the project, a Claude run), then enrolls the project in the pilot and approves its exit-quote target. Every gate after that stands unchanged: the Prosecutor, the contract gate, the exit cost, the paper mandate (the only thing that grants paper execution), the trader's rules and the book.
@@ -389,7 +397,6 @@ A meter that has never run reads as 0 used. One that cannot be read holds admiss
 
 **Residual limits.**
 
-- **The pilot ignores an autonomy stop** (`pilot-claims.js`, unchanged). The stop halts an admission's remaining effects and every mandate grant. To stop agent sessions on a project, take it off the pilot or archive it.
 - **No Settings-page control yet.** Arm it from the CLI or the console patch.
 - **Held leads are not marked.** They are reported, not written on the lead.
 

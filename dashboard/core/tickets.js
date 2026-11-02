@@ -1890,10 +1890,11 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       try { MA.parseStrict(cur, rel, 'The decision history'); } catch (err) { throw new OpError('REFUSED', `Not recorded: ${err.message}`, { reason: 'MANDATE_HISTORY_UNREADABLE' }); }
       const m = mandateOf(ws, Date.now());
       if (!m.on) throw new OpError('REFUSED', `Not recorded: ${m.why}`, { reason: 'MANDATE_OFF' });
-      // Eric's latch on the project: any veto, Undo, archive or stop of his
-      // not cleared by his rearm stops every mandate action, re-opens included.
-      const st = MA.autonomyOf(ws, pid, { decisions: lines });
-      if (st.suspended) throw new OpError('REFUSED', `Not recorded: ${st.words}`, { reason: 'MANDATE_SUSPENDED' });
+      // The desk's one gate (automationGate): any veto, Undo, archive or stop
+      // of Eric's not cleared by his rearm, or the pause, stops every mandate
+      // action, re-opens included.
+      const gate = MA.automationGate(ws, pid, { decisions: lines });
+      if (!gate.ok) throw new OpError('REFUSED', `Not recorded: ${gate.words}`, { reason: gate.project_stopped ? 'MANDATE_SUSPENDED' : 'MANDATE_OFF' });
       const g = gateGrade(r.researcher && r.researcher.grade);
       if (action === 'approve' || action === 'halve') {
         if (lines.some((l) => l.receipt_id === rid)) throw new OpError('REFUSED', 'Not recorded: this ticket already has a decision on record. The paper mandate grants only a ticket nobody has decided.', { reason: 'MANDATE_PRIOR_DECISION' });
@@ -2489,7 +2490,12 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   const research = require('./research');
   const project = require('./projects').getProject(ws, pid);
   const base = { project_id: pid, name: project.name, pilot: Boolean(readProfile(ws, pid).pilot) };
-  if (project.status === 'archived') return { ...base, step: 'blocked', why: 'Archived.' };
+  // Eric's stop on the project (mandate-authority.js automationGate: a veto
+  // or Undo of his, an archive, an explicit stop, or history that does not
+  // read) blocks every step until he rearms it. The desk-wide pause is not a
+  // step: its callers say "paused" beside the step it would be.
+  const gate = require('./mandate-authority').automationGate(ws, pid, { project });
+  if (gate.project_stopped) return { ...base, step: 'blocked', stopped: gate.code, why: gate.words };
   if (!project.identity || project.identity.status !== 'verified') return { ...base, step: 'blocked', why: 'The identity is not verified.' };
   const staleDays = (ws.settings.freshness && ws.settings.freshness.research_stale_days) || 90;
   const waitingRun = research.listRuns(ws, pid).filter((r) => !r.broken && r.jobs && r.jobs.claude && ['unconfigured', 'queued', 'dispatching', 'running', 'uncertain'].includes(r.jobs.claude.state)).pop();
@@ -2637,15 +2643,16 @@ function mandateSweep(ws, { now = Date.now() } = {}) {
     const ctx = { now, mandate: m, sizing: sizingOf(ws), projects, sources, lines: [] };
     const candidates = [];
     for (const p of projects) {
-      if (p.status === 'archived' || !readProfile(ws, p.project_id).pilot) continue;
+      if (!readProfile(ws, p.project_id).pilot) continue;
       const pid = p.project_id;
       const skip = (receiptId, rule, words) => out.skipped.push({ project_id: pid, receipt_id: receiptId, rule, words: String(words || '').slice(0, 300) });
       try {
         if (unreadable.has(pid)) { skip(null, 'R0', unreadable.get(pid)); continue; }
         const lines = linesOf.get(pid) || [];
-        // Eric's latch: suspended until he rearms (mandate-authority.js).
-        const st = MA.autonomyOf(ws, pid, { project: p, decisions: lines });
-        if (st.suspended) { skip(null, 'R0', st.words); continue; }
+        // The desk's one gate (an archive is one of Eric's stops): stopped
+        // until he rearms (mandate-authority.js automationGate).
+        const gate = MA.automationGate(ws, pid, { project: p, decisions: lines });
+        if (!gate.ok) { skip(null, 'R0', gate.words); continue; }
         if (!p.identity || p.identity.status !== 'verified') { skip(null, 'R1', 'The project has no verified token binding.'); continue; }
         const latest = listReceipts(ws, pid).filter((x) => !x.broken).pop();
         if (!latest) { skip(null, 'R2', 'The project has no ticket yet.'); continue; }
@@ -2709,11 +2716,12 @@ function mandateDue(ws, now = Date.now()) {
   if (!mandateOf(ws, now).on) return false;
   const MA = require('./mandate-authority');
   for (const p of require('./projects').listProjects(ws)) {
-    if (p.broken || p.status === 'archived' || !readProfile(ws, p.project_id).pilot) continue;
+    if (p.broken || !readProfile(ws, p.project_id).pilot) continue;
     const latest = listReceipts(ws, p.project_id).filter((x) => !x.broken).pop();
     if (!latest || latest.kind === 'desk_gate') continue;
     let lines;
     try { lines = MA.readDecisionsStrict(ws, p.project_id); } catch (_) { continue; }
+    if (!MA.automationGate(ws, p.project_id, { project: p, decisions: lines }).ok) continue;
     if (!lines.some((l) => l.receipt_id === latest.receipt_id)) return true;
   }
   return false;
