@@ -650,7 +650,7 @@ function localSteps(o, cli, h, agent = claude) {
 // released as agent_failed; its session still counts against the day.
 // Eric's override (--force-prosecution) is local only.
 const WORKER_FORMAT = 'cr-pilot-worker@1';
-const ONLINE_RECONCILE = (pid) => `Check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true}); nothing is run again until then.`;
+const ONLINE_RECONCILE = (pid) => `Check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true,"attempt_id":"<the attempt you checked>"}); nothing is run again until then.`;
 const sha256 = (t) => require('crypto').createHash('sha256').update(t, 'utf8').digest('hex');
 
 // The worker token, from %USERPROFILE%\.cryptoresearch\secrets.json

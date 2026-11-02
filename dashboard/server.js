@@ -1295,8 +1295,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // Signed in, reads only.
   route('GET', '/api/desk/controls', () => require('./core/desk-controls').view(ws));
   route('POST', '/api/projects/([^/]+)/pilot-claim/release', (m, req, res, body) => {
-    if (!(body && body.reconciled === true)) throw new HttpError(400, 'Release a pilot claim here only as reconciled ({"reconciled":true}), after you checked the desk.');
-    return after(require('./core/pilot-claims').release(ws, pid(m[1]), { reconciled: true }));
+    if (!(body && body.reconciled === true)) throw new HttpError(400, 'Release a pilot claim here only as reconciled ({"reconciled":true,"attempt_id":"…"}), after you checked the desk.');
+    if (typeof body.attempt_id !== 'string' || !/^pa_[0-9a-f]{16}$/.test(body.attempt_id)) throw new HttpError(400, 'Name the attempt you checked: {"reconciled":true,"attempt_id":"pa_…"}.');
+    return after(require('./core/pilot-claims').release(ws, pid(m[1]), { reconciled: true, attempt_id: body.attempt_id }));
   });
   // Eric cancels an open Prosecutor ticket (tickets.js cancelTicket): the
   // online counterpart of "tickets cancel <project> <ticket_id>". The ticket

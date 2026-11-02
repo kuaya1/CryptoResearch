@@ -328,10 +328,18 @@ function stopIfHalted(ws, pid, token, { now = Date.now() } = {}) {
 }
 
 // Let the claim go: by its token after the agent's save, or by Eric as
-// reconciled after an expired dispatch he checked.
-function release(ws, pid, { token = null, reconciled = false, outcome = null, now = Date.now() } = {}) {
+// reconciled after an expired dispatch he checked. A reconcile names the
+// attempt he checked (attempt_id), compared here under the lock with the
+// current claim: any other attempt is CHANGED with nothing written, so a
+// stale click can never release an attempt he did not check (audit F4).
+function release(ws, pid, { token = null, reconciled = false, attempt_id = null, outcome = null, now = Date.now() } = {}) {
+  if (reconciled && (typeof attempt_id !== 'string' || !attempt_id)) throw new OpError('INVALID', 'Name the attempt you checked (attempt_id) to release it as reconciled.');
   return withLock(ws, `pilot release ${pid}`, () => {
     const cur = read(ws, pid);
+    if (reconciled && (!cur || cur.attempt_id !== attempt_id)) {
+      const now_ = cur ? `the claim is now attempt ${cur.attempt_id} (${cur.released ? `released, ${cur.outcome}` : cur.state})` : 'there is no claim';
+      throw new OpError('CHANGED', `Not released: you checked attempt ${attempt_id}, but ${now_}. Check that attempt on the desk before you reconcile it.`, { checked: attempt_id, current: cur ? cur.attempt_id : null });
+    }
     if (!cur || cur.released) return { status: 'unchanged', claim: cur };
     if (!reconciled) held(ws, pid, token);
     else if (Date.parse(cur.expires_at) > now) throw new OpError('INVALID', 'The claim is still live; a runner may be working. Release it as reconciled only after it expires.');

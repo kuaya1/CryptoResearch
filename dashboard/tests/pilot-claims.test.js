@@ -75,8 +75,8 @@ test('an expired dispatch with no known outcome waits to be reconciled, never di
   const b = C.claim(s.ws, s.pid, { owner: 'B', now: later });
   assert.equal(b.status, 'reconcile');
   assert.match(b.words, /not dispatched again/);
-  assert.throws(() => C.release(s.ws, s.pid, { reconciled: true, now: now + 1000 }), /still live/);
-  assert.equal(C.release(s.ws, s.pid, { reconciled: true, now: later }).claim.outcome, 'reconciled');
+  assert.throws(() => C.release(s.ws, s.pid, { reconciled: true, attempt_id: a.claim.attempt_id, now: now + 1000 }), /still live/);
+  assert.equal(C.release(s.ws, s.pid, { reconciled: true, attempt_id: a.claim.attempt_id, now: later }).claim.outcome, 'reconciled');
   assert.equal(C.claim(s.ws, s.pid, { owner: 'B', now: later }).status, 'claimed_now', 'after Eric reconciles it, the next runner may claim');
 });
 
@@ -101,7 +101,7 @@ test('a real run bound under a provisional claim, then expired, waits to be reco
   assert.equal(b.status, 'reconcile', 'never claimed_now on an unresolved dispatch');
   assert.equal(b.claim.attempt_id, a.claim.attempt_id);
   assert.equal(C.read(s.ws, s.pid).token, a.token, 'nothing was written');
-  C.release(s.ws, s.pid, { reconciled: true, now: later });
+  C.release(s.ws, s.pid, { reconciled: true, attempt_id: a.claim.attempt_id, now: later });
   const c = C.claim(s.ws, s.pid, { owner: 'B', now: later });
   assert.equal(c.status, 'claimed_now');
   assert.notEqual(c.claim.attempt_id, a.claim.attempt_id, 'a new attempt after Eric reconciles');
@@ -128,7 +128,7 @@ test('an expired claim that never dispatched is taken over; one whose work lande
   const a = C.claim(s.ws, s.pid, { now });
   assert.equal(C.claim(s.ws, s.pid, { now: now + 1000 }).status, 'claimed', 'live: held');
   assert.equal(C.claim(s.ws, s.pid, { now: now + C.TTL_MS + 1000 }).status, 'claimed_now', 'never bound: safe to take over');
-  C.release(s.ws, s.pid, { reconciled: true, now: now + 3 * C.TTL_MS });
+  C.release(s.ws, s.pid, { reconciled: true, attempt_id: C.read(s.ws, s.pid).attempt_id, now: now + 3 * C.TTL_MS });
   // The research landed: the step moves on, so a dispatched claim on the old step does not block it.
   const c = C.claim(s.ws, s.pid, { now: now + 3 * C.TTL_MS });
   C.bind(s.ws, s.pid, c.token, { run_id: 'run_fictional' });

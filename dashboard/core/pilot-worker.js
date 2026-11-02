@@ -232,7 +232,7 @@ async function prepare(ws, pid, token, { now, clock = null, fetchImpl } = {}) {
 }
 
 // The words for a dispatch whose outcome the desk cannot settle by itself.
-const reconcileWords = (pid) => `Its outcome is not settled, so the claim stays dispatched and nothing is run again. After it expires, check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true}).`;
+const reconcileWords = (pid) => `Its outcome is not settled, so the claim stays dispatched and nothing is run again. After it expires, check ${pid} on the online desk, then release it there as reconciled (signed in: POST /api/projects/${pid}/pilot-claim/release with {"reconciled":true,"attempt_id":"<the attempt you checked>"}).`;
 
 function complete(ws, pid, token, { text, prompt_sha256, now = Date.now() } = {}) {
   const cur = claims.held(ws, pid, token);
