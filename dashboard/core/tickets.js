@@ -1971,6 +1971,11 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     };
     const full = { schema_version: 'cr.ticket-decision.v1', decision_id: `td_${sha256(`${pid}:${rid}:${action}:${at}:${lines.length}`).slice(0, 14)}`, project_id: pid, receipt_id: rid, ticket_id: r.ticket_id, ...line, note: text, decided_at: at, decided_by: mandateLine ? MANDATE_BY : by || ws.actor || null, request_id: reqId, ...(mandateLine ? { mandate: mandateLine } : {}), meaning: mandateLine ? MANDATE_MEANING : 'Eric\'s PM decision on the ticket: it records his choice and places no order.' };
     op.write(rel, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(full)}\n`);
+    // What the decision stood on (cr.decision-basis.v1), staged in this same
+    // operation: the line and its basis commit together or not at all. The
+    // line stays cr.ticket-decision.v1 (the Paper Book reads only that).
+    const DB = require('./decision-basis');
+    op.writeJson(DB.basisRel(pid, full.decision_id), DB.buildBasis(ws, { decision: full, receipt: r, receiptText: fs.readFileSync(ws.abs(receiptRel(pid, rid))), decisions: lines }), { mode: 'create' });
     return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null };
   });
   const res = out.result || {};
