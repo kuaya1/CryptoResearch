@@ -32,7 +32,7 @@ flowchart TD
 |---|---|
 | **GitHub Actions** | `scout-cron.yml` at 11:30 UTC (scheduled runs only while `SCOUT_ENABLED` is `true`), and the `test` check on every pull request |
 | **Render desk** | the web service (`server.js` → `dashboard/hosted.js`) and its 30-minute timer: snapshot, reviews, backup, fundamentals, screening, forensics, trader, leads (`jobs.js` `HOSTED_TIMER_JOBS`); the 2-minute research tick |
-| **Runner host** | the PC task `CryptoResearch pilot-all`, from the clean runner worktree, during B0–B3; then the Ops-1 Render Cron Job. One at a time, never both (Q1) |
+| **Runner host** | the PC task `CryptoResearch pilot-all`, from the clean runner worktree, during B0–B3; then the Ops-1 Render Cron Job, defined and suspended (#166, `docs/engineering/OPS1_RENDER_CRON.md`), not yet created. One at a time, never both (Q1) |
 | **PC offsite backup** | `\CryptoResearch\Hourly`, the only copy of the records off Render. It is not on the lifecycle's path: the desk runs without it |
 
 ## What the sheet says
@@ -67,9 +67,10 @@ Four different things, never read as one another. Merged is not deployed, and de
   - the autonomy completion blueprint with Eric's ratified answers, #162 `6e2db98`;
   - the runner's unattended mode and revision guard (blueprint PR 1), #163 `94cede6`;
   - honest job and housekeeping status (blueprint PR 2), #164 `21a11fa`;
-  - this sheet's host legend and the canon sync (blueprint PR 3), #165 (this pull request).
-- **Proposed** (not on `main` until Eric merges): the Ops-1 Render Cron Job definition and its preflight (blueprint PR 4, no pull request yet); the PM Cohort false-empty read, A5, a protected change Eric schedules himself (no pull request); the combined blueprint of 2026-11-02 (#134, closed unmerged).
-- **Deployed: the `/healthz` revision, read at a stated time.** Deployed means the commit on the `revision` line of the online desk's `/healthz`, read back at a stated UTC time, and nothing else: a merge, a Render dashboard or a doctor report is not a readback. Last read: `21a11fa` (#164) at 15:41Z on 2026-11-03. A later merge is not deployed until it is read back the same way.
-- **Operating proof: none yet.** No unattended run on the runner host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation.
+  - this sheet's host legend and the canon sync (blueprint PR 3), #165 `fbfb640`;
+  - Ops-1 defined, suspended: the Render Cron Job's specification and its preflight (blueprint PR 4), #166 (this pull request).
+- **Proposed** (not on `main` until Eric merges): the PM Cohort false-empty read, A5, a protected change Eric schedules himself (no pull request); the combined blueprint of 2026-11-02 (#134, closed unmerged).
+- **Deployed: the `/healthz` revision, read at a stated time.** Deployed means the commit on the `revision` line of the online desk's `/healthz`, read back at a stated UTC time, and nothing else: a merge, a Render dashboard or a doctor report is not a readback. Last read: `fbfb640` (#165) at 16:22Z on 2026-11-03. A later merge is not deployed until it is read back the same way.
+- **Operating proof: none yet.** The Ops-1 service is not created. No unattended run on the runner host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation.
 
 **Owner questions: answered.** Eric's answers to Q1–Q5 are §3 of `docs/engineering/AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` (#162), and they supersede the proposals in `OWNER_DECISIONS_2026-11-02.md`: Q1 one Render Cron Job (Ops-1) after the PC's supervised proof, one scheduler at a time; Q2 Healthchecks.io, `--max-agents=1`, STALE at 120 minutes; Q3 grouped by decider, researcher model version and execution policy, counts and rows only, no rate before 50 closed positions in a group; Q4 option B, the execution stamp stays `not_recorded` and the protected files untouched; Q5 B0–B3 only after PRs 1–4 are merged and deployed, on NMR if its contract hold has cleared at B0, else a clean-contract candidate already on the desk, by its stored identity, and never a forced fill. Still his and still open: the Law 1 credential, A5, the Constitution's Invariant 3 wording, and the baseline and fee-drag comparison. Fee totals already sit beside closed net P&L, so fees are not absent.
