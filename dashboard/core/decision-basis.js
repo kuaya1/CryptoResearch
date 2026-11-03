@@ -233,6 +233,14 @@ function identityProblems(rec, decision) {
     if (!Array.isArray(rec.research)) bad.push('research');
     if ('state' in rec || 'failure' in rec) bad.push('state');
   }
+  // A record whose digest could not be recorded (N1): only one of Eric's
+  // stops, its failure in words, and no ledger declaration beside it.
+  if ('digest_unrecorded' in rec) {
+    const u = rec.digest_unrecorded;
+    if (!u || typeof u !== 'object' || Array.isArray(u) || typeof u.words !== 'string') bad.push('digest_unrecorded');
+    if ('digest_ledger' in rec) bad.push('digest_ledger');
+    if (!stopsProject(decision)) bad.push('digest_unrecorded (only a stop is recorded without its digest)');
+  }
   return bad;
 }
 
@@ -262,14 +270,32 @@ const digestRel = (pid) => `projects/${pid}/tickets/basis-digests.jsonl`;
 const ledgerLines = (text) => String(text || '').split('\n').filter((l) => l !== '');
 
 // Stage a record and its digest line in the caller's operation. It never
-// parses the ledger, so a ledger that does not read cannot hold back a stop
-// (audit F1): its line still chains to the raw line before it.
-function stageRecord(op, pid, rec) {
+// parses the ledger, so a ledger whose lines do not read cannot hold back a
+// stop (audit F1): its line still chains to the raw line before it.
+//
+// A ledger whose bytes cannot be read at all (EIO, a permission, anything the
+// disk answers) cannot be appended to: its prior lines are unknown, and
+// writing without them would destroy them. For one of Eric's stops (his veto,
+// Undo or a pass that archives; `decision` is the line being recorded) that
+// never holds the decision back (N1, post-remediation audit 2026-11-02): the
+// record is staged with `digest_unrecorded` (the failure, in its own words)
+// in place of the ledger declaration, the ledger is left exactly as it was,
+// and every reader says the record's bytes cannot be checked. Anything else,
+// a grant, a mandate line, a watch, a trim, a re-open, is refused as before.
+function stageRecord(op, pid, rec, decision = null) {
   const { jsonText } = require('./fsx');
+  let cur;
+  try {
+    cur = op.readText(digestRel(pid), '');
+  } catch (err) {
+    if (!decision || decision.decision_id !== rec.decision_id || !stopsProject(decision)) throw err;
+    const unrecorded = { ...rec, digest_unrecorded: { code: err && typeof err.code === 'string' ? err.code.slice(0, 60) : null, words: String((err && err.message) || err || 'unknown failure').slice(0, 300) } };
+    op.write(basisRel(pid, rec.decision_id), Buffer.from(jsonText(unrecorded), 'utf8'), { mode: 'create' });
+    return unrecorded;
+  }
   const declared = { ...rec, digest_ledger: DIGEST_VERSION };
   const buf = Buffer.from(jsonText(declared), 'utf8');
   op.write(basisRel(pid, rec.decision_id), buf, { mode: 'create' });
-  const cur = op.readText(digestRel(pid), '');
   const lines = ledgerLines(cur);
   const line = {
     schema_version: DIGEST_VERSION,
@@ -311,8 +337,10 @@ function ledgerOf(ws, pid) {
 
 // The record at a decision's basis path, its bytes verified against the
 // ledger. Returns { buf, digest } with digest 'verified', 'not_recorded' (a
-// record from before the ledger) or 'none' (no record: a decision from before
-// the basis); anything that does not hold is thrown as INTEGRITY.
+// record from before the ledger), 'unrecorded' (one of Eric's stops recorded
+// while the ledger could not be read, N1; with its `failure`) or 'none' (no
+// record: a decision from before the basis); anything that does not hold is
+// thrown as INTEGRITY.
 function verifiedRecord(ws, pid, decision) {
   const id = decision.decision_id;
   const rel = basisRel(pid, id);
@@ -324,8 +352,13 @@ function verifiedRecord(ws, pid, decision) {
     if (sha256(buf) !== e.record_sha256) throw new OpError('INTEGRITY', `The decision basis ${rel} does not match its recorded SHA-256 (${e.record_sha256.slice(0, 12)}…): it changed after the decision. It is not rebuilt; restore it from a backup.`, { path: rel, record: 'The decision basis' });
     return { buf, digest: 'verified', entry: e };
   }
-  let declares = false;
-  if (buf !== null) { try { declares = Boolean(JSON.parse(buf.toString('utf8')).digest_ledger); } catch (_) { declares = false; } }
+  let parsed = null;
+  if (buf !== null) { try { parsed = JSON.parse(buf.toString('utf8')); } catch (_) { parsed = null; } }
+  const declares = Boolean(parsed && parsed.digest_ledger);
+  // One of Eric's stops recorded while the ledger could not be read (N1): no
+  // line was written for it, so its bytes cannot be checked. Read as such,
+  // never as verified; the identity check still holds it (identityProblems).
+  if (!declares && parsed && parsed.digest_unrecorded && stopsProject(decision)) return { buf, digest: 'unrecorded', failure: parsed.digest_unrecorded };
   const afterLedger = ledger.first_decided_at !== null && String(decision.decided_at) >= ledger.first_decided_at;
   if (declares || afterLedger) {
     throw new OpError('INTEGRITY', `${buf === null ? 'Neither the decision basis nor its digest is' : `The digest of the decision basis ${rel} is not`} on record in ${digestRel(pid)}, though ${declares ? 'the record declares one' : 'this decision came after the project\'s first digest'}. It is not rebuilt; restore it from a backup.`, { path: rel, record: 'The decision basis' });
@@ -337,12 +370,18 @@ const UNVERIFIED_WORDS = 'This basis was written before the desk recorded each b
 
 const UNAVAILABLE_WORDS = (rec) => `No basis could be recorded when this decision was made (${rec.failure && rec.failure.words ? rec.failure.words : 'no reason on record'}). It is never rebuilt. This says nothing of whether the decision still applies.`;
 
+const LEDGER_WORDS = (rec) => {
+  const u = rec.digest_unrecorded || {};
+  return `The digest ledger could not be read when this decision was recorded (${u.code ? `${u.code}: ` : ''}${u.words || 'no reason on record'}), so this record's SHA-256 was not recorded and its bytes cannot be checked: it is read as recorded and is not verified decision-time history. The stop was not held back for it, and no digest is added later.`;
+};
+
 // What a decide() answer says of the record it wrote or found, under the
 // identity contract. It never speaks of current authority.
 function describe(rec, decision) {
   const bad = identityProblems(rec, decision);
   if (bad.length) return { state: 'integrity', fields: bad, words: `The record at this decision's basis path does not match the decision (${bad.join(', ')}); its view refuses it as INTEGRITY. Nothing is rebuilt.` };
-  if (rec.schema_version === UNAVAILABLE_VERSION) return { state: 'unavailable', words: UNAVAILABLE_WORDS(rec) };
+  if (rec.schema_version === UNAVAILABLE_VERSION) return { state: 'unavailable', words: rec.digest_unrecorded ? `${UNAVAILABLE_WORDS(rec)} ${LEDGER_WORDS(rec)}` : UNAVAILABLE_WORDS(rec) };
+  if (rec.digest_unrecorded) return { state: 'unverified', words: LEDGER_WORDS(rec) };
   return { state: 'frozen' };
 }
 
@@ -460,7 +499,8 @@ function viewOf(ws, pid, decisionId) {
         format: VIEW_VERSION,
         label: 'unavailable',
         digest: verified.digest === 'verified' ? 'verified' : 'not_recorded',
-        words: `What this decision stood on could not be read under its lock, so its basis was not recorded. ${UNAVAILABLE_WORDS(basis)} No current value is put in its place.`,
+        words: `What this decision stood on could not be read under its lock, so its basis was not recorded. ${UNAVAILABLE_WORDS(basis)} No current value is put in its place.${verified.digest === 'unrecorded' ? ` ${LEDGER_WORDS(basis)}` : ''}`,
+        ...(verified.digest === 'unrecorded' ? { ledger_failure: basis.digest_unrecorded } : {}),
         decision,
         basis: null,
         unavailable: basis,
@@ -509,14 +549,17 @@ function viewOf(ws, pid, decisionId) {
     const unchecked = originals.filter((o) => o.digest === 'not_recorded');
     const shown = originals.map(({ provider, ...o }) => o);
     const reasons = [];
-    // A basis from before the digest ledger: read as recorded, never called verified.
-    if (verified.digest !== 'verified') reasons.push(UNVERIFIED_WORDS);
+    // A basis from before the digest ledger, or one of Eric's stops recorded
+    // while the ledger could not be read (N1): read as recorded, never called
+    // verified.
+    if (verified.digest === 'unrecorded') reasons.push(LEDGER_WORDS(basis));
+    else if (verified.digest !== 'verified') reasons.push(UNVERIFIED_WORDS);
     if (unchecked.length) {
       const named = unchecked.map((o) => `report ${o.report_id} (${o.provider || 'model not stated'})`).join(', ');
       reasons.push(`The original of ${named} carried no SHA-256 when this decision was made, so its bytes cannot be checked against what the decision stood on: this basis is read as recorded and is not verified decision-time history. No digest is put in its place.`);
     }
     const digest = verified.digest === 'verified' ? 'verified' : 'not_recorded';
-    if (reasons.length) return { format: VIEW_VERSION, label: 'unverified', words: reasons.join(' '), digest, decision, basis, originals: shown, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
+    if (reasons.length) return { format: VIEW_VERSION, label: 'unverified', words: reasons.join(' '), digest, ...(verified.digest === 'unrecorded' ? { ledger_failure: basis.digest_unrecorded } : {}), decision, basis, originals: shown, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
     return { format: VIEW_VERSION, label: 'decision_time', digest: 'verified', decision, basis, originals: shown, later: laterAnnotations(reports, decision.decided_at, ids), execution: executionOf(ws, decisionId) };
   }
   // Before cr.decision-basis.v1: rebuilt from what exists now, as of the decision.
