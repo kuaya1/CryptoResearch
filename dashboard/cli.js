@@ -16,6 +16,10 @@ Setup and health
   doctor                                 verify the folder with a real write, what this session can do, rubrics, server, scheduler
   capabilities                           what this session can do here (write/rename/delete, host, route)
   status                                 counts, freshness, pending work, review queue
+  prove-autonomy r0|b0|b1|b2|b3|cutover --desk=online [--project ID] [--out DIR]
+                 [--evidence DIR] [--offline] [--fixture] [--base SHA]
+                 [--mode development|post-merge] [--expected-revision SHA]
+                                         read-only evidence verifier; writes a new report bundle only
   serve [--port 4729] [--open]           start the local dashboard (127.0.0.1 only)
   recover [--status] [--resolve [--force --reason TEXT]]   finish/roll back interrupted writes; inspect or clear a write block
 
@@ -361,6 +365,12 @@ async function run(argv) {
   const actor = one(flags.actor) || 'cli';
 
   if (!cmd || cmd === 'help' || flags.help) return { _text: HELP };
+
+  // Before openWorkspace: even opening it normally may recover interrupted writes.
+  if (cmd === 'prove-autonomy') {
+    if (rest.length) throw Object.assign(new Error('prove-autonomy accepts exactly one step.'), { code: 'USAGE' });
+    return require('./core/autonomy-proof').command(sub, flags);
+  }
 
   if (cmd === 'init') {
     const r = resolveRoot(root);
@@ -1339,6 +1349,7 @@ if (require.main === module) {
     .then((out) => {
       if (out && out._silent) return;
       process.stdout.write(`${asJson && !(out && out._text) ? JSON.stringify(out, null, 2) : human(out)}\n`);
+      if (out && out.format === 'cr-autonomy-proof@1') process.exitCode = out.exit_code;
       if (out && ['possible_duplicate', 'failed', 'needs_project', 'prompt', 'provider_mismatch', 'run_mismatch', 'rejected', 'conflict'].includes(out.status)) process.exitCode = 2;
     })
     .catch((err) => {
