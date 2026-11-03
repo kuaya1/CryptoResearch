@@ -221,9 +221,9 @@ Recorded 2026-11-03. They replace the proposals in `OWNER_DECISIONS_2026-11-02.m
 | `docs/engineering/OPS1_RENDER_CRON.md` (new) | **The Render Cron Job specification, created SUSPENDED.** Name `cryptoresearch-runner`; same repository and `main` branch; region same as the desk; schedule `5 * * * *` (hourly at :05 UTC). Build command: `npm install -g @anthropic-ai/claude-code@<pinned version>`, plus `claude --version` echoed. Start command: `node dashboard/scripts/ops1-preflight.js && node dashboard/scripts/pilot.js --unattended --pilot-all --desk=online --max-agents=1 --model=$CR_PILOT_MODEL` |
 | | **Environment, names only:** `CR_PILOT_POLL_TOKEN`, `CR_PILOT_WORKER_TOKEN`, `CR_PILOT_RUNNER_ID=render-ops1`, `CR_PILOT_MODEL`, `CR_HEALTHCHECK_URL`, `CLAUDE_CODE_OAUTH_TOKEN`. Never `ANTHROPIC_API_KEY`: `-p` would bill it (`DESK_STATE.md:172`). Never any desk secret |
 | | **Not a Blueprint file.** The YAML shape is shown **inside this document only**. It is never a root `render.yaml`, so no Render Blueprint sync can create or resume the service |
-| | **Healthchecks.** Period 60 min, grace 30 min |
+| | **Healthchecks.** Period 60 min, grace 120 min: a run may take 95–110 minutes and Render delays the next scheduled run until it finishes, so a 30-minute grace would alert on a healthy long run |
 | | **Cutover and rollback** (§6, Cutover). The reconcile exception (Q1) |
-| | **UNVERIFIED items the drill must settle:** whether Render runs two instances of one cron job at once; whether a "Cancel run" kills the child `claude` process; the container's max run time; whether `.git` exists in the cron build (the guard uses `RENDER_GIT_COMMIT` either way); whether `RENDER_GIT_COMMIT` on the cron equals the web service's after the same push; the cron plan's price |
+| | **Render's platform, cited** (`render.com/docs/cronjobs`, read 2026-11-03): at most one active run of a cron job at a time; a run still active at the next scheduled time delays that run; an active run is stopped after 12 hours; schedules are UTC; a manual Trigger Run cancels the active run first; no persistent disk. **UNVERIFIED items the drill must settle:** whether a cancelled run's child `claude` process dies (Render documents `SIGTERM`/`SIGKILL` for deploys only); whether `.git` exists in the cron build (the guard accepts either); whether `RENDER_GIT_COMMIT` is the full SHA and equals the web service's after the same push (the preflight refuses otherwise); whether the build's global `claude` is on the run's `PATH`; Suspend, Resume and Trigger Run while suspended; the cron plan's price |
 | `dashboard/scripts/ops1-preflight.js` (new) | **Read-only, and prints no values.** It checks: Node 24.x; `claude --version` runs; each required env name is present (it prints `present` or `missing` only); `CR_PILOT_MODEL` is a full model ID, not an alias (`^claude-[a-z0-9-]+$`); `pilot.js --check-isolation` passes; `/healthz` revision equals `RENDER_GIT_COMMIT`. It exits 1 on any failure, so the start command never reaches the runner |
 | | **`--drill`** prints the kill and desk-down drill steps (§6, Ops-1 drill) and does nothing else |
 | Tests (new `dashboard/tests/ops1-preflight.test.js`) | With fictional env and stubbed `claude` and `fetch`: a missing name exits 1 and prints the name, never a value. A model alias (`opus`) is refused. A `/healthz` mismatch is refused. A test scans the output for every fictional secret value and finds none |
@@ -326,7 +326,7 @@ Do `BOUNDED_PAPER_READINESS.md` B0 (`:607-653`), steps 1–7, with these changes
    node dashboard/scripts/pilot.js --pilot-all --desk=online --unattended --model=<PINNED_MODEL> --max-agents=1 --dry-run
    ```
    The output must show the matching `revision`, the pre-poll list and exit 0. Then make a negative check: edit one tracked file, rerun, see the refusal and exit 1, and run `git checkout -- .`.
-4. **Heartbeat.** Create the Healthchecks check (period 60 min, grace 30 min, alerting Eric only). Set `CR_HEALTHCHECK_URL` for this shell only. Never print it. A dry run sends no ping and no `POST` sighting. The first `/start` and final ping, and the first `POST` sighting (Desk Controls poll `Fresh`), come from B1's run, the first invocation without `--dry-run`; record them in `B1.txt`.
+4. **Heartbeat.** Create the Healthchecks check (period 60 min, grace 120 min, alerting Eric only). Set `CR_HEALTHCHECK_URL` for this shell only. Never print it. A dry run sends no ping and no `POST` sighting. The first `/start` and final ping, and the first `POST` sighting (Desk Controls poll `Fresh`), come from B1's run, the first invocation without `--dry-run`; record them in `B1.txt`.
 5. **Meters and doctor** as in readiness B0 step 5, online through Preferences > System. Read the candle meter on Research > Outcomes > Trader's Paper Book.
 6. **The canary candidate (Q5).**
    - Read NMR's contract verdict on its Forensics tab.
@@ -384,10 +384,10 @@ Do `BOUNDED_PAPER_READINESS.md` B0 (`:607-653`), steps 1–7, with these changes
 2. **Drill while still suspended:** click "Trigger Run" once with the PC task Disabled.
    - The preflight passes.
    - The run shows the revision match, a `POST` sighting (Desk Controls poll `Fresh`, runner ID `render-ops1`) and the heartbeat `/start` and final ping in Healthchecks with `start: sent`.
-3. **Kill drill.**
-   - Trigger a run that has work and cancel it mid-session.
-   - The claim must stay `dispatched`, then `reconcile` on the next run (exit 3, Healthchecks `/3`). Eric reconciles it on Desk Controls.
-   - Record whether the `claude` child process died; that is an UNVERIFIED item in PR 4.
+3. **Kill drill** (`OPS1_RENDER_CRON.md` §5.2; `ops1-preflight.js --drill` prints it).
+   - Trigger a run that has work and cancel it mid-session with a second Trigger Run, which cancels the active run first.
+   - The claim's dispatched life is 90 minutes (`pilot-claims.js` `TTL_MS`). A run before 90 minutes from the claim sees the project held: `not_dispatched`, stop `claimed`, attention, exit 0, Healthchecks `/fail`. The first run after 90 minutes sees `reconcile`: exit 3, Healthchecks `/3`. Eric reconciles it on Desk Controls.
+   - **Pass condition for the child:** from the cancel until the reconcile, no report or ticket receipt is saved for the attempt, Desk Controls keeps it `dispatched` with the same attempt ID, and `sessions_today` does not grow for it. Any save or `complete` for that attempt after the cancel time is a FAIL.
 4. **Desk-down drill.** Run the recovery tests on Linux (`pilot-host-recovery.test.js`). CI's ubuntu run already does, so record that run's ID. **Never point a production runner at a fake desk.**
 5. **Cutover** (one scheduler, Q1):
    ```powershell
@@ -398,7 +398,8 @@ Do `BOUNDED_PAPER_READINESS.md` B0 (`:607-653`), steps 1–7, with these changes
    - Suspend the Render cron.
    - Only then, if needed, `-Enable` the PC task.
    - Admission off and mandate off as in `DESK_STATE.md` runbook step 6.
-7. **Write `cutover.txt`.** After that, the next canon pull request moves the sheet's runner host to "Ops-1, operating since `<date>`".
+7. **Write `cutover.txt`.**
+8. **Hosted mission proof** (`OPS1_RENDER_CRON.md` §7). With the PC task Disabled and read back, Ops-1 on Render completes at least one real unattended lifecycle: Researcher → Prosecutor → ticket receipt → mandate evaluation. Five results are recorded apart, each proven, pending or failed: `host_installed`, `runner_alive`, `lifecycle_proven`, `fill_proven`, `closed_outcome_proven`. A later one never stands in for an earlier one. After `lifecycle_proven`, the next canon pull request moves the sheet's runner host to "Ops-1, operating since `<date>`".
 
 ## 7. What this blueprint does not do
 
