@@ -46,7 +46,9 @@ button { font: inherit; color: inherit; }
 .nav a[aria-current="page"] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.04); }
 .bar .pin { margin-left: auto; font-size: 13px; color: var(--ink-3); white-space: nowrap; }
 .bar .pin code { font: 12.5px var(--mono); color: var(--ink-2); }
-@media (max-width: 720px) { .bar { padding: 0 16px; gap: 12px; } .mark span, .bar .pin { display: none; } }
+.bar .dl { font-size: 13.5px; font-weight: 600; padding: 7px 14px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--ink); white-space: nowrap; }
+.bar .dl:hover { text-decoration: none; background: var(--paper-2); }
+@media (max-width: 720px) { .bar { padding: 0 16px; gap: 12px; } .mark span, .bar .pin { display: none; } .bar .dl { margin-left: auto; } }
 
 /* ── Cover ───────────────────────────────────────────────── */
 .cover { max-width: 1120px; margin: 0 auto; padding: 96px 28px 120px; }
@@ -314,3 +316,62 @@ details.deeper li { margin: 0 0 8px; }
   .tour { bottom: 12px; }
   .mapnote { display: none; }
 }
+
+/* ── The printable document (#/print) ────────────────────── */
+@page { size: letter; margin: 0.7in 0.75in 0.75in; }
+@page wide { size: letter landscape; margin: 0.45in 0.5in; }
+body.printing .bar { display: none; }
+body.printing { font-size: 14px; }
+.printdoc { max-width: 7in; margin: 0 auto; padding: 40px 0; }
+.printdoc .pp { break-before: page; }
+.printdoc .pp:first-child { break-before: auto; }
+.printdoc .pp.wide { page: wide; }
+.printdoc .cover-p { padding-top: 1.2in; }
+.printdoc .cover-p h1 { font: 400 60px/1.02 var(--serif); letter-spacing: -.025em; margin: 18px 0 22px; }
+.printdoc .cover-p .lede { font: 400 20px/1.5 var(--serif); color: var(--ink-2); margin: 0 0 40px; }
+.printdoc .cover-p .facts b { font-size: 30px; }
+.printdoc .cover-p .hero-fig { margin-top: 56px; }
+.printdoc .colo { margin-top: 1.1in; font-size: 12.5px; color: var(--ink-3); }
+.printdoc code { font: 12px var(--mono); }
+.printdoc .ph { font: 400 32px/1.1 var(--serif); letter-spacing: -.015em; margin: 0 0 20px; }
+.printdoc .ptoc { list-style: none; padding: 0; margin: 0; }
+.printdoc .ptoc li { display: flex; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--line); font: 400 19px/1.3 var(--serif); }
+.printdoc .ptoc li.sub { padding-left: 32px; font: 15px/1.3 var(--sans); color: var(--ink-2); }
+.printdoc .ptoc span { font: 12.5px var(--mono); color: var(--accent); min-width: 22px; padding-top: 4px; }
+.printdoc .ch-p .num { font: 13px var(--mono); color: var(--accent); }
+.printdoc .ch-p h2 { font: 400 40px/1.06 var(--serif); letter-spacing: -.02em; margin: 10px 0 16px; }
+.printdoc .ch-p .lede { font: 400 19px/1.5 var(--serif); margin: 0 0 18px; }
+.printdoc .ch-p p { font-size: 14.5px; line-height: 1.65; color: var(--ink-2); margin: 0 0 12px; }
+.printdoc .fig { margin: 24px 0; padding: 22px; break-inside: avoid; }
+.printdoc .fig .flowfig .box.many > div, .printdoc .fig .flowfig .box { background: var(--paper); }
+.printdoc .deep { margin-top: 20px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 14px; break-inside: avoid; }
+.printdoc .deep b { font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
+.printdoc .deep ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); }
+.printdoc .deep li { margin-bottom: 5px; }
+.printdoc .seealso { font-size: 13px !important; color: var(--ink-3) !important; margin-top: 18px !important; }
+.printdoc .note { font-size: 13px; color: var(--ink-3); margin: 0 0 14px; }
+.printdoc .pc-s { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 6px; }
+.printdoc .pc-s a { font: 11px/1.5 var(--mono); color: var(--accent); word-break: break-all; }
+.printdoc .sheet { position: relative; overflow: hidden; border-radius: 12px; background: var(--paper-2); }
+.printdoc .sheet .stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.printdoc .keyline { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 12px; font-size: 12.5px; color: var(--ink-2); }
+.printdoc .keyline span { display: inline-flex; align-items: center; gap: 7px; }
+.printdoc .keyline svg { width: 14px; height: 14px; }
+.printdoc .pflow { break-inside: avoid; margin-bottom: 26px; }
+.printdoc .pflow h3 { font: 400 22px/1.2 var(--serif); margin: 0 0 4px; }
+.printdoc .pflow ol { margin: 0; padding-left: 22px; font-size: 13.5px; color: var(--ink-2); }
+.printdoc .pflow li { margin-bottom: 5px; }
+.printdoc .pflow li b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+.printdoc .pgroup h3 { font: 400 24px/1.2 var(--serif); margin: 26px 0 6px; break-after: avoid; }
+.printdoc .pgroup h3 span { font: 13px var(--sans); color: var(--ink-3); margin-left: 8px; }
+.printdoc .pc { padding: 12px 0; border-top: 1px solid var(--line); break-inside: avoid; }
+.printdoc .pc-h { display: flex; align-items: baseline; gap: 10px; }
+.printdoc .pc-h b { font-size: 15px; }
+.printdoc .pc-h span { font-size: 12.5px; color: var(--ink-3); }
+.printdoc .pc-m { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); margin: 2px 0 6px; }
+.printdoc .pc p { margin: 0 0 6px; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.printdoc .pc ul { margin: 0 0 6px; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.printdoc .pc-r { font-size: 12.5px; color: var(--ink-2); margin: 2px 0; }
+.printdoc .pc-r em { font-style: normal; font-weight: 600; color: var(--ink); margin-right: 4px; }
+.printdoc .pp > p { font-size: 14.5px; line-height: 1.65; color: var(--ink-2); }
+@media print { .printdoc { max-width: none; padding: 0; } .printdoc .fig, .printdoc .sheet { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }

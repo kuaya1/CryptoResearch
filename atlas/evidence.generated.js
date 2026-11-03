@@ -2,7 +2,7 @@
 window.ATLAS_EVIDENCE = {
  "repo": "kuaya1/CryptoResearch",
  "commit": "0c14b22f182a4476292b5470792d299936fa7826",
- "built": "2026-11-03T17:56:50.678Z",
+ "built": "2026-11-03T18:21:00.403Z",
  "refs": {
   "dashboard/core/market.js|fetchMarkets": 243,
   "dashboard/core/market.js|searchCoins": 305,

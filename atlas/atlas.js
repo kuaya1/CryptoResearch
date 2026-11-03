@@ -56,7 +56,11 @@
     document.querySelectorAll('[data-nav]').forEach((el) => el.toggleAttribute('aria-current', false));
     if (teardown) { teardown(); teardown = null; }
     document.body.style.overflow = '';
-    if (top === 'map') {
+    document.body.classList.toggle('printing', top === 'print');
+    if (top === 'print') {
+      document.title = 'CryptoResearch — The Living System Atlas';
+      teardown = renderPrint();
+    } else if (top === 'map') {
       document.querySelector('[data-nav="map"]').setAttribute('aria-current', 'page');
       document.title = 'Map · CryptoResearch System Atlas';
       teardown = renderMap(a === 'path' ? { flow: b, step: c ? +c : 0 } : { node: a });
@@ -205,8 +209,7 @@
   }
 
   /* ── Map ───────────────────────────────────────────────── */
-  function renderMap(init) {
-    document.body.style.overflow = 'hidden';
+  function stageMarkup() {
     const lanes = A.layers.map((l, i) => `<div class="lane-bg" style="left:${X0 + i * COLW - 14}px;top:16px;width:${W + 28}px;height:${Y0 + laneRows * ROWH - 30}px"></div>
       <div class="lane-h" style="left:${X0 + i * COLW}px;top:36px">${esc(l.name)}<span>${esc(l.note)}</span></div>`).join('');
     const bands = A.bands.map((b) => `<div class="lane-bg" style="left:${X0 - 14}px;top:${bandTop[b.id] - 64}px;width:${5 * COLW + W + 28}px;height:${(b.id === 'platform' ? 2 : 1) * ROWH + 70}px"></div>
@@ -218,13 +221,17 @@
     const edges = A.edges.map(([f, t, label], i) => { const g = edgeGeom(f, t);
       const quiet = !!byId[f].band !== !!byId[t].band;
       return `<g data-e="${i}" data-f="${f}" data-t="${t}"${quiet ? ' class="quiet"' : ''}><path d="${g.d}" marker-end="url(#ah)"/><text x="${g.mx}" y="${g.my - 6}" text-anchor="middle">${esc(label)}</text></g>`; }).join('');
+    return `${lanes}${bands}
+        <svg class="edges" width="${STAGE_W}" height="${STAGE_H}" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z"/></marker></defs>${edges}</svg>
+        ${nodes}`;
+  }
+
+  function renderMap(init) {
+    document.body.style.overflow = 'hidden';
     const counts = (key, val) => A.nodes.filter((n) => n[key] === val).length;
 
     app.innerHTML = `<div class="mapview" id="mapview">
-      <div class="viewport" id="vp"><div class="stage" id="stage" style="width:${STAGE_W}px;height:${STAGE_H}px">
-        ${lanes}${bands}
-        <svg class="edges" width="${STAGE_W}" height="${STAGE_H}" aria-hidden="true"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z"/></marker></defs>${edges}</svg>
-        ${nodes}</div></div>
+      <div class="viewport" id="vp"><div class="stage" id="stage" style="width:${STAGE_W}px;height:${STAGE_H}px">${stageMarkup()}</div></div>
       <aside class="panel guide" aria-label="Map guide">
         <h3>The whole system</h3><p class="sub">${A.nodes.length} parts, ${A.edges.length} connections. Drag to move, Ctrl + scroll to zoom, click any part.</p>
         <input class="search" id="q" type="search" placeholder="Find a part…" aria-label="Find a part" autocomplete="off">
@@ -436,6 +443,94 @@
     else if (init.node && byId[init.node]) select(init.node, { smooth: false });
     else paint();
     return () => { document.removeEventListener('keydown', onKey); removeEventListener('resize', onResize); };
+  }
+
+  /* ── The printable document (#/print → the PDF) ───────── */
+  function renderPrint() {
+    window.scrollTo(0, 0);
+    const built = new Date(EV.built || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const groups = [...A.layers, ...A.bands];
+    const place = (n) => groups.find((g) => g.id === (n.layer || n.band)).name;
+    const scale = Math.min(960 / STAGE_W, 640 / STAGE_H);
+    const linkList = (list) => list.map((e) => { const l = evLink(e); return `<a href="${esc(l.url)}">${esc(l.label)}</a>`; }).join('');
+    const component = (n) => {
+      const out = A.edges.filter((e) => e[0] === n.id), inc = A.edges.filter((e) => e[1] === n.id);
+      return `<div class="pc">
+        <div class="pc-h"><b>${esc(n.name)}</b><span>${esc(A.kinds[n.kind])}</span></div>
+        <div class="pc-m">${stMark(n.status)} ${esc(A.statuses[n.status].name)} · ${esc(A.controls[n.control].name)}</div>
+        <p>${esc(n.summary)}</p>
+        ${n.detail ? `<ul>${n.detail.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
+        ${n.gates ? `<div class="pc-r"><em>What has to be true</em> ${n.gates.map(esc).join(' · ')}</div>` : ''}
+        ${out.length ? `<div class="pc-r"><em>Sends to</em> ${out.map(([, t, l]) => `${esc(byId[t].name)} (${esc(l)})`).join(' · ')}</div>` : ''}
+        ${inc.length ? `<div class="pc-r"><em>Receives from</em> ${inc.map(([f, , l]) => `${esc(byId[f].name)} (${esc(l)})`).join(' · ')}</div>` : ''}
+        <div class="pc-s">${linkList(n.evidence)}</div></div>`;
+    };
+    app.innerHTML = `<div class="printdoc">
+      <section class="pp cover-p">
+        <div class="eyebrow">CryptoResearch · read from the code</div>
+        <h1>The Living System Atlas</h1>
+        <p class="lede">A private research desk where models read and argue, code measures and keeps the books, and Eric decides. A visual litepaper and a map of the whole system, each part linked to the source that makes it true.</p>
+        <div class="facts">
+          <div><b>${A.nodes.length}</b>components</div><div><b>${A.edges.length}</b>connections</div>
+          <div><b>${A.flows.length}</b>guided paths</div><div><b>${evCount}</b>source links</div></div>
+        <div class="hero-fig">${strip(false)}</div>
+        <p class="colo">Read from <code>main</code> at commit <code>${esc(EV.commit.slice(0, 7))}</code> of ${esc(EV.repo)} · ${esc(built)}</p>
+      </section>
+
+      <section class="pp">
+        <h2 class="ph">Contents</h2>
+        <ol class="ptoc">
+          <li><span>I</span>The Litepaper</li>
+          ${A.chapters.map((c) => `<li class="sub"><span>${c.num}</span>${esc(c.title)}</li>`).join('')}
+          <li><span>II</span>The map at a glance</li>
+          <li><span>III</span>Six guided paths</li>
+          <li><span>IV</span>Component reference</li>
+          <li><span>V</span>How to read this atlas</li>
+        </ol>
+      </section>
+
+      ${A.chapters.map((c) => `<section class="pp ch-p">
+        <div class="num">${c.num}</div><h2>${esc(c.title)}</h2><p class="lede">${esc(c.lede)}</p>
+        ${c.body.map((p) => `<p>${esc(p)}</p>`).join('')}
+        ${c.figure ? `<figure class="fig">${FIG[c.figure]()}</figure>` : ''}
+        ${c.deeper ? `<div class="deep"><b>The technical detail</b><ul>${c.deeper.map((d) => `<li>${esc(d)}</li>`).join('')}</ul></div>` : ''}
+        ${c.nodes ? `<p class="seealso">On the map: ${c.nodes.map((id) => esc(byId[id].name)).join(' · ')}</p>` : ''}
+        ${c.evidence ? `<div class="pc-s">${linkList(c.evidence)}</div>` : ''}
+      </section>`).join('')}
+
+      <section class="pp wide">
+        <h2 class="ph">II · The map at a glance</h2>
+        <p class="note">Left to right: where information goes. Below: where it runs and how it changes. Connections into the two bands are listed in the component reference.</p>
+        <div class="sheet" style="width:${Math.round(STAGE_W * scale)}px;height:${Math.round(STAGE_H * scale)}px">
+          <div class="stage" style="width:${STAGE_W}px;height:${STAGE_H}px;zoom:${scale}">${stageMarkup()}</div></div>
+        <div class="keyline">${Object.entries(A.statuses).map(([k, s]) => `<span>${stMark(k)} ${esc(s.name)}</span>`).join('')}
+          ${['human', 'automated', 'mixed'].map((k) => `<span>${ic(ctlIcon[k])} ${esc(A.controls[k].name)}</span>`).join('')}<span>✦ AI agent</span></div>
+      </section>
+
+      <section class="pp">
+        <h2 class="ph">III · Six guided paths</h2>
+        ${A.flows.map((f) => `<div class="pflow"><h3>${esc(f.name)}</h3><p class="note">${esc(f.blurb)}</p>
+          <ol>${f.steps.map(([id, t]) => `<li><b>${esc(byId[id].name)}</b> ${esc(t)}</li>`).join('')}</ol></div>`).join('')}
+      </section>
+
+      <section class="pp">
+        <h2 class="ph">IV · Component reference</h2>
+        ${groups.map((g) => `<div class="pgroup"><h3>${esc(g.name)} <span>${esc(g.note)}</span></h3>
+          ${A.nodes.filter((n) => (n.layer || n.band) === g.id).map(component).join('')}</div>`).join('')}
+      </section>
+
+      <section class="pp">
+        <h2 class="ph">V · How to read this atlas</h2>
+        <p>Every component, connection and claim was read from the repository’s code and documents. Each source link opens the exact line on GitHub, pinned to commit <code>${esc(EV.commit.slice(0, 7))}</code>, so it keeps pointing at what was read even as the code moves on.</p>
+        <p>A build step checks every cited function, constant or line against the files and refuses to produce the atlas if any is missing, or if a connection names a part that does not exist.</p>
+        <div class="tablebox"><table class="ctl"><thead><tr><th>Status</th><th>Means</th></tr></thead><tbody>
+          ${Object.entries(A.statuses).map(([k, s]) => `<tr><td>${stMark(k)} ${esc(s.name)}</td><td>${esc(s.words)}</td></tr>`).join('')}
+          ${Object.entries(A.controls).map(([, c]) => `<tr><td>${esc(c.name)}</td><td>${esc(c.words)}</td></tr>`).join('')}
+        </tbody></table></div>
+        <p class="note">“Operational” means built in the code on main. It does not mean deployed or proven in operation: the repository’s One Sheet keeps merged, deployed and operating apart, and states “Operating proof: none yet”.</p>
+      </section>
+    </div>`;
+    return null;
   }
 
   route();
