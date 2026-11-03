@@ -230,7 +230,8 @@ test('--print-schedule prints the pilot-task.ps1 registration (disabled, never /
   const w = temp(t);
   const before = hashTree(w.root);
   const out = await run(['arm-desk', '--print-schedule', '--workspace', w.root]);
-  assert.match(out._text, /^powershell -NoProfile -ExecutionPolicy Bypass -File ".*\\dashboard\\scripts\\pilot-task\.ps1" -Register -MaxAgents 1$/m);
+  assert.match(out._text, /^powershell -NoProfile -ExecutionPolicy Bypass -File ".*\\dashboard\\scripts\\pilot-task\.ps1" -Register -MaxAgents 1 -Model <PINNED_MODEL>$/m);
+  assert.match(out._text, /from the clean runner worktree/);
   assert.match(out._text, /disabled until you enable it\. Nothing was run/);
   assert.doesNotMatch(out._text, /schtasks|\/F\b/, 'no line that replaces a task by name');
   assert.deepEqual(hashTree(w.root), before, 'nothing written');
@@ -248,7 +249,16 @@ test('pilot-task.ps1 registers disabled, refuses a task it did not make, and run
   assert.match(text, /if \(\$t\) \{ Assert-Ours \$t; throw/, '-Register refuses while any task of that name exists');
   // The launcher is the job wrapper, never conhost (A4: measured under Task
   // Scheduler, conhost lost every exit code and left the runner's processes alive).
-  assert.match(text, /New-ScheduledTaskAction -Execute \$PowerShellExe -Argument \('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "\{0\}" "\{1\}" --pilot-all --desk=online --max-agents=\{2\}' -f \$Wrapper, \$node\.Path, \$MaxAgents\) -WorkingDirectory \$Root/);
+  assert.match(text, /New-ScheduledTaskAction -Execute \$PowerShellExe -Argument \('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "\{0\}" "\{1\}" --unattended --pilot-all --desk=online --max-agents=\{2\} --model=\{3\}' -f \$Wrapper, \$node\.Path, \$MaxAgents, \$Model\) -WorkingDirectory \$Root/);
+  // Unattended, a pinned model, at most one agent, a clean checkout
+  // (blueprint 2026-11-03 section 4 PR 1); each refusal registers nothing.
+  assert.match(text, /\[string\]\$Model/);
+  assert.ok(text.includes("if (-not $Model -or $Model -cnotmatch '^[A-Za-z0-9._:\\[\\]-]{1,80}$') { throw"), 'the model ID is required and checked');
+  assert.match(text, /if \(\$MaxAgents -gt 1\) \{ throw/);
+  assert.match(text, /& git -C \$Root status --porcelain/);
+  assert.match(text, /if \(-not \$co\.Clean\) \{ throw/);
+  const reg = text.slice(text.indexOf('if ($Register) {'), text.indexOf('Register-ScheduledTask -TaskName'));
+  for (const k of ['-cnotmatch', '$MaxAgents -gt 1', '-not $co)', '-not $co.Clean']) assert.ok(reg.includes(k), `${k} is checked before the task is registered`);
   assert.doesNotMatch(text, /-Execute \$Conhost|--headless "\{0\}"/);
   assert.match(text, /Volta shim/);
   assert.doesNotMatch(text, /-Force|schtasks|WakeToRun \$true/);

@@ -1,12 +1,25 @@
 <#
   The pilot-all task in Windows Task Scheduler (readiness PR, 2026-10-31;
-  launcher and -Status, bounded paper readiness A4, 2026-11-01).
+  launcher and -Status, bounded paper readiness A4, 2026-11-01; unattended,
+  pinned model, cap and clean checkout, autonomy blueprint 2026-11-03 section 4 PR 1).
 
   Registers "CryptoResearch pilot-all" for the signed-in Windows user (the one
   whose Claude subscription `claude` uses), DISABLED, so nothing runs until
   -Enable. Every 30 minutes while that user is signed in it starts
-      <node> dashboard\scripts\pilot.js --pilot-all --desk=online --max-agents=<N>
+      <node> dashboard\scripts\pilot.js --unattended --pilot-all --desk=online --max-agents=1 --model=<id>
   in the repository folder, with:
+    - --unattended, so the poll is the production POST that the desk records
+      as its sighting, and the runner's revision guard compares this
+      checkout's HEAD with the desk's /healthz revision before anything is
+      claimed (pilot.js: a dirty checkout or a different commit refuses);
+    - -Model <id> required and named in the arguments (pilot.js refuses an
+      unattended run without one); -Status says only whether one is named;
+    - -MaxAgents at most 1 (Q2, ratified 2026-11-03: the desk caps STALE at
+      one agent, so a larger count would only run sessions the desk does not
+      wait for);
+    - -Register refuses unless `git -C <repository> status --porcelain` prints
+      nothing. Register it from the dedicated runner worktree, never the
+      interactive checkout: the task runs whatever that folder holds;
     - the Node binary resolved and checked now (the repo's pinned major), not
       a shim or npm/cmd;
     - the launcher dashboard\scripts\pilot-task-run.ps1 in Windows PowerShell
@@ -36,15 +49,17 @@
   -Status reads the task, that log and the runner's lock (as pilot.js finds
   them) and says what the last scheduled start did: never_run, running,
   completed, failed, interrupted or unknown, with the reason
-  (dashboard\scripts\pilot-task-status.js). It changes nothing and prints no
-  action arguments or log text.
+  (dashboard\scripts\pilot-task-status.js). Its config adds unattended,
+  model_named (true or false, never the value), checkout_head and
+  checkout_clean. It changes nothing and prints no action arguments or log
+  text.
 
   It never replaces a task it did not make: a task of that name whose
   description is not this script's is refused, and -Register refuses while
   one exists (-Remove first, which removes only this script's). A task
   registered before 2026-11-01 still runs conhost: -Remove, then -Register.
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\scripts\pilot-task.ps1 -Register [-MaxAgents 1]
+    powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\scripts\pilot-task.ps1 -Register -Model <id> [-MaxAgents 1]
     ... -Status | -Enable | -Disable | -Remove
 #>
 [CmdletBinding()]
@@ -54,7 +69,8 @@ param(
   [switch]$Disable,
   [switch]$Status,
   [switch]$Remove,
-  [ValidateRange(0, 10)][int]$MaxAgents = 1
+  [ValidateRange(0, 10)][int]$MaxAgents = 1,
+  [string]$Model
 )
 $ErrorActionPreference = 'Stop'
 $TaskName = 'CryptoResearch pilot-all'
@@ -79,6 +95,17 @@ function Resolve-Node {
   if ($exe -match '\\Volta\\node\.exe$') { throw "node resolved to the Volta shim ($exe), not a binary." }
   [pscustomobject]@{ Path = $exe; Version = $ver }
 }
+# This checkout's HEAD and whether it is clean, from git; $null when git is
+# missing or fails.
+function Get-Checkout {
+  try {
+    $head = (& git -C $Root rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') { return $null }
+    $porcelain = (& git -C $Root status --porcelain 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0) { return $null }
+    [pscustomobject]@{ Head = [string]$head; Clean = ($porcelain.Trim() -eq '') }
+  } catch { $null }
+}
 function Iso($d) { if ($d -and $d.Year -ge 2000) { $d.ToUniversalTime().ToString('o') } else { $null } }
 
 # Task Scheduler's facts about this task only (cr-pilot-task-facts@1). The
@@ -92,6 +119,8 @@ function Get-Facts($t) {
   elseif ($a.Execute -ieq $PowerShellExe -and $a.Arguments -like ('* -File "' + $Wrapper + '" *')) { $launcher = 'job_wrapper' }
   $max = $null
   if ($a.Arguments -match '--max-agents=(\d+)') { $max = [int]$Matches[1] }
+  $unattended = ($a.Arguments -match '(^|\s)--unattended(\s|$)')
+  $modelNamed = ($a.Arguments -match '(^|\s)--model=\S')
   $running = @()
   $runningError = $null
   try {
@@ -118,6 +147,8 @@ function Get-Facts($t) {
     time_limit = [string]$t.Settings.ExecutionTimeLimit
     launcher = $launcher
     max_agents = $max
+    unattended = [bool]$unattended
+    model_named = [bool]$modelNamed
     running = $running
     running_error = $runningError
   }
@@ -137,12 +168,17 @@ function Show($t) {
   $config = $null
   if ($t) {
     $tr = $t.Triggers[0]
+    $co = Get-Checkout
     $config = [ordered]@{
       user = $t.Principal.UserId
       logon = [string]$t.Principal.LogonType
       run_level = [string]$t.Principal.RunLevel
       launcher = $facts.launcher
       max_agents = $facts.max_agents
+      unattended = $facts.unattended
+      model_named = $facts.model_named
+      checkout_head = $(if ($co) { $co.Head } else { $null })
+      checkout_clean = $(if ($co) { $co.Clean } else { $null })
       working_directory_is_repository = ($t.Actions[0].WorkingDirectory -ieq $Root)
       every = $tr.Repetition.Interval
       multiple_instances = [string]$t.Settings.MultipleInstances
@@ -158,14 +194,19 @@ function Show($t) {
 $t = Get-Task
 if ($Register) {
   if ($t) { Assert-Ours $t; throw "'$TaskName' is already registered by this script (state $($t.State)). Use -Status, -Enable or -Disable; -Remove first to register it again." }
+  if (-not $Model -or $Model -cnotmatch '^[A-Za-z0-9._:\[\]-]{1,80}$') { throw '-Register needs -Model <id> (letters, digits and . _ : [ ] -, at most 80): the unattended runner refuses to start without a pinned model. Nothing was registered.' }
+  if ($MaxAgents -gt 1) { throw "-MaxAgents $MaxAgents is above the desk's cap of 1 (Q2, ratified 2026-11-03). Nothing was registered." }
+  $co = Get-Checkout
+  if (-not $co) { throw "git could not read the checkout at $Root (git missing, or not a repository). Nothing was registered." }
+  if (-not $co.Clean) { throw "The checkout at $Root (HEAD $($co.Head)) has uncommitted or untracked changes, and the task would run them. Register from the clean runner worktree. Nothing was registered." }
   $node = Resolve-Node
   $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-  $action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" "{1}" --pilot-all --desk=online --max-agents={2}' -f $Wrapper, $node.Path, $MaxAgents) -WorkingDirectory $Root
+  $action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" "{1}" --unattended --pilot-all --desk=online --max-agents={2} --model={3}' -f $Wrapper, $node.Path, $MaxAgents, $Model) -WorkingDirectory $Root
   $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(5)) -RepetitionInterval (New-TimeSpan -Minutes 30)
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 3) -Hidden -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Disable
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -Description $Mark -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
-  Write-Output "Registered '$TaskName' DISABLED for $user with node $($node.Version) ($($node.Path)). Nothing runs until -Enable."
+  Write-Output "Registered '$TaskName' DISABLED for $user with node $($node.Version) ($($node.Path)), from $Root at $($co.Head). Nothing runs until -Enable."
   Show (Get-Task)
 } elseif ($Enable -or $Disable) {
   if (-not $t) { throw "'$TaskName' is not registered (-Register first)." }

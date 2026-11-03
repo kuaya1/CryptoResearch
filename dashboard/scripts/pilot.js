@@ -952,13 +952,71 @@ function heartbeatBase(env = process.env) {
   return { base: `${u.origin}${u.pathname.replace(/\/+$/, '')}`, words: null };
 }
 const heartbeatFinal = (health) => HEARTBEAT_FINAL[health] || '1';
+// A ping is delivered only when the service answered 2xx (audit A4,
+// blueprint 2026-11-03 §4 PR 1): a 503 is a refusal, recorded with its
+// status, never "sent". Either way the run's result is unchanged.
 async function sendPing(fetchImpl, url, timeoutMs = HEARTBEAT_TIMEOUT_MS) {
   try {
     const res = await fetchImpl(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
-    return { sent: true, status: res && typeof res.status === 'number' ? res.status : null };
+    return { sent: true, ok: Boolean(res && res.ok === true), status: res && typeof res.status === 'number' ? res.status : null };
   } catch (err) {
-    return { sent: false, status: null, reason: err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : 'unreachable' };
+    return { sent: false, ok: false, status: null, reason: err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : 'unreachable' };
   }
+}
+// What a ping's answer is recorded as: 'sent' (2xx), 'http_<status>' (any
+// other answer) or the reason it never arrived.
+const pingWord = (r) => (r.sent ? (r.ok ? 'sent' : `http_${r.status === null ? 'unknown' : r.status}`) : r.reason);
+
+// The runner's revision guard (audit E1, blueprint 2026-11-03 §4 PR 1): an
+// unattended online run executes only the code the desk runs. Before any
+// lock, poll or claim it compares this checkout's commit with the revision
+// the desk's /healthz reports, all 40 hex characters, and refuses when either
+// is unknown, the checkout has uncommitted changes, or the two differ.
+const REVISION_RE = /^[0-9a-f]{40}$/;
+const HEALTHZ_TIMEOUT_MS = 10000;
+// On Render the deploy's commit (RENDER_GIT_COMMIT; a build is immutable, so
+// clean by construction); elsewhere git itself, which also reads a worktree
+// (core/revision.js readGitHead does not: there .git is a file).
+function runnerRevision({ env = process.env, root = ROOT, run = spawnSync } = {}) {
+  const rc = env && typeof env.RENDER_GIT_COMMIT === 'string' ? env.RENDER_GIT_COMMIT.trim().toLowerCase() : '';
+  if (rc) {
+    if (!REVISION_RE.test(rc)) return { commit: null, source: 'render', clean: null, words: 'RENDER_GIT_COMMIT is set but is not a 40-character commit ID.' };
+    return { commit: rc, source: 'render', clean: true };
+  }
+  const git = (args) => run('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  const head = git(['rev-parse', 'HEAD']);
+  if (!head || head.error || head.status !== 0) return { commit: null, source: 'git', clean: null, words: `This checkout's commit could not be read (${head && head.error ? head.error.code || 'git did not run' : `git exited ${head ? head.status : 'unknown'}`}).` };
+  const commit = String(head.stdout || '').trim().toLowerCase();
+  if (!REVISION_RE.test(commit)) return { commit: null, source: 'git', clean: null, words: 'git did not name a 40-character commit for this checkout.' };
+  const st = git(['status', '--porcelain']);
+  if (!st || st.error || st.status !== 0) return { commit, source: 'git', clean: null, words: 'Whether this checkout has uncommitted changes could not be read (git status failed).' };
+  return { commit, source: 'git', clean: String(st.stdout || '').trim() === '' };
+}
+async function deskRevision(fetchImpl, origin, timeoutMs = HEALTHZ_TIMEOUT_MS) {
+  let res;
+  try {
+    res = await fetchImpl(`${origin}/healthz`, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    return { commit: null, words: `The desk's /healthz did not answer (${err && (err.name === 'TimeoutError' || err.name === 'AbortError') ? 'timeout' : 'unreachable'}).` };
+  }
+  if (!res || res.status !== 200) return { commit: null, words: `The desk's /healthz answered ${res && typeof res.status === 'number' ? res.status : 'nothing'}.` };
+  let text = '';
+  try { text = await res.text(); } catch (_) { return { commit: null, words: 'The desk\'s /healthz answer did not read.' }; }
+  const m = /^revision ([0-9a-f]{40})\b/m.exec(String(text));
+  if (!m) return { commit: null, words: 'The desk\'s /healthz names no 40-character revision.' };
+  return { commit: m[1] };
+}
+async function revisionGuard(o, { env, fetchImpl, runnerRevisionImpl, deskRevisionImpl }) {
+  const runner = runnerRevisionImpl();
+  let desk;
+  try { desk = await deskRevisionImpl(fetchImpl, deskUrlOf(o, env)); } catch (err) { desk = { commit: null, words: String(err && err.message || err).slice(0, 200) }; }
+  const rec = { runner: runner.commit || null, desk: desk.commit || null, source: runner.source || null, clean: runner.clean === undefined ? null : runner.clean };
+  let why = null;
+  if (!runner.commit) why = runner.words || 'This checkout\'s commit is unknown.';
+  else if (runner.clean !== true) why = runner.clean === false ? `This checkout has uncommitted changes (git status --porcelain is not empty) at ${runner.commit.slice(0, 7)}.` : runner.words || 'Whether this checkout is clean is unknown.';
+  else if (!desk.commit) why = desk.words || 'The desk\'s revision is unknown.';
+  else if (runner.commit !== desk.commit) why = `This runner is at ${runner.commit.slice(0, 7)} but the desk runs ${desk.commit.slice(0, 7)}.`;
+  return { rec, why };
 }
 
 const homeDir = () => path.join(os.homedir(), '.cryptoresearch');
@@ -1050,6 +1108,7 @@ async function runAll(o, {
   lockFile = lockPath(), logFile = pilotLogPath(), out = say, now = () => Date.now(), pid = process.pid,
   runLocalImpl = runLocal, runOnlineImpl = runOnline, newInvocationId = () => require('crypto').randomUUID(),
   pingFetch = globalThis.fetch, newRid = () => require('crypto').randomUUID(),
+  runnerRevisionImpl = () => runnerRevision({ env }), deskRevisionImpl = deskRevision,
 } = {}) {
   const log = { format: 'cr-pilot-all@1', started_at: new Date(now()).toISOString(), desk: o.desk, max_agents: o.maxAgents, dry_run: Boolean(o.dryRun), paused: null, polled: [], dispatches: [], needs_eric: [], error: null, exit: null };
   // The heartbeat: at most two pings, never the URL in a line or the log.
@@ -1058,7 +1117,8 @@ async function runAll(o, {
   const rid = hb.base ? newRid() : null;
   if (hb.base) {
     const r = await sendPing(pingFetch, `${hb.base}/start?rid=${encodeURIComponent(rid)}`);
-    log.heartbeat = { rid, start: r.sent ? 'sent' : r.reason, final: null };
+    log.heartbeat = { rid, start: pingWord(r), final: null };
+    if (r.sent && !r.ok) out(`The heartbeat's start ping was refused (HTTP ${r.status}); the run's result is unchanged.`);
   }
   const production = o.desk === 'online' && Boolean(o.unattended) && !o.dryRun;
   let finished = false;
@@ -1074,8 +1134,9 @@ async function runAll(o, {
       const ping = heartbeatFinal(log.health);
       const r = await sendPing(pingFetch, `${hb.base}/${ping}?rid=${encodeURIComponent(rid)}`);
       log.heartbeat.final = ping;
-      log.heartbeat.final_sent = r.sent ? 'sent' : r.reason;
+      log.heartbeat.final_sent = pingWord(r);
       if (!r.sent) out(`The heartbeat's final ping was not delivered (${r.reason}); the run's result is unchanged.`);
+      else if (!r.ok) out(`The heartbeat's final ping was refused (HTTP ${r.status}); the run's result is unchanged.`);
     }
     finished = true;
     try {
@@ -1091,6 +1152,18 @@ async function runAll(o, {
   // never left to whatever the host's Claude Code settings choose.
   if (o.unattended && !o.model) { log.error = 'An unattended run names its model: --model=<id>. Nothing was claimed or dispatched.'; out(`pilot-all: ${log.error}`); return finish(1); }
   if (o.unattended) log.unattended = true;
+  // An unattended online run (dry runs included, so B0 can rehearse it) runs
+  // only the code the desk runs. A refusal polls, locks and claims nothing.
+  if (o.unattended && o.desk === 'online') {
+    const g = await revisionGuard(o, { env, fetchImpl, runnerRevisionImpl, deskRevisionImpl });
+    log.revision = g.rec;
+    if (g.why) {
+      log.error = `Revision guard: ${g.why} Nothing was polled, claimed or dispatched.`;
+      out(`pilot-all: ${log.error}`);
+      return finish(1);
+    }
+    out(`Revision: ${g.rec.runner.slice(0, 7)} (${g.rec.source}, clean) matches the desk.`);
+  }
   const lock = takeLock(lockFile, { now: now(), pid });
   if (!lock.ok) {
     out(`Another run is in progress (pid ${lock.held.pid}, since ${lock.held.started_at}); nothing is dispatched.`);
@@ -1224,7 +1297,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, pingWord, runnerRevision, deskRevision, revisionGuard, HEALTHZ_TIMEOUT_MS, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

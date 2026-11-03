@@ -17,6 +17,11 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const P = require('../scripts/pilot');
+// The revision guard (blueprint 2026-11-03 §4 PR 1) sees one fictional commit
+// on both sides, so these runs go on to the poll; pilot-revision-guard.test.js
+// covers the guard itself.
+const FICTIONAL_REV = 'f'.repeat(40);
+const SAME_REVISION = { runnerRevisionImpl: () => ({ commit: FICTIONAL_REV, source: 'git', clean: true }), deskRevisionImpl: async () => ({ commit: FICTIONAL_REV }) };
 const S = require('../core/pilot-sighting');
 const T = require('../core/tickets');
 const { mandateDesk } = require('./mandate-fixture');
@@ -158,7 +163,7 @@ test('a snapshot that fails writes nothing and leaves the earlier sighting as it
   T.pilotQueue = real;
 });
 
-test('STALE at 120 min for one agent and max_agents × 95 + 15 above it; a record that does not read is unknown, never fresh', (t) => {
+test('STALE at 120 min whatever the runner declares (the desk caps it at 1, Q2); a record that does not read is unknown, never fresh', (t) => {
   const s = desk(t);
   const t0 = Date.parse('2026-11-02T12:00:00.000Z');
   assert.equal(S.view(s.ws, { now: t0 }).state, 'never');
@@ -169,14 +174,14 @@ test('STALE at 120 min for one agent and max_agents × 95 + 15 above it; a recor
   assert.equal(stale.age_min, 121);
   assert.match(stale.words, /^STALE: the production poll is overdue\./);
   assert.match(stale.words, /not proof that no grade exists or that no session is running/);
-  // A larger declared cap raises the threshold, never lowers it.
-  assert.equal(S.staleAfterMin(0), 120);
-  assert.equal(S.staleAfterMin(1), 120);
-  assert.equal(S.staleAfterMin(2), 205);
-  assert.equal(S.staleAfterMin(4), 395);
+  // A runner's declared cap never stretches the threshold past the desk's
+  // own (audit E4/S1, blueprint 2026-11-03 §4 PR 1; before it, 2 read 205 min,
+  // 4 read 395 and 10 read 965).
+  assert.equal(S.DESK_MAX_AGENTS, 1);
+  for (const n of [0, 1, 2, 4, 10]) assert.equal(S.staleAfterMin(n), 120, `declared ${n}`);
   S.record(s.ws, fields({ max_agents: 2 }), { now: t0 });
-  assert.equal(S.view(s.ws, { now: t0 + 200 * MIN }).state, 'fresh');
-  assert.equal(S.view(s.ws, { now: t0 + 206 * MIN }).state, 'stale');
+  assert.equal(S.view(s.ws, { now: t0 + 120 * MIN }).state, 'fresh');
+  assert.equal(S.view(s.ws, { now: t0 + 121 * MIN }).state, 'stale');
 
   // Never backward: an older sighting does not replace a newer one.
   S.record(s.ws, fields({ invocation_id: 'inv-late-fictional' }), { now: t0 + 10 * MIN });
@@ -236,7 +241,7 @@ test('the runner sights only unattended, online and not dry; attended and dry ru
 
   // Unattended but dry: still the GET; no sighting.
   seen.length = 0;
-  assert.equal(await P.runAll({ ...base, unattended: true, model: 'claude-fictional', dryRun: true }, { fetchImpl, token: POLL, workerToken: WORKER, agent, out: quiet, ...files('dry') }), 0);
+  assert.equal(await P.runAll({ ...base, unattended: true, model: 'claude-fictional', dryRun: true }, { fetchImpl, token: POLL, workerToken: WORKER, agent, out: quiet, ...SAME_REVISION, ...files('dry') }), 0);
   assert.deepEqual(seen, ['GET /api/pilot/queue']);
   assert.equal(stored(s.ws), null);
 
@@ -245,7 +250,7 @@ test('the runner sights only unattended, online and not dry; attended and dry ru
   envFor(t, { CR_PILOT_RUNNER_ID: 'render-cron' });
   seen.length = 0;
   const before = Date.now();
-  assert.equal(await P.runAll({ ...base, unattended: true, model: 'claude-fictional' }, { fetchImpl, token: null, workerToken: WORKER, agent, out: quiet, newInvocationId: () => INV, ...files('prod') }), 0);
+  assert.equal(await P.runAll({ ...base, unattended: true, model: 'claude-fictional' }, { fetchImpl, token: null, workerToken: WORKER, agent, out: quiet, newInvocationId: () => INV, ...SAME_REVISION, ...files('prod') }), 0);
   assert.deepEqual(seen, ['POST /api/pilot/worker/poll']);
   const rec = JSON.parse(stored(s.ws));
   assert.equal(rec.runner_id, 'render-cron');
@@ -260,7 +265,7 @@ test('the runner sights only unattended, online and not dry; attended and dry ru
 
   // A desk that refuses the worker poll fails the run (exit 1), never idle.
   delete process.env.CR_PILOT_WORKER_TOKEN_SHA256;
-  assert.equal(await P.runAll({ ...base, unattended: true, model: 'claude-fictional' }, { fetchImpl, workerToken: WORKER, agent, out: quiet, ...files('refused') }), 1);
+  assert.equal(await P.runAll({ ...base, unattended: true, model: 'claude-fictional' }, { fetchImpl, workerToken: WORKER, agent, out: quiet, ...SAME_REVISION, ...files('refused') }), 1);
   assert.equal(lastLog('refused').health, 'failure');
 });
 
@@ -272,4 +277,23 @@ test('the runner\'s ID: CR_PILOT_RUNNER_ID when set and valid, else the host nam
   assert.equal(P.runnerIdOf({}, ''), 'pilot');
   assert.equal(P.runnerIdOf({}, 'x'.repeat(200)).length, 80);
   assert.equal(P.launchEnv({ CR_PILOT_RUNNER_ID: 'render-cron', PATH: '/bin' }).CR_PILOT_RUNNER_ID, undefined);
+});
+
+test('a runner that declares 10 agents cannot stretch STALE: 121 min old is stale, said beside the desk cap (audit E4/S1)', (t) => {
+  const s = desk(t);
+  const t0 = Date.parse('2026-11-02T12:00:00.000Z');
+  S.record(s.ws, fields({ max_agents: 10 }), { now: t0 });
+  const fresh = S.view(s.ws, { now: t0 + 120 * MIN });
+  assert.equal(fresh.state, 'fresh');
+  assert.equal(fresh.max_agents, 10, 'the declaration is kept as declared');
+  assert.equal(fresh.desk_max_agents, 1);
+  assert.equal(fresh.stale_after_min, 120);
+  // Before the desk's cap this read fresh until 965 min (10 × 95 + 15).
+  const v = S.view(s.ws, { now: t0 + 121 * MIN });
+  assert.equal(v.state, 'stale');
+  assert.match(v.words, /declared 10 agents, above the desk's cap of 1; STALE stays at 120 min/);
+  assert.equal(S.view(s.ws, { now: t0 + 6 * 60 * MIN }).state, 'stale');
+  // At or under the cap, no notice.
+  S.record(s.ws, fields({ max_agents: 1 }), { now: t0 + 200 * MIN });
+  assert.doesNotMatch(S.view(s.ws, { now: t0 + 201 * MIN }).words, /declared/);
 });

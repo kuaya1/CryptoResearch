@@ -47,7 +47,7 @@ function sandbox(t) {
 const lastLog = (f) => JSON.parse(fs.readFileSync(f, 'utf8').trim().split('\n').pop());
 function pinger() {
   const urls = [];
-  return { urls, fn: async (url) => { urls.push(url); return { status: 200 }; } };
+  return { urls, fn: async (url) => { urls.push(url); return { status: 200, ok: true }; } };
 }
 const reply = (status, body) => ({ status, ok: status < 400, json: async () => body });
 

@@ -100,8 +100,9 @@ test('a record ahead of the desk\'s clock by any amount reads unknown, and a pol
     assert.equal(v2.invocation_id, 'inv-later-fictional');
     assert.equal(v2.ahead_ms, undefined);
   }
-  // The thresholds are the ones the blueprint set (no 95 × N sessions).
-  assert.deepEqual([S.staleAfterMin(1), S.staleAfterMin(2), S.staleAfterMin(4)], [120, 205, 395]);
+  // The threshold is the desk's 120 min whatever the runner declares (Q2,
+  // blueprint 2026-11-03 §4 PR 1; no 95 × N sessions past the desk's cap).
+  assert.deepEqual([S.staleAfterMin(1), S.staleAfterMin(2), S.staleAfterMin(4)], [120, 120, 120]);
   assert.equal(S.SKEW_MS, undefined, 'no allowance in which a future record reads fresh');
 });
 
