@@ -1,6 +1,6 @@
 # Desk state: the Junior Trader pipeline (Phase 1)
 
-Last updated 2026-10-28. This page covers the PM trade ticket pipeline and the contract for the trader to come. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
+Last updated 2026-11-03. This page covers the PM trade ticket pipeline and the contract for the trader to come. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
 
 ## North Star: Track 1 serves Track 2 (Eric, 2026-10-25)
 
@@ -439,14 +439,14 @@ Each step is checked before the next. No step prints a credential: tokens are re
    - the worker digest matches: the worker bearer on `POST /api/pilot/worker/release` with a malformed `project_id` gets 400 `BAD_ID`. Nothing is read or claimed. A 401 means the digest differs, and a 404 means it is unset.
 
    The ingest key (`DESK_INGEST_KEY`) is checked without writing: `GET /api/ingest/scout-leads` with it answers 200 with today's count. It is never rotated blindly and never printed. The scout workflow (`scout-cron.yml`) runs on schedule only while the repository variable `SCOUT_ENABLED` is `true`, and asks for leads only while `SCOUT_LEADS` is `true`.
-3. **Windows task.** Run `powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\scripts\pilot-task.ps1 -Register -MaxAgents 1`.
-   - **What it registers.** The task is registered disabled, for the signed-in user whose `claude` login is the subscription. It runs the verified Node binary, `pilot.js --pilot-all --desk=online`, in the repository folder.
+3. **Windows task**, from the clean runner worktree (`Documents\CryptoResearch-runner`, detached at `main`; blueprint 2026-11-03 §6 R0.3). Run `powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\Documents\CryptoResearch-runner\dashboard\scripts\pilot-task.ps1" -Register -MaxAgents 1 -Model <id>`, where `<id>` is a full pinned model ID, never an alias.
+   - **What it registers.** The task is registered disabled, for the signed-in user whose `claude` login is the subscription. It runs the verified Node binary, `pilot.js --unattended --pilot-all --desk=online --max-agents=1 --model=<id>`, in that worktree. Every unattended run refuses unless the worktree is clean and its `HEAD` equals the desk's `/healthz` revision.
    - **Its settings.** Every 30 minutes, IgnoreNew, a 3-hour limit, no window. A missed start runs once when the PC is available. The PC is never woken.
    - **What it refuses.** It never replaces a task it did not register.
    - **Check it.** `-Status` shows the principal, the action, the settings, the next run and the runner's last log line.
    - **Stopping a run.** Stopping a run keeps an uncertain claim dispatched until Eric reconciles it. Nothing is run twice.
 4. **Canary** (auto-admission OFF).
-   - **The candidate.** Numeraire is the owner-selected candidate, under its recorded identity. It is never substituted or forced.
+   - **The candidate (Q5, 2026-11-03).** Re-check Numeraire's contract hold first. If it is still held on CG-21/CG-23, the canary uses a clean-contract candidate already on the desk (for example Uniswap, or Raydium if it is on the desk), named by its stored chain, contract and CoinGecko ID, never by ticker. A vetoed or held asset is never used, and a fill is never forced: a held or no-trade result is reported as "fill pending".
    - **Arm the desk** with `arm-desk --desk=online` and only validated flags: the contract caps (5,000 CU a day, 100,000 a month), `--contracts-on`, `--mandate-days=7`, `--intent-life=4320`. A static `NMR/USDC` allowlist entry is not an identity and not an authorization.
    - **Run once.** Enable the task for one run of at most one agent session.
    - **Check the lineage:** run, report, ticket, receipt and grant.
