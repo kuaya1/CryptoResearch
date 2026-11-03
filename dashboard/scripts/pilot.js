@@ -974,14 +974,21 @@ const pingWord = (r) => (r.sent ? (r.ok ? 'sent' : `http_${r.status === null ? '
 // is unknown, the checkout has uncommitted changes, or the two differ.
 const REVISION_RE = /^[0-9a-f]{40}$/;
 const HEALTHZ_TIMEOUT_MS = 10000;
-// On Render the deploy's commit (RENDER_GIT_COMMIT; a build is immutable, so
-// clean by construction); elsewhere git itself, which also reads a worktree
-// (core/revision.js readGitHead does not: there .git is a file).
-function runnerRevision({ env = process.env, root = ROOT, run = spawnSync } = {}) {
-  const rc = env && typeof env.RENDER_GIT_COMMIT === 'string' ? env.RENDER_GIT_COMMIT.trim().toLowerCase() : '';
-  if (rc) {
-    if (!REVISION_RE.test(rc)) return { commit: null, source: 'render', clean: null, words: 'RENDER_GIT_COMMIT is set but is not a 40-character commit ID.' };
-    return { commit: rc, source: 'render', clean: true };
+// The runner's commit. With a .git (a directory, or the file a worktree
+// has; core/revision.js readGitHead does not read the latter) git itself is
+// always asked: HEAD, and clean only when `git status --porcelain` prints
+// nothing. RENDER_GIT_COMMIT never stands in for that check: set beside a
+// .git it must equal HEAD (source 'render|git'), else the run refuses. Only
+// with no .git at all (a stripped build) is a valid RENDER_GIT_COMMIT taken
+// as the commit, and then cleanliness is unknown: source 'render_env_no_git',
+// clean null (Eric's correction 1, 2026-11-03).
+const hasGitAt = (root) => { try { return fs.existsSync(path.join(root, '.git')); } catch (_) { return false; } };
+function runnerRevision({ env = process.env, root = ROOT, run = spawnSync, hasGit = () => hasGitAt(root) } = {}) {
+  const raw = env && typeof env.RENDER_GIT_COMMIT === 'string' ? env.RENDER_GIT_COMMIT.trim().toLowerCase() : '';
+  const rc = REVISION_RE.test(raw) ? raw : null;
+  if (!hasGit()) {
+    if (rc) return { commit: rc, source: 'render_env_no_git', clean: null };
+    return { commit: null, source: null, clean: null, words: raw ? 'This checkout has no .git, and RENDER_GIT_COMMIT is not a 40-character commit ID.' : 'This checkout has no .git and RENDER_GIT_COMMIT is not set; its commit is unknown.' };
   }
   const git = (args) => run('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
   const head = git(['rev-parse', 'HEAD']);
@@ -989,8 +996,12 @@ function runnerRevision({ env = process.env, root = ROOT, run = spawnSync } = {}
   const commit = String(head.stdout || '').trim().toLowerCase();
   if (!REVISION_RE.test(commit)) return { commit: null, source: 'git', clean: null, words: 'git did not name a 40-character commit for this checkout.' };
   const st = git(['status', '--porcelain']);
-  if (!st || st.error || st.status !== 0) return { commit, source: 'git', clean: null, words: 'Whether this checkout has uncommitted changes could not be read (git status failed).' };
-  return { commit, source: 'git', clean: String(st.stdout || '').trim() === '' };
+  const clean = !st || st.error || st.status !== 0 ? null : String(st.stdout || '').trim() === '';
+  if (raw && !rc) return { commit, source: 'git', clean, refuse: true, words: 'RENDER_GIT_COMMIT is set but is not a 40-character commit ID.' };
+  if (rc && rc !== commit) return { commit, source: 'git', clean, refuse: true, words: `RENDER_GIT_COMMIT (${rc.slice(0, 7)}) is not this checkout's HEAD (${commit.slice(0, 7)}).` };
+  const source = rc ? 'render|git' : 'git';
+  if (clean === null) return { commit, source, clean, words: 'Whether this checkout has uncommitted changes could not be read (git status failed).' };
+  return { commit, source, clean };
 }
 async function deskRevision(fetchImpl, origin, timeoutMs = HEALTHZ_TIMEOUT_MS) {
   let res;
@@ -1012,8 +1023,12 @@ async function revisionGuard(o, { env, fetchImpl, runnerRevisionImpl, deskRevisi
   try { desk = await deskRevisionImpl(fetchImpl, deskUrlOf(o, env)); } catch (err) { desk = { commit: null, words: String(err && err.message || err).slice(0, 200) }; }
   const rec = { runner: runner.commit || null, desk: desk.commit || null, source: runner.source || null, clean: runner.clean === undefined ? null : runner.clean };
   let why = null;
+  // clean null is accepted only where there is no .git to ask; every other
+  // source must be clean.
+  const noGit = runner.source === 'render_env_no_git';
   if (!runner.commit) why = runner.words || 'This checkout\'s commit is unknown.';
-  else if (runner.clean !== true) why = runner.clean === false ? `This checkout has uncommitted changes (git status --porcelain is not empty) at ${runner.commit.slice(0, 7)}.` : runner.words || 'Whether this checkout is clean is unknown.';
+  else if (runner.refuse) why = runner.words;
+  else if (noGit ? runner.clean !== null : runner.clean !== true) why = runner.clean === false ? `This checkout has uncommitted changes (git status --porcelain is not empty) at ${runner.commit.slice(0, 7)}.` : runner.words || 'Whether this checkout is clean is unknown.';
   else if (!desk.commit) why = desk.words || 'The desk\'s revision is unknown.';
   else if (runner.commit !== desk.commit) why = `This runner is at ${runner.commit.slice(0, 7)} but the desk runs ${desk.commit.slice(0, 7)}.`;
   return { rec, why };
@@ -1162,7 +1177,7 @@ async function runAll(o, {
       out(`pilot-all: ${log.error}`);
       return finish(1);
     }
-    out(`Revision: ${g.rec.runner.slice(0, 7)} (${g.rec.source}, clean) matches the desk.`);
+    out(`Revision: ${g.rec.runner.slice(0, 7)} (${g.rec.source}, ${g.rec.clean === true ? 'clean' : 'no .git: cleanliness not checked'}) matches the desk.`);
   }
   const lock = takeLock(lockFile, { now: now(), pid });
   if (!lock.ok) {
@@ -1297,7 +1312,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, pingWord, runnerRevision, deskRevision, revisionGuard, HEALTHZ_TIMEOUT_MS, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, pingWord, hasGitAt, runnerRevision, deskRevision, revisionGuard, HEALTHZ_TIMEOUT_MS, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

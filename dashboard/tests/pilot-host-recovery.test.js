@@ -97,7 +97,7 @@ async function runOn(host, net, s, sessions, said = []) {
     lockFile: host.lockFile, logFile: host.logFile, token: POLL, workerToken: WORKER, fetchImpl: net.fn, agent, out: (x) => said.push(x), runOnlineImpl,
     // The revision guard (blueprint 2026-11-03 §4 PR 1) sees the same fictional
     // commit on the runner and the desk; pilot-revision-guard.test.js covers it.
-    runnerRevisionImpl: () => ({ commit: FICTIONAL_REV, source: 'render', clean: true }), deskRevisionImpl: async () => ({ commit: FICTIONAL_REV }),
+    runnerRevisionImpl: () => ({ commit: FICTIONAL_REV, source: 'render|git', clean: true }), deskRevisionImpl: async () => ({ commit: FICTIONAL_REV }),
   });
   const log = JSON.parse(fs.readFileSync(host.logFile, 'utf8').trim().split('\n').pop());
   fs.rmSync(host.root, { recursive: true, force: true }); // the host's disk is gone

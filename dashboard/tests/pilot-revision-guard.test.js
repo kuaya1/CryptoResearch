@@ -128,34 +128,94 @@ test('(4) the same commit and a clean checkout: the run proceeds to the producti
   assert.equal(r.lockLeft, false, 'the lock is released');
 });
 
-test('(5) RENDER_GIT_COMMIT set and matching: it proceeds without calling git', async (t) => {
+// (5) RENDER_GIT_COMMIT and git (Eric's correction 1, 2026-11-03): with a
+// .git, git is always asked and RENDER_GIT_COMMIT never excuses a dirty tree
+// or a different HEAD; only with no .git is it taken alone, clean unknown.
+// A fake git: answers in order, every call recorded.
+function fakeGit(answers) {
   const calls = [];
-  const spy = (...a) => { calls.push(a); throw new Error('FICTIONAL: git must not run on Render'); };
-  const env = { RENDER_GIT_COMMIT: ` ${DESK_REV.toUpperCase()} ` };
-  const r = await run(t, { deps: { runnerRevisionImpl: () => P.runnerRevision({ env, run: spy }) } });
-  assert.equal(r.code, 0);
-  assert.deepEqual(calls, [], 'git was never called');
-  assert.deepEqual(r.log.revision, { runner: DESK_REV, desk: DESK_REV, source: 'render', clean: true });
-  assert.deepEqual(r.seen, ['GET /healthz', 'POST /api/pilot/worker/poll']);
-  // A RENDER_GIT_COMMIT that is not a commit refuses; git still never runs.
-  const bad = await run(t, { deps: { runnerRevisionImpl: () => P.runnerRevision({ env: { RENDER_GIT_COMMIT: 'main' }, run: spy }) } });
-  assertRefused(bad, /RENDER_GIT_COMMIT is set but is not a 40-character commit ID\./);
-  assert.deepEqual(calls, []);
+  const run = (cmd, args) => { calls.push([cmd, ...args]); if (!answers.length) throw new Error('FICTIONAL: unexpected git call'); return answers.shift(); };
+  return { calls, run };
+}
+const headIs = (rev) => ({ status: 0, stdout: `${rev}\n` });
+const porcelain = (text) => ({ status: 0, stdout: text });
+const revisionOf = (env, git, hasGit) => ({ runnerRevisionImpl: () => P.runnerRevision({ env, root: 'C:\\FICTIONAL\\runner', run: git.run, hasGit: () => hasGit }) });
+
+test('(5a) .git present, RENDER_GIT_COMMIT matching /healthz, but the tree is dirty: refused, nothing claimed, no lock', async (t) => {
+  const git = fakeGit([headIs(DESK_REV), porcelain(' M dashboard/scripts/pilot.js\n')]);
+  const r = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: DESK_REV }, git, true) });
+  assertRefused(r, /This checkout has uncommitted changes \(git status --porcelain is not empty\) at aaaaaaa\./);
+  assert.equal(git.calls.length, 2, 'git was asked although RENDER_GIT_COMMIT was set');
+  assert.deepEqual(r.log.revision, { runner: DESK_REV, desk: DESK_REV, source: 'render|git', clean: false });
 });
 
-test('runnerRevision off Render: git rev-parse HEAD and git status --porcelain in the repository root', () => {
-  const calls = [];
-  const fakeGit = (answers) => (cmd, args) => { calls.push([cmd, ...args]); return answers.shift(); };
-  const ok = P.runnerRevision({ env: {}, root: 'C:\\FICTIONAL\\runner', run: fakeGit([{ status: 0, stdout: `${DESK_REV}\n` }, { status: 0, stdout: '' }]) });
-  assert.deepEqual(ok, { commit: DESK_REV, source: 'git', clean: true });
-  assert.deepEqual(calls, [['git', '-C', 'C:\\FICTIONAL\\runner', 'rev-parse', 'HEAD'], ['git', '-C', 'C:\\FICTIONAL\\runner', 'status', '--porcelain']]);
-  const dirty = P.runnerRevision({ env: {}, run: fakeGit([{ status: 0, stdout: `${DESK_REV}\n` }, { status: 0, stdout: ' M dashboard/scripts/pilot.js\n' }]) });
+test('(5b) .git present and RENDER_GIT_COMMIT not its HEAD: refused, even when RENDER_GIT_COMMIT matches /healthz', async (t) => {
+  const git = fakeGit([headIs(OTHER_REV), porcelain('')]);
+  const r = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: DESK_REV }, git, true) });
+  assertRefused(r, /RENDER_GIT_COMMIT \(aaaaaaa\) is not this checkout's HEAD \(bbbbbbb\)\./);
+  assert.equal(r.log.revision.runner, OTHER_REV, 'the commit recorded is HEAD, never the variable');
+  // Set but not a commit, beside a .git: refused as well.
+  const bad = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: 'main' }, fakeGit([headIs(DESK_REV), porcelain('')]), true) });
+  assertRefused(bad, /RENDER_GIT_COMMIT is set but is not a 40-character commit ID\./);
+  // Agreeing and clean: it proceeds, source render|git.
+  const agree = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: DESK_REV.toUpperCase() }, fakeGit([headIs(DESK_REV), porcelain('')]), true) });
+  assert.equal(agree.code, 0);
+  assert.deepEqual(agree.log.revision, { runner: DESK_REV, desk: DESK_REV, source: 'render|git', clean: true });
+  assert.deepEqual(agree.seen, ['GET /healthz', 'POST /api/pilot/worker/poll']);
+});
+
+test('(5c) no .git and a valid RENDER_GIT_COMMIT matching /healthz: proceeds to the poll, render_env_no_git, clean null, git never called', async (t) => {
+  const git = fakeGit([]);
+  const r = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: ` ${DESK_REV.toUpperCase()} ` }, git, false) });
+  assert.equal(r.code, 0);
+  assert.deepEqual(git.calls, [], 'git was never called');
+  assert.deepEqual(r.log.revision, { runner: DESK_REV, desk: DESK_REV, source: 'render_env_no_git', clean: null });
+  assert.deepEqual(r.seen, ['GET /healthz', 'POST /api/pilot/worker/poll']);
+  assert.ok(r.said.includes('Revision: aaaaaaa (render_env_no_git, no .git: cleanliness not checked) matches the desk.'));
+  // Still the full 40 characters against /healthz.
+  const other = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: OTHER_REV }, fakeGit([]), false) });
+  assertRefused(other, /This runner is at bbbbbbb but the desk runs aaaaaaa\./);
+});
+
+test('(5d) no .git and no valid RENDER_GIT_COMMIT: refused; clean null is accepted from no other source', async (t) => {
+  const none = await run(t, { deps: revisionOf({}, fakeGit([]), false) });
+  assertRefused(none, /no \.git and RENDER_GIT_COMMIT is not set; its commit is unknown\./);
+  const bad = await run(t, { deps: revisionOf({ RENDER_GIT_COMMIT: 'abc1234' }, fakeGit([]), false) });
+  assertRefused(bad, /no \.git, and RENDER_GIT_COMMIT is not a 40-character commit ID\./);
+  // clean null from git (status failed) or a stub with another source: refused.
+  for (const source of ['git', 'render|git', 'render']) {
+    const r = await run(t, { runner: { commit: DESK_REV, source, clean: null } });
+    assertRefused(r, /Whether this checkout is clean is unknown\./);
+  }
+  // render_env_no_git claiming clean true is not what it reads: refused.
+  const odd = await run(t, { runner: { commit: DESK_REV, source: 'render_env_no_git', clean: true } });
+  assertRefused(odd, /Whether this checkout is clean is unknown\./);
+});
+
+test('runnerRevision with a .git: git rev-parse HEAD and git status --porcelain in the repository root; hasGitAt reads a worktree .git file', () => {
+  const ok = fakeGit([headIs(DESK_REV), porcelain('')]);
+  assert.deepEqual(P.runnerRevision({ env: {}, root: 'C:\\FICTIONAL\\runner', run: ok.run, hasGit: () => true }), { commit: DESK_REV, source: 'git', clean: true });
+  assert.deepEqual(ok.calls, [['git', '-C', 'C:\\FICTIONAL\\runner', 'rev-parse', 'HEAD'], ['git', '-C', 'C:\\FICTIONAL\\runner', 'status', '--porcelain']]);
+  const dirty = P.runnerRevision({ env: {}, run: fakeGit([headIs(DESK_REV), porcelain(' M dashboard/scripts/pilot.js\n')]).run, hasGit: () => true });
   assert.equal(dirty.clean, false);
-  const missing = P.runnerRevision({ env: {}, run: fakeGit([{ error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }), status: null }]) });
+  const statusFailed = P.runnerRevision({ env: {}, run: fakeGit([headIs(DESK_REV), { status: 128, stdout: '' }]).run, hasGit: () => true });
+  assert.equal(statusFailed.clean, null);
+  assert.match(statusFailed.words, /git status failed/);
+  const missing = P.runnerRevision({ env: {}, run: fakeGit([{ error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }), status: null }]).run, hasGit: () => true });
   assert.equal(missing.commit, null);
   assert.match(missing.words, /ENOENT/);
-  const notRepo = P.runnerRevision({ env: {}, run: fakeGit([{ status: 128, stdout: '' }]) });
+  const notRepo = P.runnerRevision({ env: {}, run: fakeGit([{ status: 128, stdout: '' }]).run, hasGit: () => true });
   assert.match(notRepo.words, /git exited 128/);
+  // hasGitAt: a .git directory or a worktree's .git file; nothing else.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-pilot-hasgit-'));
+  try {
+    assert.equal(P.hasGitAt(d), false);
+    fs.writeFileSync(path.join(d, '.git'), 'gitdir: C:/FICTIONAL/.git/worktrees/runner\n');
+    assert.equal(P.hasGitAt(d), true, 'a worktree file');
+    fs.rmSync(path.join(d, '.git'));
+    fs.mkdirSync(path.join(d, '.git'));
+    assert.equal(P.hasGitAt(d), true, 'a directory');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 
 test('deskRevision reads only GET /healthz, bounded by a 10 s timeout', async () => {
