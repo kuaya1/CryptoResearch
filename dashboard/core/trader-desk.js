@@ -911,18 +911,28 @@ const JOURNAL = PT.JOURNAL;
 
 // One decision's execution as the book recorded it, for the read-only
 // decision basis view (core/decision-basis.js), read only through the book's
-// own integrity checks (audit F5). In one consistent read: the journal, its
-// head and the venue's records as bytes; then the book's validated read
-// (PT.intents: the hash chain line by line, the head record, every venue
-// order sent); then the same three files again, which must be byte for byte
-// what the book checked. A damaged journal is the book's own INTEGRITY
-// refusal, thrown, never a partial or empty reading. Each reservation shown
-// must be one the book holds with the same order, position and quantity.
-// Nothing here writes, and the book itself is unchanged.
+// own integrity checks (audit F5). In one consistent read: the venue's
+// records, the head and the journal as bytes, in the book's own read order
+// (paper-trader.js load); then the book's validated read (PT.intents: the
+// hash chain line by line, the head record, every venue order sent) over
+// exactly those bytes, through a view of the workspace whose three files are
+// that snapshot (N4: the files read again after the book's read could match
+// the snapshot while the book had read another version, A then B then A, so
+// the values shown would be ones the book never checked); then the three
+// files again, which must still be the snapshot. Every value shown comes from
+// the snapshot the book validated. A damaged journal is the book's own
+// INTEGRITY refusal, thrown, never a partial or empty reading. Each
+// reservation shown must be one the book holds with the same order, position
+// and quantity. Nothing in the workspace is written (the snapshot is a
+// temporary copy outside it, fsx withSnapshot, removed at once), and the book
+// is unchanged.
 function executionFor(ws, decisionId) {
   const fs = require('fs');
   const { readConsistent } = require('./ops');
-  const RELS = [PT.JOURNAL, PT.HEAD, PT.VENUE];
+  const { withSnapshot } = require('./fsx');
+  const RELS = [PT.VENUE, PT.HEAD, PT.JOURNAL];
+  // The book's validated read of exactly these bytes (null: the file is missing).
+  const validatedRead = (snap) => withSnapshot(ws, RELS.map((rel, i) => [rel, snap[i]]), (view) => PT.intents(view));
   const bytes = () => RELS.map((rel) => {
     try { return fs.readFileSync(ws.abs(rel)); } catch (err) {
       if (err && err.code === 'ENOENT') return null;
@@ -931,12 +941,13 @@ function executionFor(ws, decisionId) {
   });
   const same = (a, b) => (a === null ? b === null : b !== null && a.equals(b));
   return readConsistent(ws, () => {
-    const before = bytes();
-    const book = PT.intents(ws);
+    const snap = bytes();
+    const book = validatedRead(snap);
     const after = bytes();
-    if (!before.every((b, i) => same(b, after[i]))) throw new OpError('INTEGRITY', `${PT.JOURNAL} changed while it was read, so its execution is not shown from a mix of two versions. Read it again.`);
-    if (before[0] === null) return { state: 'no_book', reserved: [], fills: [], exits: [] };
-    const events = before[0].toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    if (!snap.every((b, i) => same(b, after[i]))) throw new OpError('INTEGRITY', `${PT.JOURNAL} changed while it was read, so its execution is not shown from a mix of two versions. Read it again.`);
+    const journal = snap[RELS.indexOf(PT.JOURNAL)];
+    if (journal === null) return { state: 'no_book', reserved: [], fills: [], exits: [] };
+    const events = journal.toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const held = new Map(book.map((i) => [i.intent_id, i]));
     const out = { reserved: [], fills: [], exits: [] };
     const coids = new Set();
