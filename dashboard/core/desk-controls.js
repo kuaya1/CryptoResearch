@@ -24,6 +24,9 @@
 // through the existing signed-in release route with {"reconciled":true}; it
 // is Eric's explicit act after he checked the desk, never a retry.
 //
+// A pilot research job released to manual (research_release per project,
+// released_pilot_jobs desk-wide) is said beside the dispatch.
+//
 // Reads only. A part that does not read says so and the rest stands.
 
 const FORMAT = 'cr-desk-controls@1';
@@ -54,6 +57,21 @@ function reportsOf(ws, pid) {
     out[model] = r ? { report_id: r.report_id || null, imported_at: (r.meta && r.meta.imported_at) || null, analysis_at: (r.assessment && r.assessment.analysis_at) || null } : null;
   }
   return out;
+}
+
+// The pilot's research job released to manual (blueprint 2026-11-03 §4 PR 2,
+// audit S5/E3): the newest Claude job whose last release was from the pilot
+// worker's assistant mode (`cowork`) and which has not completed since. Read
+// from the job's own released[] record; null when there is none.
+function releaseOf(ws, pid) {
+  for (const run of require('./research').listRuns(ws, pid)) {
+    const j = !run.broken && run.jobs ? run.jobs.claude : null;
+    const last = j && Array.isArray(j.released) && j.released.length ? j.released[j.released.length - 1] : null;
+    if (!last) continue;
+    if (last.from_mode !== 'cowork' || j.state === 'completed') return null;
+    return { at: last.at || null, idle_hours: Number.isFinite(last.idle_hours) ? last.idle_hours : null, run_id: run.run_id, words: `Claude's research job on ${pid} was released from the pilot worker to manual at ${last.at || 'an unrecorded time'} after ${Number.isFinite(last.idle_hours) ? last.idle_hours : '?'} h with no runner activity.` };
+  }
+  return null;
 }
 
 function view(ws, { now = Date.now() } = {}) {
@@ -91,11 +109,13 @@ function view(ws, { now = Date.now() } = {}) {
     // The project's stop, read through the one shared gate (cr-automation-gate@1).
     const au = MA.automationGate(ws, pid).autonomy;
     const claim = c.ok ? c.value : { state: 'unreadable', reconcile: false, words: c.words };
+    const rel = part(() => releaseOf(ws, pid), 'The project\'s research job');
     return {
       project_id: pid,
       name: names.get(pid) || pid,
       next_step: s.step,
       dispatch: claim,
+      research_release: rel.ok ? rel.value : { unreadable: true, words: rel.words },
       reports: rp.ok ? rp.value : { unreadable: true, words: rp.words },
       stop: { stopped: au.suspended === true, unreadable: au.unreadable === true, words: au.words || null },
       controls: {
@@ -128,7 +148,7 @@ function view(ws, { now = Date.now() } = {}) {
     at,
     writes_nothing: true,
     poll,
-    dispatch: { sessions, projects_unreadable: stepsPart.ok ? null : stepsPart.words },
+    dispatch: { sessions, projects_unreadable: stepsPart.ok ? null : stepsPart.words, released_pilot_jobs: stepsPart.ok ? projects.filter((p) => p.research_release && !p.research_release.unreadable).length : null },
     freshness,
     authority: { paused, mandate, admission },
     controls,
@@ -136,4 +156,4 @@ function view(ws, { now = Date.now() } = {}) {
   };
 }
 
-module.exports = { FORMAT, STALE_NOTE, claimOf, view };
+module.exports = { FORMAT, STALE_NOTE, claimOf, releaseOf, view };

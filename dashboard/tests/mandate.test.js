@@ -308,7 +308,9 @@ test('one project\'s failure is listed and never stops the sweep', (t) => {
   assert.match(out.skipped[0].words, /evidence store unreadable/);
 });
 
-test('the trader job sweeps first and never fails over the sweep', async (t) => {
+// A sweep that throws never stops the candle read or the book's step; since
+// blueprint 2026-11-03 PR 2 (audit S3) the job reads impaired, not a success.
+test('the trader job sweeps first; a sweep that throws never stops the candles, and the job reads impaired', async (t) => {
   const s = sweepDesk(t);
   const jobs = require('../core/jobs');
   const TC = require('../core/trader-candles');
@@ -325,7 +327,10 @@ test('the trader job sweeps first and never fails over the sweep', async (t) => 
   assert.match(r.summary, /^Paper mandate: 1 granted/);
   assert.equal(linesOf(s.ws, s.pid).filter((l) => l.decided_by === BY).length, 1);
   T.mandateSweep = () => { throw new Error('sweep broke (FICTIONAL)'); };
+  order.length = 0;
   const f = await jobs.runJob(s.ws, 'trader', { trigger: 'test' });
-  assert.equal(f.status, 'noop', 'the trader job does not fail');
+  assert.deepEqual(order, ['candles'], 'the candle read still ran');
+  assert.equal(f.status, 'impaired', 'a sweep failure is not a success');
+  assert.deepEqual(f.impaired, ['mandate_sweep_failed']);
   assert.match(f.summary, /Paper mandate sweep failed: sweep broke/);
 });
