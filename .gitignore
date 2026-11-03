@@ -30,6 +30,9 @@
 # never data or keys
 !/supabase/
 
+# The System Atlas: a standalone litepaper and architecture map (no records)
+!/atlas/
+
 # Project documentation
 !/README.md
 !/WORKSPACE-MAP.md
