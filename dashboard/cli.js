@@ -224,6 +224,12 @@ Data, jobs and maintenance
   demo build                             build the FICTIONAL demo workspace (dashboard/demo-workspace)
   test                                   run the automated tests
 
+Operating proof (read-only toward the desk: opens no workspace, starts and simulates nothing)
+  prove-autonomy <r0|b0|b1|b2|b3|cutover|all> [--desk=online] [--project <id>] [--evidence <operating-proof dir>]
+                 [--expect-revision <sha>] [--out <dir>] [--no-write]
+                                         PASS, FAIL or UNVERIFIED from the runbook's records (exit 0, 1, 2); missing evidence is
+                                         never PASS. Reports go to a new folder under --out (default Documents/CryptoResearch-evidence)
+
 Global: --workspace <path> (default: the folder that contains dashboard/)   --actor NAME
 `;
 
@@ -384,6 +390,14 @@ async function run(argv) {
     const file = path.resolve(need(sub, 'restore-package <file> --to <empty folder>'));
     const dest = need(one(flags.to), '--to <empty folder> required');
     return require('./core/exporter').restorePackage(JSON.parse(fs.readFileSync(file, 'utf8')), path.resolve(dest));
+  }
+  // Before any workspace opens: this command reads evidence, never the desk.
+  if (cmd === 'prove-autonomy') {
+    for (const n of ['desk', 'project', 'evidence', 'expect_revision', 'out']) if (flags[n] === true) throw Object.assign(new Error(`--${n.replace(/_/g, '-')} needs a value.`), { code: 'USAGE' });
+    const AP = require('./core/autonomy-proof');
+    const report = await AP.prove(need(sub, 'prove-autonomy <r0|b0|b1|b2|b3|cutover|all>'), { desk: one(flags.desk), project: one(flags.project), evidence: one(flags.evidence), expect: one(flags.expect_revision), out: one(flags.out), noWrite: Boolean(flags.no_write), forbiddenRoots: [resolveRoot(root)] });
+    process.exitCode = AP.EXIT[report.result];
+    return report;
   }
   if (cmd === 'serve') {
     const ws = openWorkspace({ root, actor: 'dashboard' });
