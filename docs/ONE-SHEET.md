@@ -50,8 +50,11 @@ Four different things, never read as one another. Merged is not deployed, and de
   - Trader Sim replay equivalence, #140 `d94888d`; host recovery, #141 `99148c2`;
   - the poll sighting, #142 `76c58e8`; the attribution view, #143 `f6db9a7`;
   - this sheet and the canon sync, #144 `099b443`; desk controls, #145 `5024179`;
-  - audit fixes F1 #146 `c241467`, F2 #147 `ce3294a`, F3 #151 `7d98b5b`, F4 #148 `6928513`, F5 #149 `3d791a5`, F6 #150 `fb529e5`, F7 #152 `8b79e3a`.
-- **Proposed** (open pull requests or text only; not on `main` until Eric merges): the remaining fixes from the 2026-11-02 implementation audit, each on its own pull request (F8 #153, F9 #154, F10 #155, and this sheet's update, F11 #157); the protected-core execution stamp (row 9); the runner's move off the PC (Ops-1); the blueprint itself (#134).
+  - audit fixes F1 #146 `c241467`, F2 #147 `ce3294a`, F3 #151 `7d98b5b`, F4 #148 `6928513`, F5 #149 `3d791a5`, F6 #150 `fb529e5`, F7 #152 `8b79e3a`;
+  - audit fixes F8 #153 `d6bc158`, F9 #154 `b54cf0f`, F10 #155 `352bc02`, and this sheet's F11 update #157 `fff8d46`;
+  - the list of Eric's open decisions, #156 `c988b56` (merged as a list; the decisions in it stay his and stay open);
+  - post-remediation hardening N1 #158 `34089b9`, N3 #159 `1230170`, N2 #160 `af03923`.
+- **Proposed** (open pull requests or text only; not on `main` until Eric merges): post-remediation hardening N4 with this sheet's update (N7), on its own pull request; the protected-core execution stamp (row 9); the runner's move off the PC (Ops-1); the blueprint itself (#134, closed unmerged).
 - **Deployed: not verified.** The online desk deploys from `main`, but no deployed SHA has been read back. Which commit it runs is Eric's to check on Render.
 - **Operating proof: none yet.** No unattended run on a chosen host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation.
 

@@ -150,8 +150,26 @@ function fileInfo(abs) {
   }
 }
 
+// A read over exactly the bytes given (N4): `files` is [[rel, Buffer | null]];
+// each is copied into a temporary folder outside the workspace (null: left
+// missing), and fn gets a view of the workspace whose abs() answers those
+// files from the copy and every other path from the workspace. So a reader
+// that opens its own files reads the snapshot its caller holds, never a
+// later version. The folder is removed when fn returns or throws.
+function withSnapshot(ws, files, fn) {
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'cr-snapshot-'));
+  try {
+    const at = new Map(files.map(([rel], i) => [rel, path.join(dir, `snapshot-${i}`)]));
+    for (const [rel, bytes] of files) if (bytes !== null) fs.writeFileSync(at.get(rel), bytes);
+    return fn(Object.create(ws, { abs: { value: (rel) => (at.has(rel) ? at.get(rel) : ws.abs(rel)) } }));
+  } finally {
+    rmrf(dir);
+  }
+}
+
 module.exports = {
   sha256,
+  withSnapshot,
   sleepSync,
   withRetry,
   mkdirp,

@@ -171,12 +171,13 @@ test('F5: the journal changing while it is read is refused, never shown from a m
     const out = real(ws);
     if (!once) {
       once = true;
-      const ls = lines(ws);
+      // The workspace's own journal changes while the book reads.
+      const ls = lines(s.ws);
       const i = reservedAt(ls, s.d.decision_id);
       const e = JSON.parse(ls[i]);
       e.quantity = '999';
       ls[i] = JSON.stringify(e);
-      write(ws, ls);
+      write(s.ws, ls);
     }
     return out;
   });
@@ -185,6 +186,60 @@ test('F5: the journal changing while it is read is refused, never shown from a m
   assert.equal(x.state, 'integrity');
   assert.deepEqual({ reserved: x.reserved, fills: x.fills, exits: x.exits }, NO_VALUES);
   assert.match(x.words, /changed while/);
+});
+
+// N4 (post-remediation audit, 2026-11-02): the files read after the book's
+// read matched the ones read before it, but nothing said the book had read
+// them. A journal that changes from A to B and back to A while the book reads
+// (A then B then A) passed that comparison, and the values shown were A's,
+// which the book never checked. Here A is a damaged journal (a fill's price
+// edited to 999, the chain not repaired) and B the intact one: the book reads
+// only the snapshot it is given, so A is refused in the book's own words and
+// 999 never shows.
+test('N4: a journal swapped to an intact copy and back while the book reads (A, B, A) is refused, never shown from the unchecked copy', (t) => {
+  const s = recorded(t);
+  const intact = lines(s.ws);
+  const damaged = intact.slice();
+  const k = damaged.findIndex((l) => JSON.parse(l).type === 'fill');
+  assert.ok(k >= 0, 'the fixture has a fill');
+  const f = JSON.parse(damaged[k]);
+  f.price = '999';
+  damaged[k] = JSON.stringify(f);
+  write(s.ws, damaged);
+  const real = PT.intents;
+  let swaps = 0;
+  t.mock.method(PT, 'intents', (ws) => {
+    swaps += 1;
+    write(s.ws, intact); // B: what a reader of the workspace's file would check
+    try { return real(ws); } finally { write(s.ws, damaged); } // and back to A
+  });
+  const x = DB.viewOf(s.ws, s.pid, s.d.decision_id).execution;
+  assert.ok(swaps >= 1, 'the swap landed during the book\'s read');
+  assert.equal(x.state, 'integrity', `the unchecked copy is not shown (state ${x.state}, fills ${JSON.stringify(x.fills && x.fills.map((r) => r.price))})`);
+  assert.equal(x.code, 'INTEGRITY');
+  assert.deepEqual({ reserved: x.reserved, fills: x.fills, exits: x.exits }, NO_VALUES);
+  assert.doesNotMatch(JSON.stringify(x), /"999"/, 'the edited price never appears');
+  assert.doesNotMatch(x.words, /changed while/, 'refused by the book\'s own check of the snapshot, not by the comparison');
+});
+
+test('N4: the values shown are the snapshot the book validated, and the snapshot leaves nothing behind', (t) => {
+  const s = recorded(t);
+  const seen = [];
+  const dirs = [];
+  const real = PT.intents;
+  t.mock.method(PT, 'intents', (ws) => {
+    seen.push(fs.readFileSync(ws.abs(J), 'utf8'));
+    dirs.push(path.dirname(ws.abs(J)));
+    return real(ws);
+  });
+  const x = DB.viewOf(s.ws, s.pid, s.d.decision_id).execution;
+  assert.equal(x.state, 'recorded');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0], fs.readFileSync(s.ws.abs(J), 'utf8'), 'the book read the same bytes the view shows from');
+  const fill = seen[0].split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)).find((e) => e.type === 'fill');
+  assert.equal(x.fills[0].price, fill.price);
+  assert.notEqual(path.resolve(dirs[0]), path.resolve(path.dirname(s.ws.abs(J))), 'the book read a snapshot, not the live file');
+  assert.equal(fs.existsSync(dirs[0]), false, 'the temporary snapshot is removed');
 });
 
 test('F5: the CLI entry (tickets basis) refuses the damaged execution the same way', async (t) => {
