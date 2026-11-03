@@ -525,6 +525,16 @@ function stoppedSince(cli, project, token, file) {
   return { stop: 'stopped', words: c.words || null, session_stopped: true };
 }
 
+// N2: the save itself asks again, inside its own lock (the CLI's --token,
+// cli.js claimedSave), so a stop that lands after the check above and before
+// the commit saves nothing either: the CLI answers { status: 'stopped' } and
+// has let the claim go as autonomy_stopped. Null when the answer was saved.
+function stoppedAtSave(saved, file) {
+  if (!saved || saved.status !== 'stopped') return null;
+  say(`    Not saved: ${saved.words} The session's answer is kept at ${file}.`);
+  return { stop: 'stopped', words: saved.words || null, session_stopped: true };
+}
+
 // A claim not yet bound is let go when the runner stops; a bound one (an
 // agent was dispatched and its outcome is unknown) is left to expire, so the
 // next runner reconciles instead of dispatching it again.
@@ -586,7 +596,9 @@ function localSteps(o, cli, h, agent = claude) {
       const f = scratch('researcher', 'agent1-report.md', report);
       const halted = stoppedSince(cli, o.project, token, f);
       if (halted) { Object.assign(h, { token: null, bound: false }); return halted; }
-      const saved = cli(['import-text', '--provider', 'claude', '--project', o.project, '--text-file', f, '--run', runId]);
+      const saved = cli(['import-text', '--provider', 'claude', '--project', o.project, '--text-file', f, '--run', runId, ...(token ? ['--token', token] : [])]);
+      const stopped = stoppedAtSave(saved, f);
+      if (stopped) { Object.assign(h, { token: null, bound: false }); return stopped; }
       say(`    saved: ${saved.status}${saved.report_id ? ` ${saved.report_id}` : ''}${saved.message ? ` — ${saved.message}` : ''}`);
       if (saved.verified === false) throw new Error('The report did not read back as written; run the pilot again (an identical save is recognized).');
       done();
@@ -612,7 +624,9 @@ function localSteps(o, cli, h, agent = claude) {
       const f = scratch('prosecutor', 'agent2-ticket.md', ticket);
       const halted = stoppedSince(cli, o.project, token, f);
       if (halted) { Object.assign(h, { token: null, bound: false }); return halted; }
-      const saved = cli(['tickets', 'import', o.project, t.ticket_id, '--text-file', f]);
+      const saved = cli(['tickets', 'import', o.project, t.ticket_id, '--text-file', f, ...(token ? ['--token', token] : [])]);
+      const stopped = stoppedAtSave(saved, f);
+      if (stopped) { Object.assign(h, { token: null, bound: false }); return stopped; }
       say(`    saved: ${saved.status} ${saved.receipt_id || ''} — ${saved.message}`);
       if (saved.verified === false) throw new Error('The ticket did not read back as written; run the pilot again.');
       done();
