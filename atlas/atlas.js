@@ -40,13 +40,42 @@
     return { url, label: `${p}${line ? `:${line}` : ''}`, what };
   }
   const evHtml = (e) => { const l = evLink(e); return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${ic('code')}<span>${esc(l.label)} <em>${esc(l.what)}</em></span></a>`; };
-  document.getElementById('pin').innerHTML = `Read from <code>main</code> at <code>${esc(EV.commit.slice(0, 7))}</code>`;
+  const sha = esc(EV.commit.slice(0, 7));
+  document.getElementById('pin').innerHTML = `Source baseline <code>${sha}</code>`;
+  document.getElementById('pin').title = A.baseline.note;
 
   const stMark = (s) => `<i class="st-mark st-${s}" aria-hidden="true"></i>`;
   const statusPill = (s) => `<span class="pill">${stMark(s)}${esc(A.statuses[s].name)}</span>`;
   const controlPill = (c) => `<span class="pill">${ic(ctlIcon[c])}${esc(A.controls[c].name)}</span>`;
   const chapterOf = (id) => A.chapters.find((c) => (c.nodes || []).includes(id));
   const evCount = Object.keys(EV.refs).length;
+  const claimsOf = (where) => (EV.claims || []).filter((c) => c.where === where);
+  const claimUrl = (c) => `https://github.com/${EV.repo}/blob/${EV.commit}/${c.path.split('/').map(encodeURIComponent).join('/')}#L${c.line}`;
+
+  /* The four status facts for a part, kept apart. Unknown where the
+     repository holds no evidence; each desk's current settings are never read. */
+  const UNKNOWN = 'UNKNOWN';
+  function fields(n) {
+    const ext = n.kind === 'external', gh = /^\.github\//.test((n.evidence[0] || [])[0] || '') || ['ci', 'grok-scout', 'eng-loop'].includes(n.id);
+    const impl = n.status === 'planned' ? 'Not built: a specification and preflight exist'
+      : n.status === 'retired' ? 'Removed on purpose'
+      : ext ? 'Outside service; the desk’s client code is at ' + sha : `Yes, at ${sha}`;
+    const en = n.status === 'planned' || n.status === 'retired' ? '—'
+      : n.control === 'human' ? 'Acts only when Eric does'
+      : n.status === 'gated' ? `Off by default; each desk’s setting ${UNKNOWN}`
+      : `On by default; each desk’s setting ${UNKNOWN}`;
+    const dep = n.deployed || (n.status === 'planned' ? 'Not created' : n.status === 'retired' ? 'Removed'
+      : ext ? 'Not ours to deploy'
+      : gh ? 'Runs on GitHub from main'
+      : n.band === 'engineering' ? 'A practice, not a service'
+      : `Online desk: ${A.baseline.deployed.rev}, same application code (R0, ${A.baseline.deployed.at}). PC desk: ${UNKNOWN}`);
+    const pr = n.proof ? n.proof.words : n.status === 'planned' || n.status === 'retired' ? '—' : `${UNKNOWN}: no receipt cited`;
+    return [['Implemented', impl], ['Enabled', en], ['Deployed', dep], ['Operating proven', pr, n.proof && n.proof.evidence]];
+  }
+  const DEFAULT_IMPL = `Yes, at ${sha}`;
+  const DEFAULT_DEP = () => `Online desk: ${A.baseline.deployed.rev}, same application code (R0, ${A.baseline.deployed.at}). PC desk: ${UNKNOWN}`;
+  const fieldsHtml = (n, brief) => `<dl class="facts4">${fields(n).filter(([k, v]) => !brief || !((k === 'Implemented' && v === DEFAULT_IMPL) || (k === 'Deployed' && v === DEFAULT_DEP()))).map(([k, v, e]) => `<div><dt>${k}</dt><dd${/UNKNOWN|^None|^Not current/.test(v) ? ' class="unk"' : ''}>${esc(v)}${e ? ` ${e.map((x) => { const l = evLink(x); return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`; }).join(' ')}` : ''}</dd></div>`).join('')}</dl>`;
+  const claimsHtml = (where) => { const cs = claimsOf(where); return cs.length ? `<ul class="claims">${cs.map((c) => `<li>${ic('gate')}<span>${esc(c.what)}</span><a href="${esc(claimUrl(c))}" target="_blank" rel="noopener">${esc(c.path.split('/').pop())}:${c.line}</a></li>`).join('')}</ul>` : ''; };
 
   /* ── Router ────────────────────────────────────────────── */
   let teardown = null;
@@ -85,19 +114,19 @@
     app.innerHTML = `<section class="cover">
       <div class="eyebrow">CryptoResearch · read from the code</div>
       <h1>The Living System Atlas</h1>
-      <p class="lede">A private research desk where models read and argue, code measures and keeps the books, and Eric decides. Here is all of it, in one place, each part linked to the source that makes it true.</p>
+      <p class="lede">A private research desk where models read and argue, code measures and keeps the books, and Eric decides. Here is the code at one baseline, each part linked to the source that makes it true, with what is switched on, deployed and proven kept apart.</p>
       <div class="doors">
-        <a class="door" href="#/read"><span class="n">I</span><h2>The Litepaper</h2><p>Twelve short chapters, from what the desk is to what is not built yet.</p><div class="go">Start reading →</div></a>
-        <a class="door" href="#/map"><span class="n">II</span><h2>The Map</h2><p>Every component and connection. Click anything, or follow a path from a link to a decision.</p><div class="go">Open the map →</div></a>
+        <a class="door" href="#/read"><span class="n">I</span><h2>The Litepaper</h2><p>Twelve short chapters, from the owner’s map to what is not built, disabled or unproven.</p><div class="go">Start reading →</div></a>
+        <a class="door" href="#/map"><span class="n">II</span><h2>The Map</h2><p>The five handoffs first; then every component and connection. Follow a path from a link to a decision.</p><div class="go">Open the map →</div></a>
       </div>
       <div class="facts">
         <div><b>${A.nodes.length}</b>components</div>
         <div><b>${A.edges.length}</b>connections</div>
-        <div><b>${A.flows.length}</b>guided paths</div>
         <div><b>${evCount}</b>source links</div>
-        <div><b>${A.nodes.filter((n) => n.control === 'human').length}</b>places only Eric acts</div>
+        <div><b>${(EV.claims || []).length}</b>claims checked in code</div>
+        <div><b>${sha}</b>source baseline</div>
       </div>
-      <div class="hero-fig">${strip(true)}</div>
+      <div class="hero-fig">${FIG.owner(true)}</div>
     </section>`;
     return null;
   }
@@ -109,8 +138,16 @@
     principles: () => `<div class="tri">
         <div>${ic('spark')}<b>Models read and argue</b><span>Claude, ChatGPT and Gemini research. A second Claude prosecutes. They write words, never amounts.</span></div>
         <div>${ic('code')}<b>Code measures and keeps books</b><span>Grades, sizing, exits, orders and stops are deterministic JavaScript with exact decimals.</span></div>
-        <div>${ic('person')}<b>Eric decides</b><span>Every decision, every switch that arms automation, and every merge is his.</span></div></div>`,
+        <div>${ic('person')}<b>Eric decides</b><span>Every decision is his or a paper mandate’s he armed; every switch that enables automation, and every merge, is his. Nothing reaches live capital.</span></div></div>`,
     layers: () => strip(false),
+    owner: (compact) => `<div class="owner${compact ? ' compact' : ''}">
+        <ol class="stages">${A.owner.map((s, i) => `<li class="stage-${s.id}"><span class="sn">${i + 1}</span><b>${esc(s.name)}</b><em>${esc(s.q)}</em>
+          ${compact ? '' : `<p>${esc(s.text)}</p>`}<span class="out">${ic('arrow')}${esc(s.out)}</span></li>`).join('')}</ol>
+        <div class="support">${A.ownerSupport.map((s) => `<div><b>${esc(s.name)}</b>${compact ? '' : `<span>${esc(s.text)}</span>`}</div>`).join('')}</div></div>`,
+    admission: () => `<div class="branches">
+        <div><b>Eric confirms</b><span>He picks one of the CoinGecko candidates, or clicks “Confirm and request research” on the scout leads he saw.</span><i class="who">Manual</i></div>
+        <div><b>A single exact match confirms itself</b><span>Only when his own CoinGecko link or exact contract resolves to one unambiguous listing. Never a name search or a screenshot.</span><i class="who">Automatic, his input</i></div>
+        <div><b>Automatic admission</b><span>Eligible scout leads, up to his daily limit, until the expiry he set. Off by default; blocked while paused.</span><i class="who">Automatic, if armed</i></div></div>`,
     research: () => `<div class="flowfig">${box('One prompt', 'pinned @6, frozen to the byte')}${arr}
         <div class="box many"><div>Claude</div><div>ChatGPT</div><div>Gemini · on hold</div></div>${arr}
         ${box('One path in', 'bound to its run')}${arr}${box('The desk grades', 'never averaged', 'dark')}</div>
@@ -119,28 +156,32 @@
         ${box('Agent 2', 'Prosecutor attacks it')}${arr}${box('One ticket', 'entry, target, invalidation', 'dark')}</div>
         <figcaption>Two separate Claude sessions on Eric’s subscription, one project at a time. They stop at his review.</figcaption>`,
     decision: () => `<div class="flowfig"><div class="box many"><div>Grade</div><div>Exit reading &lt; 72 h</div><div>Already held?</div></div>${arr}
-        ${box('Sizing gate', 'fixed rules in code')}${arr}<div class="box many"><div>$500 standard</div><div>$250 starter</div><div>$0 held or below floor</div></div>${arr}
-        ${box('Eric', 'Approve · Halve · Veto · Pass', 'dark')}</div>`,
-    books: () => `<div class="tri">
-        <div><b>PM Paper Book</b><span>Eric’s own grants at the signal price, compared with BTC. No totals before 20 closed.</span></div>
-        <div><b>Trader’s Paper Book</b><span>Simulated execution: intents, a risk engine, a file for a venue, fills from closed hours.</span></div>
-        <div><b>Research vs BTC</b><span>Every eligible report measured at 30, 60, 90 and 120 days, traded or not.</span></div></div>
-        <figcaption>Portfolio, Eric’s real holdings, sits apart from all three.</figcaption>`,
-    control: () => `<div class="tablebox"><table class="ctl"><thead><tr><th>Automation</th><th>Armed by</th><th>Default</th><th>Stopped by</th></tr></thead><tbody>
+        ${box('Sizing gate', 'fixed rules in code')}${arr}<div class="box many"><div>$500 ceiling</div><div>$250 ceiling</div><div>$0: held or below floor</div></div>${arr}
+        ${box('Eric, or his armed mandate', 'a grant up to the ceiling', 'dark')}</div>
+        <figcaption>The suggested risk is a ceiling on the loss a grant may plan for. A grant is not an order, and an order is not a fill.</figcaption>`,
+    books: () => `<div class="quad">${A.views.map((v) => `<div><b>${esc(v.name)}</b><span>${esc(v.text)}</span></div>`).join('')}</div>
+        <div class="chain"><span><b>Risk ceiling</b>the gate’s suggestion</span>${ic('arrow')}<span><b>Grant</b>Eric’s or the mandate’s, ≤ ceiling</span>${ic('arrow')}<span><b>Intent</b>planned loss at the stop; quantity and notional follow</span>${ic('arrow')}<span><b>Order</b>accepted, refused or waiting</span>${ic('arrow')}<span><b>Fill</b>only from closed hours</span></div>
+        <figcaption>Four records, four totals, never added together. The chain applies to the Trader simulation; the PM benchmark stops at the grant.</figcaption>`,
+    control: () => `<div class="authority">${A.authority.map((a) => `<div><b>${esc(a.name)}</b><i>${esc(a.who)}</i><span>${esc(a.text)}</span></div>`).join('')}</div>
+        <div class="pause"><div><b>The desk-wide pause stops</b><ul>${A.pause.stops.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div>
+          <div><b>It leaves running</b><ul>${A.pause.continues.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div></div>
+        <div class="pc-s cites">${A.pause.evidence.map((e) => { const l = evLink(e); return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`; }).join('')}</div>
+        <div class="tablebox"><table class="ctl"><thead><tr><th>Automation</th><th>Enabled by</th><th>Default in code</th><th>Stopped by</th></tr></thead><tbody>
         ${[
           ['Grok Scout', 'Repository variable SCOUT_ENABLED', 'Off unless set', 'The variable'],
-          ['Automatic admission', 'automation.lead_admission, with an expiry', 'Off', 'Admission off · project stop'],
-          ['Paid API research', 'A key, a model, prices, a budget', 'Not configured', 'Desk-wide pause · model hold'],
-          ['Scheduled research', 'research.unattended_enabled', 'Off', 'Desk-wide pause'],
-          ['Pilot runner', 'Eric enables the task and enrolls projects', 'Task disabled', 'Project stop'],
-          ['Paper mandate', 'autonomous_paper_loop and an authority ≤ 30 days', 'Off', 'Mandate off · project stop · any decision of his'],
-          ['Trader’s Paper Book', 'trader.book and trader.rules', 'Unset', 'Desk-wide pause'],
-          ['Exit quotes', 'Monitoring per project, or exit_quotes_auto', 'Off', 'Monitoring off'],
+          ['Automatic admission', 'automation.lead_admission, with an expiry', 'Off', 'Admission off · project stop · pause'],
+          ['Paid API research', 'A key, a model, prices, a budget', 'Not configured', 'Pause · model hold'],
+          ['Scheduled research', 'research.unattended_enabled', 'Off', 'Pause'],
+          ['Pilot runner', 'Eric enables the task and enrolls projects', 'Task Disabled', 'Project stop · pause'],
+          ['Paper mandate', 'autonomous_paper_loop and an authority ≤ 30 days', 'Off', 'Mandate off · project stop · pause · any decision of his'],
+          ['Trader’s Paper Book', 'trader.book and trader.rules', 'Unset', 'Unfunding the book (a pause leaves settlement running)'],
+          ['Exit quotes', 'Monitoring per project, or exit_quotes_auto', 'Off', 'Monitoring off · pause stops the standing policy'],
           ['Contract forensics', 'contracts.enabled and compute caps', 'Off', 'The setting'],
           ['Wallet sync', 'ALCHEMY_API_KEY and a wallet he adds', 'No wallet', 'Removing the key or wallet']
         ].map((r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td class="off">${esc(r[2])}</td><td>${esc(r[3])}</td></tr>`).join('')}
         </tbody></table></div>`,
-    next: () => `<ul class="openlist">${A.open.map(([t, d, e]) => { const l = evLink(e); return `<li><i class="dash" aria-hidden="true"></i><b>${esc(t)}</b><p>${esc(d)}</p><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a></li>`; }).join('')}</ul>`
+    next: () => [['unbuilt', 'Not built', 'The thing does not exist.'], ['disabled', 'Built, off by default', 'In the code; does nothing until enabled.'], ['unproven', 'No operating proof', 'No receipt in the repository shows it working.'], ['questions', 'Still open', 'Eric’s own decisions.']]
+      .map(([k, h, sub]) => `<div class="opengroup og-${k}"><h3>${esc(h)} <span>${esc(sub)}</span></h3><ul class="openlist">${A.open[k].map(([t, d, e]) => { const l = evLink(e); return `<li><i class="dash" aria-hidden="true"></i><b>${esc(t)}</b><p>${esc(d)}</p><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a></li>`; }).join('')}</ul></div>`).join('')
   };
 
   /* ── Litepaper ─────────────────────────────────────────── */
@@ -171,6 +212,7 @@
       ${c.body.map((p) => `<p>${esc(p)}</p>`).join('')}</div>
       ${c.figure ? `<figure class="fig reveal">${FIG[c.figure]()}</figure>` : ''}
       ${c.deeper ? `<details class="deeper"><summary>The technical detail</summary><ul>${c.deeper.map((d) => `<li>${esc(d)}</li>`).join('')}</ul></details>` : ''}
+      ${claimsOf(`chapter ${c.id}`).length ? `<div class="checked"><span class="lbl">Checked in the code</span>${claimsHtml(`chapter ${c.id}`)}</div>` : ''}
       ${nodes.length || flow ? `<div class="onmap"><span class="lbl">On the map</span>
         ${flow ? `<a class="chip path" href="#/map/path/${flow.id}">Follow: ${esc(flow.name)} →</a>` : ''}
         ${nodes.map((n) => `<a class="chip" href="#/map/${n.id}">${stMark(n.status)}${esc(n.name)}</a>`).join('')}</div>` : ''}
@@ -244,7 +286,15 @@
           ${Object.entries(A.controls).map(([k, c]) => `<button data-filter="control:${k}" aria-pressed="false" title="${esc(c.words)}">${ic(ctlIcon[k])}${esc(c.name)}<span class="ct">${counts('control', k)}</span></button>`).join('')}
         </div>
       </aside>
-      <div class="panel viewtoggle" role="group" aria-label="View"><button data-view="map" aria-pressed="true">Map</button><button data-view="list" aria-pressed="false">List</button></div>
+      <div class="panel viewtoggle" role="group" aria-label="View"><button data-view="owner" aria-pressed="false">Owner view</button><button data-view="map" aria-pressed="true">Full map</button><button data-view="list" aria-pressed="false">List</button></div>
+      <div class="ownerview" id="ownerview"><div class="ov-in">
+        <h2>Five handoffs</h2><p class="sub">The owner’s view of the system. Each stage answers one question. Pick any part to see it on the full map, with its four status facts.</p>
+        <ol class="ov-stages">${A.owner.map((s, i) => `<li><div class="ov-h"><span class="sn">${i + 1}</span><b>${esc(s.name)}</b></div><em>${esc(s.q)}</em><p>${esc(s.text)}</p>
+          <div class="ov-nodes">${s.nodes.map((id) => `<button data-id="${id}">${stMark(byId[id].status)}<span>${esc(byId[id].name)}</span></button>`).join('')}</div>
+          <span class="out">${ic('arrow')}${esc(s.out)}</span></li>`).join('')}</ol>
+        <div class="ov-support">${A.ownerSupport.map((s) => `<div><b>${esc(s.name)}</b><span>${esc(s.text)}</span><div class="ov-nodes">${A.nodes.filter((n) => (s.layer && (n.layer === s.layer || n.support)) || (s.band && n.band === s.band)).map((n) => `<button data-id="${n.id}">${stMark(n.status)}<span>${esc(n.name)}</span></button>`).join('')}</div></div>`).join('')}</div>
+        <div class="ov-key">${Object.entries(A.statuses).map(([k, s]) => `<span title="${esc(s.words)}">${stMark(k)} ${esc(s.name)}</span>`).join('')}</div>
+      </div></div>
       <div class="panel zoom" role="group" aria-label="Zoom"><button data-z="in" aria-label="Zoom in">${ic('plus')}</button><button data-z="out" aria-label="Zoom out">${ic('minus')}</button><button data-z="fit" aria-label="Fit the whole map">${ic('fit')}</button></div>
       <div class="maplist" id="maplist">${[...A.layers, ...A.bands].map((l) => `<h3>${esc(l.name)}</h3><p class="ln">${esc(l.note)}</p>
         ${A.nodes.filter((n) => (n.layer || n.band) === l.id).map((n) => `<button data-id="${n.id}">${stMark(n.status)}<b>${esc(n.name)}</b><span class="s">${esc(n.short)} · ${esc(A.statuses[n.status].name)}</span></button>`).join('')}`).join('')}</div>
@@ -258,7 +308,8 @@
     const edgeEls = [...stage.querySelectorAll('g[data-e]')];
     const S = { x: 0, y: 0, k: 1, sel: null, filter: null, flow: null, step: 0 };
     const narrow = () => innerWidth < 760;
-    if (narrow()) setView('list');
+    if (!init.node && !init.flow) setView('owner');
+    else if (narrow()) setView('list');
 
     /* view transform */
     const apply = (smooth) => {
@@ -357,7 +408,9 @@
         <div class="pills">${statusPill(n.status)}${controlPill(n.control)}</div>
         <p class="sum">${esc(n.summary)}</p>
         ${n.detail ? `<ul>${n.detail.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
+        <h4>Status, four separate facts</h4>${fieldsHtml(n)}
         ${n.gates ? `<h4>What has to be true</h4><ul class="gates">${n.gates.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}
+        ${claimsOf(`node ${n.id}`).length ? `<h4>Checked in the code at ${sha}</h4>${claimsHtml(`node ${n.id}`)}` : ''}
         ${out.length ? `<h4>Sends to</h4><div class="conns">${conn(out, 'out')}</div>` : ''}
         ${inc.length ? `<h4>Receives from</h4><div class="conns">${conn(inc, 'in')}</div>` : ''}
         <h4>Source on GitHub</h4><div class="src">${n.evidence.map(evHtml).join('')}</div>
@@ -401,6 +454,7 @@
 
     function setView(v) {
       mv.classList.toggle('list', v === 'list');
+      mv.classList.toggle('owner', v === 'owner');
       mv.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === v)));
     }
 
@@ -409,6 +463,7 @@
       const t = e.target.closest('button, a'); if (!t) { if (!moved && e.target.closest('#vp') && (S.sel)) select(null); return; }
       if (t.classList.contains('node')) { if (moved) return; select(t.dataset.id === S.sel ? null : t.dataset.id); return; }
       if (t.closest('#maplist') && t.dataset.id) { select(t.dataset.id); return; }
+      if (t.closest('#ownerview') && t.dataset.id) { setView(narrow() ? 'list' : 'map'); fit(false); select(t.dataset.id, { smooth: false }); return; }
       if (t.dataset.go) { if (S.flow) endFlow(); select(t.dataset.go); return; }
       if (t.hasAttribute('data-close')) { if (S.flow) endFlow(); else select(null); return; }
       if (t.dataset.flow) { S.flow === t.dataset.flow ? endFlow() : startFlow(t.dataset.flow); return; }
@@ -439,7 +494,7 @@
     addEventListener('resize', onResize);
 
     fit(false);
-    if (init.flow) startFlow(init.flow, init.step);
+    if (init.flow) { if (mv.classList.contains('owner')) setView('map'); startFlow(init.flow, init.step); }
     else if (init.node && byId[init.node]) select(init.node, { smooth: false });
     else paint();
     return () => { document.removeEventListener('keydown', onKey); removeEventListener('resize', onResize); };
@@ -451,30 +506,62 @@
     const built = new Date(EV.built || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const groups = [...A.layers, ...A.bands];
     const place = (n) => groups.find((g) => g.id === (n.layer || n.band)).name;
-    const scale = Math.min(960 / STAGE_W, 640 / STAGE_H);
     const linkList = (list) => list.map((e) => { const l = evLink(e); return `<a href="${esc(l.url)}">${esc(l.label)}</a>`; }).join('');
     const component = (n) => {
       const out = A.edges.filter((e) => e[0] === n.id), inc = A.edges.filter((e) => e[1] === n.id);
+      const cs = claimsOf(`node ${n.id}`);
       return `<div class="pc">
-        <div class="pc-h"><b>${esc(n.name)}</b><span>${esc(A.kinds[n.kind])}</span></div>
+        <div class="pc-h"><b>${esc(n.name)}</b><span>${esc(A.kinds[n.kind])} · ${esc(place(n))}</span></div>
         <div class="pc-m">${stMark(n.status)} ${esc(A.statuses[n.status].name)} · ${esc(A.controls[n.control].name)}</div>
         <p>${esc(n.summary)}</p>
         ${n.detail ? `<ul>${n.detail.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
+        ${fieldsHtml(n, true)}
         ${n.gates ? `<div class="pc-r"><em>What has to be true</em> ${n.gates.map(esc).join(' · ')}</div>` : ''}
+        ${cs.length ? `<div class="pc-r"><em>Checked in the code</em> ${cs.map((c) => `${esc(c.what)} (<a href="${esc(claimUrl(c))}">${esc(c.path.split('/').pop())}:${c.line}</a>)`).join(' · ')}</div>` : ''}
         ${out.length ? `<div class="pc-r"><em>Sends to</em> ${out.map(([, t, l]) => `${esc(byId[t].name)} (${esc(l)})`).join(' · ')}</div>` : ''}
         ${inc.length ? `<div class="pc-r"><em>Receives from</em> ${inc.map(([f, , l]) => `${esc(byId[f].name)} (${esc(l)})`).join(' · ')}</div>` : ''}
         <div class="pc-s">${linkList(n.evidence)}</div></div>`;
     };
+    // The full map in three pages, each large enough to read (component names
+    // print at about 9.5 pt): the first three columns, the last three, then
+    // the two bands in two halves. Each page carries its own key. Region
+    // coordinates are stage pixels; a page's regions share one scale.
+    const laneH = Y0 + laneRows * ROWH;
+    const half = X0 + 2 * COLW + W + 30, right = X0 + 3 * COLW - 30;
+    const bandY = bandTop.platform - 80, bandH = STAGE_H - bandY;
+    const pages = [
+      { t: 'Evidence services, Identify, Research', rs: [{ x: 0, y: 0, w: half, h: laneH }] },
+      { t: 'Challenge, Authorize, Record', rs: [{ x: right, y: 0, w: STAGE_W - right, h: laneH }] },
+      { t: 'Platform and Engineering', rs: [{ x: 0, y: bandY, w: half, h: bandH }, { x: right, y: bandY, w: STAGE_W - right, h: bandH }] }
+    ];
+    const key = `<div class="keyline">${Object.entries(A.statuses).map(([k, s]) => `<span>${stMark(k)} ${esc(s.name)}</span>`).join('')}
+      ${['human', 'automated', 'mixed'].map((k) => `<span>${ic(ctlIcon[k])} ${esc(A.controls[k].name)}</span>`).join('')}<span>✦ AI agent</span></div>`;
+    const mapPage = (pg, i) => {
+      const s = Math.min(...pg.rs.map((r) => Math.min(672 / r.w, 780 / pg.rs.length / r.h - 0.01)));
+      return `<section class="pp mapp">
+        <h2 class="ph">II · The full map, ${i + 1} of 3 <span>${esc(pg.t)}</span></h2>
+        ${pg.rs.map((r) => `<div class="sheet" style="width:${Math.round(r.w * s)}px;height:${Math.round(r.h * s)}px"><div class="zoomer" style="zoom:${s.toFixed(4)};width:${Math.floor(r.w)}px;height:${Math.floor(r.h)}px;overflow:hidden">
+          <div class="stage" style="width:${STAGE_W}px;height:${STAGE_H}px;margin-left:${-r.x}px;margin-top:${-r.y}px">${stageMarkup()}</div></div></div>`).join('')}
+        ${key}
+        <p class="note">${i < 2 ? 'Arrows that leave the page continue on the other map page. ' : ''}Every connection, with what passes along it, is listed in the component reference.</p>
+      </section>`;
+    };
+    const statusRows = [
+      ['Implemented', 'Code exists at the baseline.', `Read from the repository at ${sha}; the build checks each cited line and claim.`],
+      ['Enabled', 'Configuration permits it to act.', 'Only the default in code is given. Each desk’s current settings are not read: UNKNOWN.'],
+      ['Deployed', 'The named revision is serving.', `The R0 receipt: the online desk served ${A.baseline.deployed.rev} at ${A.baseline.deployed.at}. The PC desk: UNKNOWN.`],
+      ['Operating proven', 'The workflow completed correctly.', 'Given only where a repository receipt says so; otherwise UNKNOWN or “none recorded”.']
+    ];
     app.innerHTML = `<div class="printdoc">
       <section class="pp cover-p">
         <div class="eyebrow">CryptoResearch · read from the code</div>
         <h1>The Living System Atlas</h1>
-        <p class="lede">A private research desk where models read and argue, code measures and keeps the books, and Eric decides. A visual litepaper and a map of the whole system, each part linked to the source that makes it true.</p>
+        <p class="lede">A private research desk where models read and argue, code measures and keeps the books, and Eric decides. A visual litepaper and a map of the whole system at one source baseline, each part linked to the source that makes it true.</p>
         <div class="facts">
           <div><b>${A.nodes.length}</b>components</div><div><b>${A.edges.length}</b>connections</div>
-          <div><b>${A.flows.length}</b>guided paths</div><div><b>${evCount}</b>source links</div></div>
-        <div class="hero-fig">${strip(false)}</div>
-        <p class="colo">Read from <code>main</code> at commit <code>${esc(EV.commit.slice(0, 7))}</code> of ${esc(EV.repo)} · ${esc(built)}</p>
+          <div><b>${evCount}</b>source links</div><div><b>${(EV.claims || []).length}</b>claims checked</div></div>
+        <div class="hero-fig">${FIG.owner(true)}</div>
+        <div class="baseline"><b>Source baseline ${sha}</b> · ${esc(EV.repo)} · built ${esc(built)}<br>${esc(A.baseline.deployed.words)}<br>This atlas describes code. It grants no authority, and it is not proof that code, deployment and operation match.</div>
       </section>
 
       <section class="pp">
@@ -482,30 +569,24 @@
         <ol class="ptoc">
           <li><span>I</span>The Litepaper</li>
           ${A.chapters.map((c) => `<li class="sub"><span>${c.num}</span>${esc(c.title)}</li>`).join('')}
-          <li><span>II</span>The map at a glance</li>
+          <li><span>II</span>The full map, in three pages</li>
           <li><span>III</span>Six guided paths</li>
           <li><span>IV</span>Component reference</li>
-          <li><span>V</span>How to read this atlas</li>
+          <li><span>V</span>How to read this atlas, and what it could not establish</li>
         </ol>
       </section>
 
       ${A.chapters.map((c) => `<section class="pp ch-p">
-        <div class="num">${c.num}</div><h2>${esc(c.title)}</h2><p class="lede">${esc(c.lede)}</p>
+        <header class="ch-head"><div class="num">${c.num}</div><h2>${esc(c.title)}</h2><p class="lede">${esc(c.lede)}</p></header>
         ${c.body.map((p) => `<p>${esc(p)}</p>`).join('')}
-        ${c.figure ? `<figure class="fig">${FIG[c.figure]()}</figure>` : ''}
+        ${c.figure ? `<figure class="fig fig-${c.figure}">${FIG[c.figure]()}</figure>` : ''}
         ${c.deeper ? `<div class="deep"><b>The technical detail</b><ul>${c.deeper.map((d) => `<li>${esc(d)}</li>`).join('')}</ul></div>` : ''}
+        ${claimsOf(`chapter ${c.id}`).length ? `<div class="pc-r"><em>Checked in the code</em> ${claimsOf(`chapter ${c.id}`).map((x) => `${esc(x.what)} (<a href="${esc(claimUrl(x))}">${esc(x.path.split('/').pop())}:${x.line}</a>)`).join(' · ')}</div>` : ''}
         ${c.nodes ? `<p class="seealso">On the map: ${c.nodes.map((id) => esc(byId[id].name)).join(' · ')}</p>` : ''}
         ${c.evidence ? `<div class="pc-s">${linkList(c.evidence)}</div>` : ''}
       </section>`).join('')}
 
-      <section class="pp wide">
-        <h2 class="ph">II · The map at a glance</h2>
-        <p class="note">Left to right: where information goes. Below: where it runs and how it changes. Connections into the two bands are listed in the component reference.</p>
-        <div class="sheet" style="width:${Math.round(STAGE_W * scale)}px;height:${Math.round(STAGE_H * scale)}px">
-          <div class="stage" style="width:${STAGE_W}px;height:${STAGE_H}px;zoom:${scale}">${stageMarkup()}</div></div>
-        <div class="keyline">${Object.entries(A.statuses).map(([k, s]) => `<span>${stMark(k)} ${esc(s.name)}</span>`).join('')}
-          ${['human', 'automated', 'mixed'].map((k) => `<span>${ic(ctlIcon[k])} ${esc(A.controls[k].name)}</span>`).join('')}<span>✦ AI agent</span></div>
-      </section>
+      ${pages.map(mapPage).join('')}
 
       <section class="pp">
         <h2 class="ph">III · Six guided paths</h2>
@@ -515,19 +596,26 @@
 
       <section class="pp">
         <h2 class="ph">IV · Component reference</h2>
+        <div class="defaults"><b>Unless a part says otherwise</b><span>Implemented: yes, at ${sha}.</span><span>Deployed: ${esc(DEFAULT_DEP())}.</span><span>Enabled gives the default in code; what each desk is set to now is not read, so it is UNKNOWN.</span></div>
         ${groups.map((g) => `<div class="pgroup"><h3>${esc(g.name)} <span>${esc(g.note)}</span></h3>
-          ${A.nodes.filter((n) => (n.layer || n.band) === g.id).map(component).join('')}</div>`).join('')}
+          <div class="pcs">${A.nodes.filter((n) => (n.layer || n.band) === g.id).map(component).join('')}</div></div>`).join('')}
       </section>
 
       <section class="pp">
         <h2 class="ph">V · How to read this atlas</h2>
-        <p>Every component, connection and claim was read from the repository’s code and documents. Each source link opens the exact line on GitHub, pinned to commit <code>${esc(EV.commit.slice(0, 7))}</code>, so it keeps pointing at what was read even as the code moves on.</p>
-        <p>A build step checks every cited function, constant or line against the files and refuses to produce the atlas if any is missing, or if a connection names a part that does not exist.</p>
-        <div class="tablebox"><table class="ctl"><thead><tr><th>Status</th><th>Means</th></tr></thead><tbody>
+        <p>Every component, connection and claim was read from the repository’s code and documents. Each source link opens the exact line on GitHub, pinned to commit <code>${sha}</code>, so it keeps pointing at what was read even as the code moves on.</p>
+        <p>The build reads every file as it is at that commit. It checks that each cited function, constant or line exists (${evCount} source links), and that each claim the words depend on, a default, a limit or a refusal, matches the code (${(EV.claims || []).length} claims). It refuses to produce the atlas if any fails, if a connection names a part that does not exist, or if a part of the five stages belongs to none or to two. A matching claim proves the code says it; it does not prove the system ran.</p>
+        <h3 class="sh">Four status facts</h3>
+        <div class="tablebox"><table class="ctl"><thead><tr><th>Fact</th><th>Means</th><th>What this atlas used</th></tr></thead><tbody>
+          ${statusRows.map((r) => `<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('')}
+        </tbody></table></div>
+        <h3 class="sh">The marks on the map</h3>
+        <div class="tablebox"><table class="ctl"><tbody>
           ${Object.entries(A.statuses).map(([k, s]) => `<tr><td>${stMark(k)} ${esc(s.name)}</td><td>${esc(s.words)}</td></tr>`).join('')}
           ${Object.entries(A.controls).map(([, c]) => `<tr><td>${esc(c.name)}</td><td>${esc(c.words)}</td></tr>`).join('')}
         </tbody></table></div>
-        <p class="note">“Operational” means built in the code on main. It does not mean deployed or proven in operation: the repository’s One Sheet keeps merged, deployed and operating apart, and states “Operating proof: none yet”.</p>
+        <h3 class="sh">What this atlas could not establish</h3>
+        <ul class="unres">${A.unresolved.map(([t, d]) => `<li><b>${esc(t)}</b> ${esc(d)}</li>`).join('')}</ul>
       </section>
     </div>`;
     return null;

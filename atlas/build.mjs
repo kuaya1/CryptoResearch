@@ -1,7 +1,15 @@
-// Resolves every evidence anchor in atlas/system.js against the repository and
-// writes atlas/evidence.generated.js: the pinned commit and each anchor's line.
-// Fails, writing nothing, if any file or anchor cannot be found.
+// Checks atlas/system.js against the repository and writes
+// atlas/evidence.generated.js: the pinned commit, each anchor's line and each
+// claim's line. Every file is read as it is at the pinned commit (git show),
+// never from the working tree. Fails, writing nothing, if any file, anchor or
+// claim cannot be found, or any connection or stage names an unknown part.
 //   node atlas/build.mjs
+//
+// Two kinds of evidence:
+//   evidence [path, anchor]      the source a reader should open; the anchor must exist.
+//   claims   [path, regex, what] a fact the adjacent words depend on (a default, a
+//                                limit, a refusal); the pattern must match the file.
+// A claim that matches proves the text exists, not that the system ran.
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -16,14 +24,23 @@ const A = sandbox.window.ATLAS;
 
 // The newest commit that touched anything the atlas cites (never the atlas itself),
 // so every link is a permalink that exists on GitHub.
-const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
-const commit = git('rev-list', '-1', 'HEAD', '--', '.', ':(exclude)atlas', ':(exclude).gitignore');
+const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 << 20 });
+const commit = git('rev-list', '-1', 'HEAD', '--', '.', ':(exclude)atlas', ':(exclude).gitignore').trim();
+const cache = new Map();
+const read = (p) => {
+  if (!cache.has(p)) { try { cache.set(p, git('show', `${commit}:${p}`)); } catch { cache.set(p, null); } }
+  return cache.get(p);
+};
 
 const refs = [];
+const claims = [];
 const take = (list, where) => (list || []).forEach(([p, a]) => refs.push({ p, a, where }));
-A.nodes.forEach((n) => take(n.evidence, `node ${n.id}`));
-A.chapters.forEach((c) => take(c.evidence, `chapter ${c.id}`));
-A.open.forEach((o) => take([o[2]], `open "${o[0]}"`));
+const claim = (list, where) => (list || []).forEach(([p, re, what]) => claims.push({ p, re, what, where }));
+A.nodes.forEach((n) => { take(n.evidence, `node ${n.id}`); take(n.proof && n.proof.evidence, `node ${n.id} proof`); claim(n.claims, `node ${n.id}`); });
+A.chapters.forEach((c) => { take(c.evidence, `chapter ${c.id}`); claim(c.claims, `chapter ${c.id}`); });
+Object.entries(A.open).forEach(([k, list]) => list.forEach((o) => take([o[2]], `open.${k} "${o[0]}"`)));
+take(A.baseline.deployed.evidence, 'baseline'); take(A.baseline.pc.evidence, 'baseline');
+take(A.pause.evidence, 'pause');
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function resolve(text, anchor) {
@@ -50,27 +67,45 @@ function resolve(text, anchor) {
 }
 
 const out = {};
+const claimOut = [];
 const missing = [];
 for (const r of refs) {
   const key = `${r.p}|${r.a}`;
   if (key in out) continue;
-  const file = path.join(root, r.p);
-  if (!fs.existsSync(file)) { missing.push(`${r.where}: no file ${r.p}`); continue; }
-  const line = resolve(fs.readFileSync(file, 'utf8'), r.a);
+  const text = read(r.p);
+  if (text === null) { missing.push(`${r.where}: no file ${r.p} at ${commit.slice(0, 7)}`); continue; }
+  const line = resolve(text, r.a);
   if (!line) { missing.push(`${r.where}: no "${r.a}" in ${r.p}`); continue; }
   out[key] = r.a ? line : 0;
 }
+for (const c of claims) {
+  const text = read(c.p);
+  if (text === null) { missing.push(`${c.where}: claim "${c.what}": no file ${c.p}`); continue; }
+  const m = new RegExp(c.re).exec(text);
+  if (!m) { missing.push(`${c.where}: claim "${c.what}" not found in ${c.p} (/${c.re}/)`); continue; }
+  claimOut.push({ where: c.where, what: c.what, path: c.p, line: text.slice(0, m.index).split('\n').length });
+}
 
-// Every edge and flow step must name a real node.
+// Every edge, flow step, chapter, owner stage and view must name a real node,
+// and every node on the five columns must belong to exactly one owner stage.
 const ids = new Set(A.nodes.map((n) => n.id));
-A.edges.forEach(([f, t]) => { if (!ids.has(f) || !ids.has(t)) missing.push(`edge ${f} -> ${t}: unknown node`); });
-A.flows.forEach((f) => f.steps.forEach(([n]) => { if (!ids.has(n)) missing.push(`flow ${f.id}: unknown node ${n}`); }));
-A.chapters.forEach((c) => (c.nodes || []).forEach((n) => { if (!ids.has(n)) missing.push(`chapter ${c.id}: unknown node ${n}`); }));
+const unknown = (where, n) => { if (!ids.has(n)) missing.push(`${where}: unknown node ${n}`); };
+A.edges.forEach(([f, t]) => { unknown(`edge ${f} -> ${t}`, f); unknown(`edge ${f} -> ${t}`, t); });
+A.flows.forEach((f) => f.steps.forEach(([n]) => unknown(`flow ${f.id}`, n)));
+A.chapters.forEach((c) => (c.nodes || []).forEach((n) => unknown(`chapter ${c.id}`, n)));
+A.owner.forEach((s) => s.nodes.forEach((n) => unknown(`owner ${s.id}`, n)));
+A.views.forEach((v) => unknown(`view ${v.name}`, v.book));
+const staged = A.owner.flatMap((s) => s.nodes);
+A.nodes.filter((n) => n.layer && n.layer !== 'sources' && !n.support).forEach((n) => {
+  const k = staged.filter((x) => x === n.id).length;
+  if (k !== 1) missing.push(`node ${n.id}: in ${k} owner stages (needs exactly 1)`);
+});
+A.nodes.forEach((n) => { if (!A.statuses[n.status]) missing.push(`node ${n.id}: unknown status ${n.status}`); });
 
 if (missing.length) {
   console.error(`atlas: ${missing.length} problem(s), nothing written:\n  ` + missing.join('\n  '));
   process.exit(1);
 }
-const body = `/* Generated by atlas/build.mjs — do not edit. */\nwindow.ATLAS_EVIDENCE = ${JSON.stringify({ repo: 'kuaya1/CryptoResearch', commit, built: new Date().toISOString(), refs: out }, null, 1)};\n`;
+const body = `/* Generated by atlas/build.mjs — do not edit. */\nwindow.ATLAS_EVIDENCE = ${JSON.stringify({ repo: 'kuaya1/CryptoResearch', commit, built: new Date().toISOString(), refs: out, claims: claimOut }, null, 1)};\n`;
 fs.writeFileSync(path.join(here, 'evidence.generated.js'), body);
-console.log(`atlas: ${Object.keys(out).length} evidence anchors resolved at ${commit.slice(0, 7)}; ${A.nodes.length} components, ${A.edges.length} connections, ${A.flows.length} paths.`);
+console.log(`atlas: ${Object.keys(out).length} evidence anchors and ${claimOut.length} claims checked at ${commit.slice(0, 7)}; ${A.nodes.length} components, ${A.edges.length} connections, ${A.flows.length} paths.`);
