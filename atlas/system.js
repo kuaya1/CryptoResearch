@@ -13,9 +13,11 @@ window.ATLAS = {
      atlas cites (build.mjs pins every link to it); the deployment line is what
      the repository's own R0 receipt read back, not something this atlas
      observed. Nothing here is read from a desk. */
+  staticNotice: 'A static architectural and status map, not a live telemetry backend. It shows what the repository said when this page was built, and reads nothing from a desk or a scheduler while open.',
+
   baseline: {
     note: 'Source baseline: the newest commit on main the atlas cites. Every source link is pinned to it.',
-    deployed: { rev: '5a8e75b', at: '2026-11-03 17:20 UTC', words: 'The online desk’s /healthz read back 5a8e75b at 2026-11-03 17:20 UTC, per the R0 receipt. Its application code is identical to this baseline; main has since changed documents only.',
+    deployed: { rev: '5a8e75b', at: '2026-11-03 17:20 UTC', words: 'The last repository receipt of the online desk’s /healthz reads 5a8e75b at 2026-11-03 17:20 UTC (R0). Code has changed on main since then, so that receipt does not describe this baseline, and R0 must be repeated. This atlas does not read which revision is deployed now.',
       evidence: [['docs/engineering/OPERATING_PROOF_R0_2026-11-03.md', '~observed 2026-11-03 at 17:20Z']] },
     pc: { words: 'At R0 both PC tasks (pilot-all and Hourly) were registered Disabled; pilot-all had never run.',
       evidence: [['docs/engineering/OPERATING_PROOF_R0_2026-11-03.md', '~never_run']] }
@@ -641,8 +643,70 @@ window.ATLAS = {
       lede: 'The honest edge of the system, in three kinds: what does not exist, what exists but is off by default, and what has no operating proof.',
       body: [],
       figure: 'next',
-      nodes: ['ops1', 'pilot-runner', 'mandate', 'trader-book', 'explorer'] }
+      nodes: ['ops1', 'pilot-runner', 'mandate', 'trader-book', 'explorer'] },
+    { id: 'stage15', num: '13', title: 'Stage 1.5: holds, proof and what is next',
+      lede: 'Seven planning items in three classes that must never be read as one another: held on purpose, waiting for a real run, and code still to write. Operating proof: none yet.',
+      body: ['All the Stage 1.5 code slices come first. The live proof, R0 then B0 to B3, runs once afterward (Milestone D), so that main and the deployed revision stay frozen while it runs.'],
+      figure: 'stage15',
+      evidence: [['docs/ONE-SHEET.md', '~**Operating proof: none yet.**'], ['docs/engineering/AUTONOMY_PROOF_CLI.md', '']] }
   ],
+
+  /* Chapter 13. Each item's facts are cited and checked; its class is Eric's
+     ruling, which lives outside the repository and is said to. */
+  stage15: {
+    operatingProof: 'none',
+    classes: {
+      hold:  { name: 'Intentional hold by design', words: 'Eric chose this. It is not an engineering failure or a gap to close.' },
+      proof: { name: 'Pending operating proof', words: 'The code or specification exists. No real run is recorded, and passing tests are not one.' },
+      code:  { name: 'Scheduled Stage 1.5 code slice', words: 'Not built yet. Each gets its own pull request and Eric’s merge.' }
+    },
+    classSource: 'The three classes and each item’s class are Eric’s rulings of 2026-11-03, in his Stage 1.5 directive and his order for this pull request. Neither is a file in this repository, so the build checks the facts cited here but cannot check the rulings.',
+    items: [
+      { n: 3, name: 'Real trading venue', cls: 'hold', now: 'None exists. The Trader’s venue is a file, and Stage 1.5 stays paper-only. Stage 2 needs Eric’s separate authorization.',
+        evidence: [['dashboard/core/paper-trader.js', 'venueSend']], claims: [['dashboard/core/paper-trader.js', 'function venueSend\\(', 'The venue is local code in the Paper Book']] },
+      { n: 6, name: 'Gemini on the online desk', cls: 'hold', now: 'On hold, so nothing new is assigned to it. It stays held until the B0 to B3 evidence and the Ops-1 move are complete.',
+        evidence: [['dashboard/hosted.js', '~GEMINI_HOLD']], claims: [['dashboard/hosted.js', 'const GEMINI_HOLD = \\{', 'The online desk sets the hold']] },
+      { n: 1, name: 'Ops-1: the independent runner', cls: 'proof', now: 'The Render Cron Job is specified, and its service is not created. Moving to it is the last step of Milestone D.',
+        evidence: [['docs/engineering/OPS1_RENDER_CRON.md', '~**Status: defined, not created.**']], claims: [['docs/engineering/OPS1_RENDER_CRON.md', '\\*\\*Status: defined, not created\\.\\*\\*', 'The specification says it is not created']] },
+      { n: 2, name: 'B0 to B3: the operating proof', cls: 'proof', now: 'prove-autonomy (#169, #171) now reads the evidence for each step, without running anything. No real B0, B1, B2, B3 or cutover evidence exists yet, and R0 must be repeated.',
+        evidence: [['docs/engineering/AUTONOMY_PROOF_CLI.md', ''], ['dashboard/core/autonomy-proof.js', '']], claims: [['dashboard/cli.js', "cmd === 'prove-autonomy'", 'The command exists']] },
+      { n: 4, name: 'GoPlus in research packets', cls: 'code', slice: 'C2', now: 'Still in monitor mode. Eric’s direction is to make it active. Unknown never reads as safe.',
+        evidence: [['dashboard/core/screening.js', "~packet_mode: 'monitor'"]], claims: [['dashboard/core/screening.js', "packet_mode: 'monitor'", 'The default is monitor']] },
+      { n: 5, name: 'Real records in the Explorer', cls: 'code', slice: 'C3', now: 'Refused in code today. Eric’s direction is a deliberately confirmed export of one project; the whole desk stays refused.',
+        evidence: [['dashboard/core/explorer.js', 'exportProject']], claims: [] },
+      { n: 7, name: 'Owner questions and protected correctness', cls: 'code', slice: 'B1, B2, B3, C1', now: 'Four slices: the Law 1 credential (B1), the Constitution’s Invariant 3 wording (B2), A5 paper-record integrity, a protected change (B3), and the fee-drag baseline (C1).',
+        evidence: [['docs/ONE-SHEET.md', '~Still his and still open']], claims: [['docs/ONE-SHEET.md', 'Still his and still open: the Law 1 credential, A5, the Constitution\'s Invariant 3 wording, and the baseline and fee-drag comparison', 'The sheet lists all four']] }
+    ],
+    /* The sheet's table, name for name. The test compares them. */
+    hosts: [
+      { name: 'GitHub Actions', runs: 'The morning scout, while Eric’s switch is on, and the test check on every pull request.', evidence: ['docs/ONE-SHEET.md', '~| **GitHub Actions** |'] },
+      { name: 'Render desk', runs: 'The web service and its 30-minute timer, and the 2-minute research tick.', evidence: ['docs/ONE-SHEET.md', '~| **Render desk** |'] },
+      { name: 'Runner host', runs: 'The pilot, one at a time: the PC task during B0 to B3, then the Ops-1 Render Cron Job once created.', evidence: ['docs/ONE-SHEET.md', '~| **Runner host** |'] },
+      { name: 'PC offsite backup', runs: 'The hourly task: the only copy of the records off Render. The desk runs without it.', evidence: ['docs/ONE-SHEET.md', '~| **PC offsite backup** |'] }
+    ],
+    /* The boxes in the sheet's drawing, label for label. The test compares them. */
+    lifecycle: ['Scout lead', 'Admission', 'Agent 1 research: one report per model, separate grades', 'Agent 2 prosecution: conviction and typed spread', 'Ticket receipt: create-only, frozen packet', 'Decision line + decision basis: one operation', 'Intent: one attempt per decision', 'Order: reserved, sent, acked', 'Causal fills, stop, target, expiry', 'Trader Sim outcome: fee-bearing', 'Research vs BTC: every eligible report', 'PM Cohort benchmark', 'Eric\'s review'],
+    overlays: ['Stop: pause, mandate off, admission off, project stop', 'Liveness: poll sighting, run outcome, heartbeat'],
+    boxNote: 'No document in this repository names a set of six boxes, so this atlas does not name one. The sheet draws the boxes below. The map’s six rows are the five handoffs plus evidence services.',
+    /* Pull requests behind this status. The build checks each merge commit. */
+    prs: [
+      [158, '34089b9', 'N1: an unreadable digest ledger never vetoes a stop or Undo'],
+      [159, '1230170', 'N3: the reconcile check binds to the attempt Eric checked'],
+      [160, 'af03923', 'N2: the local runner’s import checks the stop inside its save'],
+      [161, 'e3e017d', 'N4 and N7: only the journal snapshot the book validated'],
+      [162, '6e2db98', 'The autonomy completion blueprint, Q1 to Q5 of record'],
+      [163, '94cede6', 'The runner: unattended launch, revision guard, honest heartbeat'],
+      [164, '21a11fa', 'Jobs: impaired status for partial failures'],
+      [165, 'fbfb640', 'The sheet’s host legend and the /healthz deploy rule'],
+      [166, '5a8e75b', 'Ops-1 specification and read-only preflight'],
+      [167, '363b536', 'The R0 receipt: the dedicated PC runner'],
+      [168, 'eb4e0b4', 'This atlas'],
+      [169, '1909597', 'prove-autonomy: the read-only evidence foundation'],
+      [170, null, 'Closed unmerged. Its checks were ported into #171.'],
+      [171, '9f6d9aa', 'prove-autonomy: readers for B1, B2, B3 and cutover']
+    ],
+    prNote: 'The sheet’s merged list ends at #166. #167 to #171 are checked against git history, not the sheet.'
+  },
 
   /* Chapter 12's lists: each item with the document or code that says so. */
   open: {
@@ -657,7 +721,7 @@ window.ATLAS = {
       ['Standing exit-quote approvals', 'exit_quotes_auto is false by default.', ['dashboard/core/workspace.js', '~exit_quotes_auto: false']],
       ['Contract reads and the contract gate', 'contracts.enabled is false; the gate observes.', ['dashboard/core/workspace.js', '~contracts: {']],
       ['GoPlus in research packets', 'packet_mode is “monitor”.', ['dashboard/core/screening.js', '~packet_mode']],
-      ['Real records in the Explorer', 'Refused in code until Eric decides.', ['dashboard/core/explorer.js', 'exportProject']],
+      ['Real records in the Explorer', 'Refused in code today; a confirmed single-project export is scheduled (C3).', ['dashboard/core/explorer.js', 'exportProject']],
       ['Gemini on the online desk', 'On hold; nothing new is assigned to it.', ['dashboard/hosted.js', '~GEMINI_HOLD']]
     ],
     unproven: [
@@ -667,7 +731,7 @@ window.ATLAS = {
       ['Each desk’s current settings', 'Not read by this atlas: UNKNOWN.', ['dashboard/core/workspace.js', '~automation: {']]
     ],
     questions: [
-      ['Eric’s open questions', 'The Law 1 credential, A5, Invariant 3’s wording, the fee-drag baseline.', ['docs/ONE-SHEET.md', '~Still his and still open']]
+      ['Eric’s open questions', 'The Law 1 credential, A5, Invariant 3’s wording, the fee-drag baseline. Scheduled as slices B1 to B3 and C1; see chapter 13.', ['docs/ONE-SHEET.md', '~Still his and still open']]
     ]
   },
 

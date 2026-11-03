@@ -1,0 +1,177 @@
+/* CryptoResearch — design tokens, extracted from CryptoResearch Architecture v17 */
+/* Atlas copy: the Google Fonts @import that stood here is removed, because the Atlas calls no network. See atlas/README.md. */
+
+:root {
+  /* ── Canvas ───────────────────────────────────────── */
+  --cr-canvas:            #eceef2;
+  --cr-canvas-glow-white: #ffffff;                  /* radial 15% 0% */
+  --cr-canvas-glow-violet: oklch(0.95 0.03 285);    /* radial 95% 20% */
+  --cr-canvas-glow-green:  oklch(0.96 0.03 160);    /* radial 60% 100% */
+  --cr-canvas-bg:
+    radial-gradient(1100px 650px at 15% 0%, var(--cr-canvas-glow-white) 0%, rgba(255,255,255,0) 60%),
+    radial-gradient(900px 600px at 95% 20%, var(--cr-canvas-glow-violet) 0%, rgba(255,255,255,0) 65%),
+    radial-gradient(800px 500px at 60% 100%, var(--cr-canvas-glow-green) 0%, rgba(255,255,255,0) 70%),
+    var(--cr-canvas);
+
+  /* ── Light surfaces ───────────────────────────────── */
+  --cr-surface:           #ffffff;                  /* Envelope, Surfaces cards */
+  --cr-surface-warm:      #f7f6f2;                  /* Lens card */
+  --cr-surface-ceramic:   #f4f4f2;                  /* decision card, light pill on dark */
+  --cr-surface-sunken:    #f1f1f3;                  /* meter track inside tiles */
+  --cr-surface-glass:     rgba(255,255,255,.72);    /* header chips */
+  --cr-surface-glass-hi:  rgba(255,255,255,.85);    /* floating command bar */
+  --cr-surface-glass-reply: rgba(255,255,255,.88);
+  --cr-fill-subtle:       rgba(16,17,20,.05);       /* suggestion chip, neutral badge bg */
+  --cr-fill-subtle-hover: rgba(16,17,20,.09);
+
+  /* ── Light borders ────────────────────────────────── */
+  --cr-border-highlight:  rgba(255,255,255,.9);     /* card perimeter (light-on-light) */
+  --cr-border-highlight-hi: rgba(255,255,255,.95);  /* chips, command bar */
+  --cr-divider:           rgba(16,17,20,.08);       /* list row rules */
+  --cr-divider-soft:      rgba(16,17,20,.07);       /* card footer rule */
+  --cr-border-ink:        rgba(11,11,12,.14);       /* outline pills on ceramic */
+  --cr-track:             rgba(16,17,20,.08);       /* progress track */
+
+  /* ── Text (light) ─────────────────────────────────── */
+  --cr-ink:               #101114;                  /* primary */
+  --cr-ink-body:          #2a2c31;                  /* reply bubble body */
+  --cr-ink-secondary:     #4a4d54;                  /* body copy, chip text */
+  --cr-ink-tertiary:      #5b5e66;                  /* decision "why" */
+  --cr-ink-muted:         #6b6e75;                  /* eyebrows, notes, mono meta */
+  --cr-ink-faint:         #8a8d94;                  /* de-emphasised headline, placeholders */
+  --cr-ink-ghost:         #a3a6ad;                  /* indexes, refs */
+  --cr-ink-off:           #c4c6cb;                  /* retired / inactive pip */
+
+  /* ── Dark surfaces ────────────────────────────────── */
+  --cr-obsidian:          #0b0b0c;                  /* Engine, Needs you, Only-Eric strip */
+  --cr-obsidian-ink:      #0a0b0f;                  /* glyphs on ceramic ("E") */
+  --cr-obsidian-raised:   #141416;                  /* node disc */
+  --cr-obsidian-disc-hi:  #1b1e27;                  /* disc gradient top */
+  --cr-obsidian-disc-lo:  #0b0c11;                  /* disc gradient bottom */
+  --cr-dark-fill:         rgba(255,255,255,.06);    /* segmented track, hover */
+  --cr-dark-border:       rgba(255,255,255,.16);    /* outline pill on dark */
+  --cr-dark-border-dash:  rgba(255,255,255,.18);    /* empty state */
+  --cr-dark-divider:      rgba(255,255,255,.08);
+  --cr-dark-track:        rgba(255,255,255,.08);    /* dial track */
+  --cr-dark-grid-minor:   rgba(255,255,255,.028);
+  --cr-dark-grid-major:   rgba(255,255,255,.055);
+
+  /* ── Text (dark) ──────────────────────────────────── */
+  --cr-paper:             #f4f4f2;                  /* primary on dark */
+  --cr-paper-strong:      #ffffff;                  /* selected label */
+  --cr-paper-secondary:   #d8d9dc;
+  --cr-paper-tertiary:    #c9cbd0;                  /* node labels, ledger */
+  --cr-paper-body:        #9a9da4;                  /* descriptions */
+  --cr-paper-muted:       #8a8d94;                  /* eyebrows, captions */
+  --cr-paper-faint:       #7d818c;                  /* node status line */
+  --cr-paper-off:         #6b707b;                  /* future values */
+
+  /* ── Status ───────────────────────────────────────── */
+  --cr-live:              oklch(0.6 0.15 160);      /* LIVE tile, hold fill */
+  --cr-live-ink:          oklch(0.46 0.13 160);     /* MERGED text on light */
+  --cr-live-text:         oklch(0.5 0.13 160);      /* row state text/pip */
+  --cr-live-bg:           oklch(0.6 0.15 160 / .1);
+  --cr-live-on-dark:      oklch(0.76 0.14 160);
+  --cr-live-ledger:       oklch(0.78 0.13 160);
+
+  --cr-read:              oklch(0.72 0.13 230);     /* READ tile (Surfaces) */
+  --cr-read-deep:         oklch(0.62 0.13 230);     /* READ tile (Envelope) */
+  --cr-read-on-dark:      oklch(0.74 0.12 230);     /* source pip */
+
+  --cr-tuning:            oklch(0.78 0.15 70);      /* stripe A */
+  --cr-tuning-2:          oklch(0.84 0.12 75);      /* stripe B */
+  --cr-tuning-ink:        #3a2a00;                  /* text on stripes */
+  --cr-tuning-text:       oklch(0.55 0.14 60);      /* OPEN/BRANCH on light */
+  --cr-tuning-badge-fg:   oklch(0.52 0.14 60);
+  --cr-tuning-badge-bg:   oklch(0.72 0.16 65 / .13);
+  --cr-tuning-on-dark:    oklch(0.8 0.14 70);
+  --cr-tuning-stripes: repeating-linear-gradient(135deg, var(--cr-tuning) 0 6px, var(--cr-tuning-2) 6px 12px);
+
+  --cr-critical:          oklch(0.6 0.2 20);        /* Prosecute tile */
+  --cr-critical-on-dark:  oklch(0.66 0.2 20);       /* tension Δ */
+
+  --cr-neutral:           #0b0b0c;                  /* human / sovereign */
+  --cr-neutral-badge-fg:  #6b6e75;
+  --cr-neutral-badge-bg:  rgba(16,17,20,.05);
+
+  --cr-agent:             oklch(0.58 0.19 285);     /* AGENT tile, projected segment */
+  --cr-agent-pip:         oklch(0.62 0.17 285);
+  --cr-agent-text:        oklch(0.5 0.17 285);      /* projected badge fg */
+  --cr-agent-bg:          oklch(0.62 0.17 285 / .1);
+  --cr-agent-on-dark:     oklch(0.7 0.16 285);
+
+  --cr-link:              oklch(0.52 0.14 160);
+  --cr-link-hover:        oklch(0.44 0.13 160);
+
+  /* ── Typography ───────────────────────────────────── */
+  --cr-font-sans: 'Geist', -apple-system, sans-serif;
+  --cr-font-mono: 'Geist Mono', ui-monospace, monospace;
+
+  /* display */
+  --cr-display-size: 50px;   --cr-display-lh: 1.04; --cr-display-wt: 300; --cr-display-ls: -.03em;
+  --cr-metric-xl-size: 54px; --cr-metric-xl-wt: 300; --cr-metric-xl-ls: -.05em;   /* page System / Domain */
+  --cr-metric-size: 44px;    --cr-metric-wt: 100;    --cr-metric-ls: -.06em;      /* card counters */
+  --cr-watermark-size: 230px; --cr-watermark-wt: 100; --cr-watermark-ls: -.08em; --cr-watermark-color: rgba(16,17,20,.05);
+  /* titles */
+  --cr-title-lg-size: 40px;  --cr-title-lg-wt: 300;  --cr-title-lg-ls: -.04em;    /* Lens node name */
+  --cr-title-size: 30px;     --cr-title-wt: 300;     --cr-title-ls: -.035em; --cr-title-lh: 1;  /* card titles */
+  --cr-title-sm-size: 22px;  --cr-title-sm-wt: 400;  --cr-title-sm-ls: -.025em; --cr-title-sm-lh: 1.15;
+  /* body */
+  --cr-body-lg-size: 15px;   --cr-body-lg-lh: 1.55;
+  --cr-body-size: 13.5px;    --cr-body-lh: 1.5;
+  --cr-body-sm-size: 13px;   --cr-body-sm-lh: 1.45;
+  --cr-caption-size: 12.5px;
+  --cr-item-size: 14px;      --cr-item-wt: 500;
+  --cr-item-note-size: 12px; --cr-item-note-lh: 1.4;
+  /* mono labels (always uppercase) */
+  --cr-eyebrow-size: 10.5px; --cr-eyebrow-ls: .18em;   /* SURFACES section headers, CONSENT, ENGINE */
+  --cr-eyebrow-page-size: 11.5px; --cr-eyebrow-page-ls: .14em;
+  --cr-label-size: 10.5px;   --cr-label-ls: .1em;      /* SYSTEM / DOMAIN */
+  --cr-micro-size: 10px;     --cr-micro-ls: .14em;     /* IN QUEUE, tile tags, PROJECT → */
+  --cr-badge-size: 10.5px;   --cr-badge-ls: .08em;     /* status badge */
+  --cr-state-size: 10px;     --cr-state-ls: .1em;      /* row state, trend labels */
+  --cr-chip-mono-size: 10px; --cr-chip-mono-ls: .06em; /* scope chips */
+  --cr-meta-size: 11px;                                /* repo / sha line, no tracking */
+
+  /* ── Radii ────────────────────────────────────────── */
+  --cr-radius-card: 36px;
+  --cr-radius-inner: 26px;     /* decision card, empty state */
+  --cr-radius-stack: 24px;     /* stacked sheets */
+  --cr-radius-tile: 18px;      /* tiles, Only-Eric strip, reply bubble */
+  --cr-radius-key: 14px;       /* gate key */
+  --cr-radius-logo: 11px;
+  --cr-radius-bar: 2px;        /* 3px progress bars */
+  --cr-radius-pill: 999px;
+
+  /* ── Borders ──────────────────────────────────────── */
+  --cr-border-w: 1px;
+  --cr-border-card: 1px solid var(--cr-border-highlight);
+  --cr-border-chip: 1px solid var(--cr-border-highlight-hi);
+  --cr-border-outline: 1px solid var(--cr-border-ink);
+  --cr-border-outline-dark: 1px solid var(--cr-dark-border);
+
+  /* ── Elevation ────────────────────────────────────── */
+  --cr-shadow-card:       0 1px 2px rgba(16,17,20,.05), 0 30px 60px -34px rgba(16,17,20,.22);
+  --cr-shadow-card-lens:  0 1px 2px rgba(16,17,20,.05), 0 30px 60px -34px rgba(16,17,20,.25);
+  --cr-shadow-dark:       0 30px 70px -30px rgba(16,17,20,.55);
+  --cr-shadow-inner-card: 0 20px 40px -20px rgba(0,0,0,.6);
+  --cr-shadow-float:      0 1px 2px rgba(16,17,20,.06), 0 20px 50px -14px rgba(16,17,20,.25);
+  --cr-shadow-bubble:     0 12px 32px -12px rgba(16,17,20,.2);
+  --cr-ring-pip:          0 0 0 4px rgba(16,17,20,.1);
+  --cr-ring-agent:        0 0 0 5px oklch(0.62 0.17 285 / .16);
+  --cr-blur-glass:        blur(28px);
+  --cr-blur-bubble:       blur(20px);
+
+  /* ── Pips ─────────────────────────────────────────── */
+  --cr-pip-lg: 7px;  --cr-pip: 6px;  --cr-pip-sm: 5px;
+}
+
+body {
+  margin: 0;
+  background: var(--cr-canvas);
+  color: var(--cr-ink);
+  font-family: var(--cr-font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--cr-link); text-decoration: none; }
+a:hover { color: var(--cr-link-hover); }
