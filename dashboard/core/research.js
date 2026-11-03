@@ -2379,10 +2379,16 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
   // every bound and price it needs is set (providerStatus api).
   const created = [];
   const skippedSchedules = [];
-  try { sweepCaptures(ws); } catch (_) { /* housekeeping only */ }
+  // Housekeeping never blocks the research after it, but a failure is said
+  // and makes the run impaired (blueprint 2026-11-03 §4 PR 2: these were
+  // swallowed, and the job read as a success).
+  const housekeeping = [];
+  const hkError = (err) => String((err && err.message) || err).slice(0, 200);
+  // Called through the module's exports so a test can inject a throw.
+  try { module.exports.sweepCaptures(ws); } catch (err) { housekeeping.push({ step: 'sweep_captures', error: hkError(err) }); }
   // Assistant claims idle for a day go back to waiting (drafts kept).
   let released = [];
-  try { released = releaseStaleAssistantJobs(ws, now); } catch (_) { /* housekeeping only */ }
+  try { released = module.exports.releaseStaleAssistantJobs(ws, now); } catch (err) { housekeeping.push({ step: 'release_stale', error: hkError(err) }); }
   for (const due of dueSchedules(ws, now)) {
     const st = providerStatus(ws);
     const usable = normalizeProviders(due.schedule.providers || ws.settings.research.default_providers).filter((p) => st[p].mode === 'api' || st[p].mode === 'mock');
@@ -2422,9 +2428,12 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
   const captured = results.filter((r) => r.status === 'captured').length;
   const background = results.filter((r) => r.status === 'submitted' || r.status === 'running').length;
   const quiet = !created.length && results.every((r) => ['running', 'waiting', 'busy', 'skipped'].includes(r.status));
+  const status = !todo.length && !created.length ? (released.length ? 'ok' : 'noop') : failed || uncertain || captured ? 'attention' : quiet && !released.length ? 'noop' : 'ok';
+  const hkSaid = housekeeping.length ? `Housekeeping failed: ${housekeeping.map((x) => `${x.step} (${x.error})`).join('; ')}.` : null;
   return {
-    status: !todo.length && !created.length ? (released.length ? 'ok' : 'noop') : failed || uncertain || captured ? 'attention' : quiet && !released.length ? 'noop' : 'ok',
-    summary: `${todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${budgetWaits ? `, ${budgetWaits} waiting for the budget` : ''}${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting'}${released.length ? `; ${released.length} idle assistant claim(s) released back to waiting (drafts kept)` : ''}`,
+    status: housekeeping.length ? 'impaired' : status,
+    ...(housekeeping.length ? { housekeeping, error: hkSaid } : {}),
+    summary: `${hkSaid ? `${hkSaid} ` : ''}${todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${budgetWaits ? `, ${budgetWaits} waiting for the budget` : ''}${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting'}${released.length ? `; ${released.length} idle assistant claim(s) released back to waiting (drafts kept)` : ''}`,
     results,
     created,
     released,

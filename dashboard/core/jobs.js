@@ -39,6 +39,9 @@ const DAILY = new Set(['snapshot', 'reviews', 'backup', 'offsite']);
 // The jobs the server's 30-minute timer and its start pass run (server.js),
 // here so a test reads the list the timer runs.
 const HOSTED_TIMER_JOBS = Object.freeze(['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics', 'trader', 'leads']);
+// `impaired` (blueprint 2026-11-03 §4 PR 2) is deliberately not here: the run
+// went ahead but part of its work failed, so it records a failure and never
+// advances last_success_at.
 const OK_STATUSES = new Set(['ok', 'noop', 'attention', 'skipped', 'partial', 'busy', 'backoff', 'budget_paused', 'not_due']);
 
 function readJobState(ws) {
@@ -238,8 +241,22 @@ async function runJobBody(ws, name, trigger) {
       }
       const stepSaid = st && (st.done || st.problems) ? `Book step: ${st.done} done, ${st.problems} problem${st.problems === 1 ? '' : 's'}${st.words ? ` (${st.words})` : ''}.` : null;
       const summary = [said, r.message, stepSaid].filter(Boolean).join(' ');
-      const status = r.status === 'held' ? 'skipped' : r.status === 'noop' && st && st.done ? 'ok' : r.status;
-      return { status, summary, error: r.status === 'failed' ? r.message : null, ...(st ? { step: st } : {}), ...(m ? { mandate: { status: m.status, granted: (m.granted || []).length, reopened: (m.reopened || []).length, skipped: (m.skipped || []).length } } : {}) };
+      // Impaired (blueprint 2026-11-03 §4 PR 2; Eric's correction 2): work
+      // the tick could not do is never a success. Before, a sweep that threw
+      // or a book step that threw inside the candle refresh left the job
+      // "ok" or "attention", both counted as success. The work itself is
+      // unchanged: the step still runs after a sweep failure.
+      const c = r.counts || {};
+      const refreshStepFailed = Array.isArray(c.problems) && c.problems.some((p) => p && p.step);
+      const reasons = [];
+      if (m && m.status === 'failed') reasons.push('mandate_sweep_failed');
+      if ((st && st.problems > 0) || (c.step && c.step.problems > 0) || refreshStepFailed) reasons.push('book_step_problems');
+      else if (r.status === 'attention') reasons.push('candle_problems');
+      if (r.accounting_unknown === true) reasons.push('accounting_unknown');
+      const impaired = r.status !== 'failed' && reasons.length > 0;
+      const status = impaired ? 'impaired' : r.status === 'held' ? 'skipped' : r.status === 'noop' && st && st.done ? 'ok' : r.status;
+      const error = r.status === 'failed' ? r.message : impaired ? `Impaired (${reasons.join(', ')}): ${summary}`.slice(0, 500) : null;
+      return { status, summary, error, ...(impaired ? { impaired: reasons } : {}), ...(st ? { step: st } : {}), ...(m ? { mandate: { status: m.status, granted: (m.granted || []).length, reopened: (m.reopened || []).length, skipped: (m.skipped || []).length } } : {}) };
     }
     case 'leads': {
       // Its own lease and turn; CoinGecko's and GoPlus's gates and budgets are shared.
@@ -249,7 +266,7 @@ async function runJobBody(ws, name, trigger) {
     case 'research': {
       if (require('./workspace').automationPaused(ws)) return { status: 'skipped', summary: 'Automation is paused: no research is sent until you resume it.' };
       const r = await require('./research').runDueJobs(ws, { trigger });
-      return { status: r.status, summary: r.summary, error: r.status === 'failed' ? r.summary : null };
+      return { status: r.status, summary: r.summary, error: r.status === 'failed' ? r.summary : r.status === 'impaired' ? r.error || r.summary : null };
     }
     case 'snapshot': {
       const r = require('./portfolio').snapshotIfDue(ws, require('./market').readLatest(ws));
@@ -334,4 +351,4 @@ function buildReviewFindings(ws) {
   return doc;
 }
 
-module.exports = { JOB_NAMES, HOSTED_TIMER_JOBS, JOB_STATE_REL, JOB_LOG_REL, FINDINGS_REL, readJobState, runJob, runJobs, isDue, marketDue, buildReviewFindings };
+module.exports = { JOB_NAMES, HOSTED_TIMER_JOBS, JOB_STATE_REL, JOB_LOG_REL, FINDINGS_REL, OK_STATUSES, readJobState, runJob, runJobs, isDue, marketDue, buildReviewFindings };

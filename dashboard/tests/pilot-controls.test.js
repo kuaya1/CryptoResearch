@@ -256,3 +256,62 @@ test('the panel\'s words: the STALE poll and the fresh report are separate rows;
   assert.deepEqual(M.readback(paused, 'pause'), { ok: true, words: 'Read back: automation is paused.' });
   assert.equal(M.readback(v, 'reconcile', s.pid).ok, false);
 });
+
+// Audit S5/E3 (blueprint 2026-11-03 §4 PR 2): the 2-minute research tick
+// releases an assistant claim idle for a day, the pilot worker's own `cowork`
+// research job included, to manual. That is now said on Desk controls. The
+// pinned answer (correction 4): the released job is NOT stranded; the pilot's
+// queue still offers it, and the worker's prepare and complete still take it.
+test('a cowork pilot job idle 24 h is released and shows as research_release; pinned: not stranded, the queue still returns research and the worker prepares and completes the manual job', async (t) => {
+  const M = await import('../public/desk-controls-model.js');
+  const PW = require('../core/pilot-worker');
+  const research = require('../core/research');
+  const { mockReport } = require('../core/demo');
+  const s = desk(t);
+  noNetwork(t);
+  const run = research.createRun(s.ws, { project_id: s.pid, providers: 'claude', channel: 'pilot worker (cowork)', assistant: 'claude', utterance: 'autonomous pilot (online worker)', force_new: true }).run;
+  assert.deepEqual([run.jobs.claude.state, run.jobs.claude.mode], ['running', 'cowork']);
+  const v0 = DC.view(s.ws);
+  assert.equal(v0.projects[0].research_release, null, 'nothing released yet');
+  assert.equal(v0.dispatch.released_pilot_jobs, 0);
+  assert.ok(!M.projectRows(v0.projects[0]).some((r) => r.key === 'release'));
+  assert.equal(M.deskRows(v0).find((r) => r.key === 'released').state, 'None');
+
+  // A day and an hour with no activity: the research tick releases it.
+  const later = Date.now() + 25 * 3600000;
+  const tick = await research.runDueJobs(s.ws, { now: later, fetchImpl: async () => { throw new Error('FICTIONAL: no provider'); } });
+  assert.deepEqual(tick.released, [{ project_id: s.pid, run_id: run.run_id, provider: 'claude' }]);
+  const job = research.loadRun(s.ws, s.pid, run.run_id).jobs.claude;
+  assert.deepEqual([job.state, job.mode, job.released[0].from_mode], ['unconfigured', 'manual', 'cowork']);
+
+  // Said on Desk controls, through the signed-in route as well.
+  const srv = await startDesk(t, s.ws);
+  const r = await request(srv.port, '/api/desk/controls', { headers: { 'x-cr-token': srv.token } });
+  assert.equal(r.status, 200);
+  for (const v of [DC.view(s.ws), r.json]) {
+    const rel = v.projects[0].research_release;
+    assert.deepEqual({ at: rel.at, idle_hours: rel.idle_hours, run_id: rel.run_id }, { at: job.released[0].at, idle_hours: 25, run_id: run.run_id });
+    assert.equal(rel.words, `Claude's research job on ${s.pid} was released from the pilot worker to manual at ${job.released[0].at} after 25 h with no runner activity.`);
+    assert.equal(v.dispatch.released_pilot_jobs, 1);
+    const row = M.projectRows(v.projects[0]).find((x) => x.key === 'release');
+    assert.deepEqual([row.state, row.tone], ['Released to manual', 'warn']);
+    assert.deepEqual([M.deskRows(v).find((x) => x.key === 'released').state, M.deskRows(v).find((x) => x.key === 'released').tone], ['1 job', 'warn']);
+  }
+  srv.shutdown();
+
+  // Pinned: the queue still returns research for the enrolled project, on the released run.
+  const q = T.pilotQueue(s.ws).find((x) => x.project_id === s.pid);
+  assert.deepEqual([q.step, q.run_id], ['research', run.run_id]);
+  // The worker claims it, prepares the manual job's frozen prompt and completes it.
+  const c = PW.claimStep(s.ws, s.pid, { owner: 'test' });
+  assert.deepEqual([c.status, c.step], ['claimed_now', 'research'], c.words);
+  const p = await PW.prepare(s.ws, s.pid, c.token, { fetchImpl: async () => { throw new Error('FICTIONAL: no network'); } });
+  assert.deepEqual([p.status, p.role, p.run_id], ['prepared', 'researcher', run.run_id], p.words);
+  const done = PW.complete(s.ws, s.pid, c.token, { text: mockReport(s.ws, 'claude', research.loadRun(s.ws, s.pid, run.run_id)), prompt_sha256: p.prompt_sha256 });
+  assert.equal(done.status, 'saved', done.words);
+  assert.equal(research.loadRun(s.ws, s.pid, run.run_id).jobs.claude.state, 'completed');
+  // Completed: no longer said as released.
+  const v2 = DC.view(s.ws);
+  assert.equal(v2.projects[0].research_release, null);
+  assert.equal(v2.dispatch.released_pilot_jobs, 0);
+});

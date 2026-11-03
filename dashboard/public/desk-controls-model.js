@@ -29,6 +29,10 @@ export function deskRows(v) {
   const s = v.dispatch && v.dispatch.sessions;
   if (!s || s.unreadable) out.push(row('sessions', 'Agent sessions today', 'Unknown', 'warn', 'The session ledger could not be read; no session starts.'));
   else out.push(row('sessions', 'Agent sessions today', `${s.used} of ${s.ceiling}`, s.left > 0 ? 'quiet' : 'warn', `${s.left} left today (${s.day}, New York).`));
+  // Pilot research jobs released to manual (blueprint 2026-11-03 §4 PR 2).
+  const rel = v.dispatch ? v.dispatch.released_pilot_jobs : null;
+  if (rel === null || rel === undefined) out.push(row('released', 'Released to manual', 'Unknown', 'warn', 'Whether a pilot research job was released could not be read.'));
+  else out.push(row('released', 'Released to manual', rel ? `${rel} job${rel === 1 ? '' : 's'}` : 'None', rel ? 'warn' : 'quiet', rel ? 'A pilot research job sat a day with no runner activity and went back to waiting for you or the pilot.' : null));
 
   const f = v.freshness || {};
   if (f.unreadable) out.push(row('freshness', 'Data freshness', 'Unknown', 'warn', f.words));
@@ -55,6 +59,9 @@ export function projectRows(p) {
   const d = p.dispatch || {};
   const [cs, ct] = CLAIM_STATE[d.state] || CLAIM_STATE.unreadable;
   out.push(row('dispatch', 'Dispatch', cs, ct, d.words));
+  const rr = p.research_release;
+  if (rr && rr.unreadable) out.push(row('release', 'Research job', 'Unknown', 'warn', rr.words));
+  else if (rr) out.push(row('release', 'Research job', 'Released to manual', 'warn', rr.words));
   const r = p.reports || {};
   if (r.unreadable) out.push(row('reports', 'Reports', 'Unknown', 'warn', r.words));
   else {

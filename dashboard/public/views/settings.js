@@ -529,7 +529,7 @@ function activityTab(ctx) {
   const jobs = idx.freshness.jobs.jobs || {};
   const jobRows = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'forensics', 'trader', 'leads', 'research', 'snapshot', 'reviews', 'backup', ...(ctx.state.session && ctx.state.session.hosted ? [] : ['offsite'])].map((name) => ({ name, ...(jobs[name] || {}) }));
   const runner = idx.freshness.jobs.runner || {};
-  const JOB_STATE = { ok: ['OK', 'ok'], done: ['OK', 'ok'], failed: ['Failed', 'bad'], attention: ['Needs attention', 'warn'] };
+  const JOB_STATE = { ok: ['OK', 'ok'], done: ['OK', 'ok'], failed: ['Failed', 'bad'], attention: ['Needs attention', 'warn'], impaired: ['Impaired', 'bad'] };
   const ps = priceStatus(mf);
   return h('div', null,
     card('Data freshness', kv([
