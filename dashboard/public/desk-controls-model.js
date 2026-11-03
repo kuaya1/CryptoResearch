@@ -92,6 +92,33 @@ export function reconcileBody(rc) {
   return rc && typeof rc.attempt_id === 'string' && rc.attempt_id ? { reconciled: true, attempt_id: rc.attempt_id } : null;
 }
 
+// Eric's "I checked the desk" is about one attempt (N3, post-remediation audit
+// 2026-11-02). It is kept under the project AND the attempt the panel showed,
+// never the project alone: when the view reads back another attempt, or none,
+// the box reads clear and Release is disabled until he checks again.
+export function ackKey(projectId, rc) {
+  const attempt = rc && rc.available === true && typeof rc.attempt_id === 'string' && rc.attempt_id ? rc.attempt_id : null;
+  return projectId && attempt ? `${projectId}:${attempt}` : null;
+}
+
+// The acknowledgements that still name an attempt the view offers to
+// reconcile; every other one is dropped as soon as the view is read, so an
+// attempt that leaves and comes back is never shown as already checked.
+export function pruneAcks(checked, v) {
+  const live = new Set((v && v.projects ? v.projects : []).map((p) => ackKey(p.project_id, p.controls && p.controls.reconcile)).filter(Boolean));
+  const out = {};
+  for (const [k, on] of Object.entries(checked || {})) if (on === true && live.has(k)) out[k] = true;
+  return out;
+}
+
+// What the panel draws for a project's reconcile control: the key its
+// checkbox writes, whether it reads checked, and whether Release is enabled.
+export function reconcileControl(checked, projectId, rc, busy = null) {
+  const key = ackKey(projectId, rc);
+  const acknowledged = Boolean(key && checked && checked[key] === true);
+  return { key, acknowledged, enabled: acknowledged && busy === null && reconcileBody(rc) !== null };
+}
+
 export function readback(v, id, projectId = null, attemptId = null) {
   if (id === 'reconcile') {
     const p = v && (v.projects || []).find((x) => x.project_id === projectId);

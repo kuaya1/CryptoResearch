@@ -7,11 +7,13 @@
 // offered only for an expired claim, after Eric says he checked the desk, and
 // goes through the release route as {"reconciled":true} with the attempt the
 // panel shows, read back as that same attempt (audit F4); nothing retries.
+// His check is kept per project and attempt (N3): a read that shows another
+// attempt, or none, clears it and disables Release until he checks again.
 // Opening it reads only.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from '../../../public/ui.js';
 import { api, refresh } from '../lib/desk.js';
-import { deskRows, projectRows, offActions, readback, reconcileBody, OFF_BODIES } from '../../../public/desk-controls-model.js';
+import { deskRows, projectRows, offActions, readback, reconcileBody, reconcileControl, pruneAcks, OFF_BODIES } from '../../../public/desk-controls-model.js';
 
 const WAIT_MS = 12000;
 const enc = encodeURIComponent;
@@ -49,7 +51,12 @@ export default function DeskControls() {
         api.get('/api/desk/controls'),
         new Promise((_, no) => { timer = setTimeout(() => no(new Error('The desk controls are taking too long to read.')), WAIT_MS); }),
       ]);
-      if (alive.current) setV(got);
+      if (alive.current) {
+        // Eric's check is about the attempt shown (N3): any acknowledgement
+        // for an attempt this read no longer offers clears at once.
+        setChecked((x) => pruneAcks(x, got));
+        setV(got);
+      }
       return got;
     } catch (e) {
       if (alive.current) setErr(e.message);
@@ -69,9 +76,9 @@ export default function DeskControls() {
       // claim is released only as reconciled. Nothing here turns anything on.
       if (id === 'stop') await api.post(`/api/projects/${enc(projectId)}/autonomy`, { action: 'stop' });
       else if (id === 'reconcile') {
-        // The attempt shown is the attempt released, or nothing (audit F4).
+        // The attempt shown and checked is the one released (F4, N3).
         const body = reconcileBody(rc);
-        if (!body) throw new Error('No attempt is shown to reconcile.');
+        if (!body || !reconcileControl(checked, projectId, rc).acknowledged) throw new Error('No attempt you checked is shown to reconcile.');
         await api.post(`/api/projects/${enc(projectId)}/pilot-claim/release`, body);
       }
       else if (OFF_BODIES[id]) await api.post('/api/settings', OFF_BODIES[id]);
@@ -80,7 +87,7 @@ export default function DeskControls() {
       const rb = readback(after, id, projectId, rc ? rc.attempt_id : null);
       if (alive.current) setSaid(rb);
       toast(rb.words, rb.ok ? undefined : 'bad');
-      if (id === 'reconcile') setChecked((x) => ({ ...x, [projectId]: false }));
+      if (id === 'reconcile') setChecked((x) => pruneAcks(x, after));
       await refresh();
     } catch (e) {
       if (alive.current) setSaid({ ok: false, words: e.message });
@@ -128,6 +135,7 @@ export default function DeskControls() {
       {(v.projects || []).map((p) => {
         const rc = p.controls && p.controls.reconcile;
         const st = p.controls && p.controls.stop;
+        const ack = reconcileControl(checked, p.project_id, rc, busy);
         return (
           <section key={p.project_id} className="l2-panel" aria-labelledby={`prefs-dc-p-${p.project_id}`} data-key={`prefs-dc-project-${p.project_id}`}>
             <header className="l2-panel-head">
@@ -144,10 +152,10 @@ export default function DeskControls() {
                 {rc && rc.available ? (
                   <>
                     <label className="dc-check">
-                      <input type="checkbox" checked={Boolean(checked[p.project_id])} data-key={`prefs-dc-checked-${p.project_id}`} onChange={(e) => setChecked((x) => ({ ...x, [p.project_id]: e.target.checked }))} />
+                      <input type="checkbox" checked={ack.acknowledged} data-key={`prefs-dc-checked-${p.project_id}`} data-attempt={rc.attempt_id} onChange={(e) => { const k = ack.key; if (k) setChecked((x) => ({ ...x, [k]: e.target.checked })); }} />
                       <span>I checked the desk for attempt {rc.attempt_id}'s report or ticket</span>
                     </label>
-                    <button type="button" className="btn btn-sm" disabled={busy !== null || !checked[p.project_id]} data-key={`prefs-dc-reconcile-${p.project_id}`} onClick={() => act('reconcile', p.project_id, rc)}>
+                    <button type="button" className="btn btn-sm" disabled={!ack.enabled} data-key={`prefs-dc-reconcile-${p.project_id}`} onClick={() => act('reconcile', p.project_id, rc)}>
                       {busy === `${p.project_id}:reconcile` ? 'Releasing…' : 'Release as reconciled'}
                     </button>
                   </>
