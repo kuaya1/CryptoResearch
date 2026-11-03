@@ -138,6 +138,8 @@ test('two workers with their own lock files against one desk: one claim, one ses
   assert.equal(c.released, true);
   assert.equal(c.outcome, 'saved');
   assert.equal(T.pilotQueue(s.ws, { project: s.pid })[0].step, 'pm_review');
+  // Blueprint 2026-11-03 PR 3 (C12): the wait names both deciders.
+  assert.equal(T.pilotQueue(s.ws, { project: s.pid })[0].why, 'The ticket waits for a PM decision: Eric\'s, or the paper mandate\'s if it is armed. Nothing for an agent to do.');
   // Restart the desk; both workers run again: nothing is dispatched twice.
   srv.stop();
   srv = await startDesk(t, s.ws);

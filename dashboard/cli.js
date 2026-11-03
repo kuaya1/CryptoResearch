@@ -111,7 +111,7 @@ Contract state (read-only chain reads at a finalized block; nothing is read whil
                                          paste into the signed-in desk's browser console;
                                          --print-schedule prints the pilot-task.ps1 commands that register pilot-all every 30 minutes (never runs them)
 
-PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
+PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide, or the paper mandate grants inside a generation you armed; paper orders only, never a real one)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
   tickets auto-pilot-sync [--min 45] [--dry-run] [--json]   opt in verified projects whose current Claude report is cr-research-prompt@6 graded 45+ (never opts out)

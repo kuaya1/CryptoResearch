@@ -29,9 +29,9 @@
 // reported as zero; when the book itself does not read, no count is given,
 // because unknown is not zero (docs/CONSTITUTION.md, Law 4).
 //
-// Denominators are always shown (§5.4). No rate is shown at any count until
-// Eric sets a minimum number of closed positions (Q3): the default is counts
-// and rows only. Groups follow Q3's default key: who decided (Eric or the
+// Denominators are always shown (§5.4). No rate is shown before 50 closed
+// positions in a group (Q3, ratified 2026-11-03), and none while the execution
+// policy reads not_recorded (Q4 = B): counts and rows only. Groups follow Q3's default key: who decided (Eric or the
 // mandate) × the Claude researcher's model version × the execution policy;
 // provider, model version and role are separate dimensions, never pooled.
 //
@@ -45,7 +45,7 @@
 
 const FORMAT = 'cr-grade-outcome-view@1';
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const NO_RATE = 'No rate is shown until Eric sets a minimum number of closed positions (blueprint Q3). Counts and rows only.';
+const NO_RATE = 'No rate is shown before 50 closed positions in a group (Q3, 2026-11-03), and none while the execution policy is not recorded. Counts and rows only.';
 const NOT_RECORDED = 'not_recorded';
 
 const VIEWS = Object.freeze({

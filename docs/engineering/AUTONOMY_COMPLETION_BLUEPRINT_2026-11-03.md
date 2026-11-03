@@ -200,7 +200,7 @@ Recorded 2026-11-03. They replace the proposals in `OWNER_DECISIONS_2026-11-02.m
 | `docs/ONE-SHEET.md` | **Host legend,** one subgraph or one table under the diagram, one line per host: **GitHub Actions** (scout-cron, 11:30 UTC, and the `test` check); **Render desk** (the web service and its 30-min timer: snapshot, reviews, backup, fundamentals, screening, forensics, trader, leads; the 2-min research tick); **Runner host** (PC task during B0–B3, then Ops-1 Render cron; one at a time, Q1); **PC offsite backup** (`\CryptoResearch\Hourly`, the only off-Render copy, non-critical to the lifecycle) |
 | | **Status.** It names the Q1 exception (`reconcile` for Eric). It moves N4/N7 to Merged as `#161 e3e017d`. It replaces "Deployed: not verified" with the `/healthz` readback rule: deployed = `/healthz` revision, read at a stated time |
 | | **Owner questions.** Q1–Q5 are answered by this blueprint |
-| `dashboard/tests/one-sheet-status.test.js` | **Self-entry rule.** A Merged entry without a SHA is allowed only as `#N (this pull request)`, and only when either (a) no merge commit for `#N` is in `HEAD`'s history (its own branch, before merge), or (b) `#N` is the latest merge that touched `docs/ONE-SHEET.md` (`git log -1 --merges --format=%s -- docs/ONE-SHEET.md`, on `main` after merge). An older merged entry left without its SHA fails, so the next sheet edit backfills it |
+| `dashboard/tests/one-sheet-status.test.js` | **Self-entry rule.** A Merged entry without a SHA is allowed only as `#N (this pull request)`, and only when either (a) no merge commit for `#N` is in `HEAD`'s history (its own branch, before merge), or (b) `#N` is the latest merge that touched `docs/ONE-SHEET.md` (`git log -1 --merges --first-parent --format=%s -- docs/ONE-SHEET.md`, on `main` after merge; without `--first-parent`, history simplification drops the merge commits and it prints nothing). An older merged entry left without its SHA fails, so the next sheet edit backfills it |
 | | **Proposed line.** Every item names a PR number or says `no pull request`. A bare label like "N4" is refused, so the history check (`:52-71`) can see every item. Both tests skip on a shallow clone, as today |
 | `DESK_STATE.md` | **Header (`:3`).** "Last updated 2026-11-03". The runbook's step 3 (`:442-447`) gets the new `-Register -MaxAgents 1 -Model <id>` from the runner worktree. Step 4 names the Q5 candidate rule |
 | `docs/engineering/OWNER_DECISIONS_2026-11-02.md` | **Banner (one line, at the top):** "Superseded on 2026-11-03 by `AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` §3, Eric's ratified answers." The body is kept as history |
@@ -302,9 +302,10 @@ Recorded 2026-11-03. They replace the proposals in `OWNER_DECISIONS_2026-11-02.m
    $a = New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument "--headless cmd.exe /d /c `"$HOME\.cryptoresearch\hourly-main.cmd`""
    Set-ScheduledTask -TaskPath '\CryptoResearch\' -TaskName Hourly -Action $a
    $env:CR_WORKSPACE = "$HOME\Documents\CryptoResearch"; node "$HOME\Documents\CryptoResearch-runner\dashboard\cli.js" doctor --json; Remove-Item Env:CR_WORKSPACE
+   git -C "$HOME\Documents\CryptoResearch-runner" rev-parse HEAD
    Enable-ScheduledTask -TaskPath '\CryptoResearch\' -TaskName Hourly
    ```
-   - Doctor must name `Documents\CryptoResearch` as the workspace and the runner's `main` revision.
+   - Doctor must name `Documents\CryptoResearch` as the workspace. Doctor does not report a Git revision. The runner's revision is the `rev-parse HEAD` line, which must equal `origin/main` (R0.1), and PR 1's revision guard checks it again on every unattended run.
    - After the next hourly run, `Documents\CryptoResearch\logs\jobs-state.json` must show an `offsite` run at the new time. `logs\scheduler-last-run.log` is written in the runner worktree, which is git-ignored and keeps it clean.
    - **Never set `CR_WORKSPACE` at user level.** Every node process would inherit it, the test suite included.
 
@@ -318,14 +319,14 @@ Do `BOUNDED_PAPER_READINESS.md` B0 (`:607-653`), steps 1–7, with these changes
    await (await fetch('/api/desk/controls')).json()
    ```
    It must show `authority.admission.on: false`, the pause state, the mandate generation and its expiry. Account for every pilot project's claim. Any `reconcile` is Eric's to settle first.
-3. **Runner dry run from the runner worktree.** Nothing is claimed. This proves the poll token, PR 1's guard, the `POST` sighting and the heartbeat:
+3. **Runner dry run from the runner worktree.** Nothing is claimed. This proves PR 1's revision guard and the `GET` poll with the poll token, and nothing more. `--dry-run` sends no worker `POST` sighting and no Healthchecks ping (`pilot.js` `runAll`: the heartbeat base and `production` are off on a dry run). Both are proven on the first run without `--dry-run` (B1):
    ```powershell
    cd "$HOME\Documents\CryptoResearch-runner"
    node dashboard/scripts/pilot.js --check-isolation
    node dashboard/scripts/pilot.js --pilot-all --desk=online --unattended --model=<PINNED_MODEL> --max-agents=1 --dry-run
    ```
    The output must show the matching `revision`, the pre-poll list and exit 0. Then make a negative check: edit one tracked file, rerun, see the refusal and exit 1, and run `git checkout -- .`.
-4. **Heartbeat.** Create the Healthchecks check (period 60 min, grace 30 min, alerting Eric only). Set `CR_HEALTHCHECK_URL` for this shell only. Never print it. A dry run sends no ping, so the first real ping comes from B1's run.
+4. **Heartbeat.** Create the Healthchecks check (period 60 min, grace 30 min, alerting Eric only). Set `CR_HEALTHCHECK_URL` for this shell only. Never print it. A dry run sends no ping and no `POST` sighting. The first `/start` and final ping, and the first `POST` sighting (Desk Controls poll `Fresh`), come from B1's run, the first invocation without `--dry-run`; record them in `B1.txt`.
 5. **Meters and doctor** as in readiness B0 step 5, online through Preferences > System. Read the candle meter on Research > Outcomes > Trader's Paper Book.
 6. **The canary candidate (Q5).**
    - Read NMR's contract verdict on its Forensics tab.
@@ -362,7 +363,8 @@ Do `BOUNDED_PAPER_READINESS.md` B0 (`:607-653`), steps 1–7, with these changes
    ```js
    await (await fetch('/api/research/attribution')).json()
    ```
-   - The row for `<decision_id>` must show the basis state `frozen`, each named record checked by its SHA-256 (none refused), and execution read through the book, not `integrity`.
+   - The response must not be refused (a record that does not hold refuses the whole view, 409 `INTEGRITY`). The row for `<decision_id>` must show `inputs.label === 'decision_time'` (not `reconstructed`, `unverified`, `integrity` or `unreadable`), and its execution read through the book, not `integrity`.
+   - The full per-record check is read separately, with `node dashboard/cli.js tickets basis <project_id> <decision_id> --json` (`cr.decision-basis.v1`, `decision-basis.js` `viewOf`). It must show `label: 'decision_time'`, `digest: 'verified'` and each named record checked by its SHA-256, none refused. The desk has no HTTP route for this view (`projects/<id>/tickets/basis/<decision_id>.json` is where the record is stored, not an address), so it runs where the desk's records are: the Render service's Shell.
    - The execution-time facts must read `not_recorded` (Q4 = B).
    - Record the fill's price, fees, the stop's configuration and the position lineage. A field the response does not carry is recorded as UNKNOWN, never inferred.
 5. **Watch risk management** on real data. Report a natural stop, target or expiry if one comes in the window; otherwise "closure pending". A held or no-trade outcome is reported as such, and the fill milestone stays unproven.

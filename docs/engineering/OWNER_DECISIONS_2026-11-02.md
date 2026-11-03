@@ -1,5 +1,7 @@
 # Eric's open decisions (2026-11-02)
 
+**Superseded on 2026-11-03 by `AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` §3, Eric's ratified answers.** The text below is kept as history.
+
 A proposal for Eric to answer, edit or close. Nothing here is an approval, and no code reads it. Each answer takes effect only when Eric records it, by merging the change that carries it or by setting the value himself.
 
 Basis: `main` at `8b79e3a`; the implementation audit of 2026-11-02 (§8, §9); the combined blueprint's §11, which is a proposal (PR #134, closed unmerged at `b462db6`).
