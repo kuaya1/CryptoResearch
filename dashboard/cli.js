@@ -313,6 +313,32 @@ function need(v, msg) {
   return v;
 }
 
+// N2 (post-remediation audit, 2026-11-02): the local pilot runner saves a
+// session's answer through this CLI under its claim (--token). Eric's stop is
+// then asked inside the save's own locked operation (pilot-claims stopGuard),
+// as the worker's complete is (pilot-worker.js), so a stop that lands after
+// the runner's `tickets check` and before the commit leaves nothing saved: an
+// inbox copy is set aside, the claim is let go as stopped, and the answer is
+// { status: 'stopped', saved: false } with the stop's words. Without --token
+// the import is unchanged. null when no token is given.
+function claimedSave(ws, flags, usage) {
+  const token = one(flags.token);
+  if (token === undefined) return null;
+  const pid = need(one(flags.project), usage);
+  const PC = require('./core/pilot-claims');
+  return {
+    guard: () => PC.stopGuard(ws, pid),
+    stopped(err) {
+      if (!err || err.code !== 'STOPPED' || !(err.details && err.details.stop_guard)) throw err;
+      const key = err.details.inbox_key;
+      if (key && fs.existsSync(ws.abs(`inbox/${key}`))) require('./core/inbox').setAside(ws, key, `Eric's stop landed before this answer was saved. ${err.message}`);
+      const after = PC.stopIfHalted(ws, pid, token);
+      if (after.status !== 'stopped') throw err;
+      return { status: 'stopped', saved: false, verified: false, project_id: pid, code: after.code || err.details.gate_code || null, words: after.words, message: `Not saved: ${after.words}`, claim: after.claim };
+    },
+  };
+}
+
 async function afterWrite(ws, projectId = null) {
   const { rebuildIndex } = require('./core/indexer');
   const { serverStatus } = require('./core/doctor');
@@ -630,8 +656,16 @@ async function run(argv) {
     case 'import-text': {
       const provider = need(one(flags.provider), 'import-text needs --provider');
       const text = need(readTextArg(flags), 'import-text needs --text-file or --text');
-      const r = inbox.importContent(ws, provider, { content: text, filename: one(flags.filename) || null, projectId: one(flags.project) || null, runId: one(flags.run) || null, channel: `cli (${actor})` });
-      return { ...r, ...(await afterWrite(ws, r.result.project_id)) };
+      // The local pilot runner's save under its claim (--token, N2): Eric's
+      // stop is checked inside the import's own lock, as the worker's is.
+      const claimed = claimedSave(ws, flags, 'import-text --project P --token T');
+      try {
+        const r = inbox.importContent(ws, provider, { content: text, filename: one(flags.filename) || null, projectId: one(flags.project) || null, runId: one(flags.run) || null, channel: `cli (${actor})`, guard: claimed ? claimed.guard : null });
+        return { ...r, ...(await afterWrite(ws, r.result.project_id)) };
+      } catch (err) {
+        if (!claimed) throw err;
+        return claimed.stopped(err);
+      }
     }
     case 'report': {
       const { loadReports } = require('./core/reports');
@@ -985,8 +1019,17 @@ async function run(argv) {
         return flags.json ? p : { _text: p.text };
       }
       if (sub === 'import') {
-        const text = need(readTextArg(flags), 'tickets import <project> <ticket_id> --text-file FILE [--revision-note TEXT]');
-        const r = tk.saveTicket(ws, { project_id: need(pid, 'project'), ticket_id: need(tid, 'ticket_id'), text, revision: one(flags.revision_note) ? { note: one(flags.revision_note) } : null, channel: one(flags.channel) || 'cli import' });
+        const text = need(readTextArg(flags), 'tickets import <project> <ticket_id> --text-file FILE [--revision-note TEXT] [--token T]');
+        // The local pilot runner's save under its claim (--token, N2): Eric's
+        // stop is checked inside the save's own lock, as the worker's is.
+        const claimed = claimedSave(ws, { ...flags, project: need(pid, 'project') }, 'tickets import <project> <ticket_id> --token T');
+        let r;
+        try {
+          r = tk.saveTicket(ws, { project_id: pid, ticket_id: need(tid, 'ticket_id'), text, revision: one(flags.revision_note) ? { note: one(flags.revision_note) } : null, channel: one(flags.channel) || 'cli import', guard: claimed ? claimed.guard : null });
+        } catch (err) {
+          if (claimed) return claimed.stopped(err);
+          throw err;
+        }
         return { status: r.status, receipt_id: r.receipt_id, verified: r.verified, message: r.message, ...(r.status === 'saved' ? await afterWrite(ws, pid) : {}) };
       }
       if (sub === 'decide') {
