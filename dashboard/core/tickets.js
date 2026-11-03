@@ -1993,8 +1993,10 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       basis = DB.unavailableBasis({ decision: full, error: err });
     }
     // The record and its digest line commit together (audit F3): its bytes
-    // are verified against the ledger every time it is read.
-    basis = DB.stageRecord(op, pid, basis);
+    // are verified against the ledger every time it is read. A ledger that
+    // cannot be read never holds one of Eric's stops back (N1): the record
+    // says its digest went unrecorded and the stop commits.
+    basis = DB.stageRecord(op, pid, basis, full);
     return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null, basis: DB.describe(basis, full) };
   });
   const res = out.result || {};
