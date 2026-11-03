@@ -28,13 +28,13 @@ const lastLog = (f) => JSON.parse(fs.readFileSync(f, 'utf8').trim().split('\n').
 function desk(steps = [], { paused = false } = {}) {
   return (args) => (args[1] === 'queue' ? { steps: steps.map(([project_id, step]) => ({ project_id, name: project_id, step, why: 'FICTIONAL' })), pending: [], paused, claims: {} } : {});
 }
-function pinger({ fail = false, hang = false } = {}) {
+function pinger({ fail = false, hang = false, status = 200 } = {}) {
   const urls = [];
   const fn = async (url, init) => {
     urls.push({ url, init });
     if (hang) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' }))));
     if (fail) throw new TypeError('fetch failed');
-    return { status: 200 };
+    return { status, ok: status >= 200 && status < 300 };
   };
   return { urls, fn };
 }
@@ -119,7 +119,31 @@ test('a ping that fails or hangs never changes the exit code or the run', async 
   assert.equal(ok.code, 0);
   // A hang is cut at the timeout (stubbed through the signal).
   const r = await P.sendPing(pinger({ hang: true }).fn, `${HC}/0`, 20);
-  assert.deepEqual(r, { sent: false, status: null, reason: 'timeout' });
+  assert.deepEqual(r, { sent: false, ok: false, status: null, reason: 'timeout' });
+});
+
+// Audit A4 (blueprint 2026-11-03 §4 PR 1): before it, a 503 from the service
+// was logged start "sent", final_sent "sent". A refusal is now its status.
+test('an HTTP refusal (503) is recorded as http_503, never "sent", and the exit code and the run stay as they were', async (t) => {
+  const refused = await run(t, { steps: [['olas', 'research']], stop: 'reconcile', ping: pinger({ status: 503 }) });
+  assert.equal(refused.code, 3, 'the exit code is the run own');
+  assert.equal(refused.ping.urls.length, 2, 'never retried');
+  assert.equal(refused.log.heartbeat.start, 'http_503');
+  assert.equal(refused.log.heartbeat.final, '3');
+  assert.equal(refused.log.heartbeat.final_sent, 'http_503');
+  assert.equal(refused.log.dispatches.length, 1, 'the dispatch ran despite the refused start ping');
+  assert.equal(refused.log.health, 'reconcile', 'the health class is unchanged');
+  assert.ok(refused.said.some((s) => /start ping was refused \(HTTP 503\); the run's result is unchanged/.test(s)));
+  assert.ok(refused.said.some((s) => /final ping was refused \(HTTP 503\); the run's result is unchanged/.test(s)));
+  const idle = await run(t, { ping: pinger({ status: 503 }) });
+  assert.equal(idle.code, 0);
+  assert.equal(idle.log.heartbeat.final_sent, 'http_503');
+  // sendPing itself: delivered only on 2xx.
+  assert.deepEqual(await P.sendPing(pinger({ status: 503 }).fn, `${HC}/0`), { sent: true, ok: false, status: 503 });
+  assert.deepEqual(await P.sendPing(pinger({ status: 204 }).fn, `${HC}/0`), { sent: true, ok: true, status: 204 });
+  assert.equal(P.pingWord({ sent: true, ok: false, status: 429 }), 'http_429');
+  assert.equal(P.pingWord({ sent: true, ok: true, status: 200 }), 'sent');
+  assert.equal(P.pingWord({ sent: false, ok: false, status: null, reason: 'timeout' }), 'timeout');
 });
 
 test('no heartbeat without the URL, in a dry run, or with a URL that does not read', async (t) => {

@@ -18,6 +18,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const P = require('../scripts/pilot');
+const FICTIONAL_REV = 'e'.repeat(40);
 const PC = require('../core/pilot-claims');
 const T = require('../core/tickets');
 const { mandateDesk } = require('./mandate-fixture');
@@ -94,6 +95,9 @@ async function runOn(host, net, s, sessions, said = []) {
   const runOnlineImpl = (po, opts) => P.runOnline(po, { ...opts, sleep: async () => {}, pendingDir: host.pendingDir });
   const code = await P.runAll({ desk: 'online', maxAgents: 2, deskUrl: DESK, unattended: true, model: 'claude-fictional' }, {
     lockFile: host.lockFile, logFile: host.logFile, token: POLL, workerToken: WORKER, fetchImpl: net.fn, agent, out: (x) => said.push(x), runOnlineImpl,
+    // The revision guard (blueprint 2026-11-03 §4 PR 1) sees the same fictional
+    // commit on the runner and the desk; pilot-revision-guard.test.js covers it.
+    runnerRevisionImpl: () => ({ commit: FICTIONAL_REV, source: 'render|git', clean: true }), deskRevisionImpl: async () => ({ commit: FICTIONAL_REV }),
   });
   const log = JSON.parse(fs.readFileSync(host.logFile, 'utf8').trim().split('\n').pop());
   fs.rmSync(host.root, { recursive: true, force: true }); // the host's disk is gone

@@ -183,7 +183,8 @@ function scheduleText(root) {
   const ps = `powershell -NoProfile -ExecutionPolicy Bypass -File "${root}\\dashboard\\scripts\\pilot-task.ps1"`;
   return [
     'Paste into PowerShell or a Command Prompt to register the pilot every 30 minutes, disabled until you enable it. Nothing was run.',
-    `${ps} -Register -MaxAgents 1`,
+    'Run it from the clean runner worktree (it refuses a checkout with changes), and name the pinned model in place of <PINNED_MODEL>.',
+    `${ps} -Register -MaxAgents 1 -Model <PINNED_MODEL>`,
     `${ps} -Status`,
     `${ps} -Enable`,
     'Only while you are signed in; if a run is still going the next is skipped; a missed start runs once when the PC is available; the PC is not woken. The runner\'s result is the last line of %USERPROFILE%\\.cryptoresearch\\pilot-all.jsonl (exit 3: a project needs you).',

@@ -10,9 +10,12 @@
 //
 // STALE means the production poll is overdue. It is not proof that no grade
 // exists or that no session is running. The threshold is 120 min at hourly
-// cron and --max-agents=1 (Q2); a runner that declares a larger cap raises
-// it to max_agents × 95 + 15 min (§6.3: one claim from its claim to its
-// last complete reply takes up to about 95 min). A record that does not
+// cron and --max-agents=1 (Q2, ratified 2026-11-03). The desk enforces it:
+// the threshold is max(120, agents × 95 + 15) with agents bounded by the
+// desk's own cap (DESK_MAX_AGENTS, 1), so a runner that declares more (up to
+// 10, 965 min) can no longer stretch STALE to hide an outage (audit E4/S1,
+// blueprint 2026-11-03 §4 PR 1). Raising the cap is a code change Eric
+// merges, never a value a runner sends. A record that does not
 // read, does not hold its shape, or stands ahead of the desk's clock by any
 // amount is unknown, never fresh and never "never polled" (audit F9,
 // 2026-11-02: a record a minute ahead used to read fresh).
@@ -32,10 +35,13 @@ const STALE_MIN = 120;
 const PER_AGENT_MIN = 95;
 const MARGIN_MIN = 15;
 const MAX_AGENTS = 10;
+// The desk's cap on the agents a runner may count toward STALE (Q2).
+const DESK_MAX_AGENTS = 1;
 const RUNNER_RE = /^[A-Za-z0-9 ._:@-]{1,80}$/;
 const INVOCATION_RE = /^[A-Za-z0-9-]{8,64}$/;
 
-const staleAfterMin = (maxAgents) => Math.max(STALE_MIN, (Number.isInteger(maxAgents) ? maxAgents : 1) * PER_AGENT_MIN + MARGIN_MIN);
+const staleAfterMin = (maxAgents) => Math.max(STALE_MIN, Math.min(Number.isInteger(maxAgents) ? maxAgents : 1, DESK_MAX_AGENTS) * PER_AGENT_MIN + MARGIN_MIN);
+const capWords = (declared) => (Number.isInteger(declared) && declared > DESK_MAX_AGENTS ? ` The runner declared ${declared} agents, above the desk's cap of ${DESK_MAX_AGENTS}; STALE stays at ${staleAfterMin(declared)} min.` : '');
 
 // The request's fields, checked; anything else in it is ignored.
 function fieldsOf(body) {
@@ -84,7 +90,7 @@ const aheadWords = (ms) => (ms < 60000 ? `${Math.ceil(ms / 1000)} s` : `${Math.f
 
 // What the desk can say about the production poll, read only.
 function view(ws, { now = Date.now() } = {}) {
-  const base = { format: FORMAT, writes_nothing: true, last_polled_at: null, runner_id: null, invocation_id: null, max_agents: null, age_min: null, stale_after_min: null };
+  const base = { format: FORMAT, writes_nothing: true, last_polled_at: null, runner_id: null, invocation_id: null, max_agents: null, desk_max_agents: DESK_MAX_AGENTS, age_min: null, stale_after_min: null };
   const cur = readRecord(ws);
   if (cur.error) return { ...base, state: 'unknown', words: `The production poll's record does not read (${cur.error}); whether the runner is polling is unknown.` };
   if (!cur.rec) return { ...base, state: 'never', words: 'No production poll has reached this desk.' };
@@ -93,8 +99,8 @@ function view(ws, { now = Date.now() } = {}) {
   const facts = { last_polled_at: ok.rec.last_polled_at, runner_id: ok.rec.runner_id, invocation_id: ok.rec.invocation_id, max_agents: ok.rec.max_agents, stale_after_min: staleAfterMin(ok.rec.max_agents) };
   if (ok.at > now) return { ...base, ...facts, state: 'unknown', ahead_ms: ok.at - now, words: `The production poll's record (${ok.rec.last_polled_at}) is ahead of the desk's clock by ${aheadWords(ok.at - now)}; whether the runner is polling is unknown. A later poll does not move it back.` };
   const age = Math.floor((now - ok.at) / 60000);
-  if (age > facts.stale_after_min) return { ...base, ...facts, age_min: age, state: 'stale', words: `STALE: the production poll is overdue. Last seen ${ok.rec.last_polled_at} (${age} min ago; stale after ${facts.stale_after_min} min). This is not proof that no grade exists or that no session is running.` };
-  return { ...base, ...facts, age_min: age, state: 'fresh', words: `The production poll last reached the desk ${age} min ago (${ok.rec.last_polled_at}).` };
+  if (age > facts.stale_after_min) return { ...base, ...facts, age_min: age, state: 'stale', words: `STALE: the production poll is overdue. Last seen ${ok.rec.last_polled_at} (${age} min ago; stale after ${facts.stale_after_min} min). This is not proof that no grade exists or that no session is running.${capWords(ok.rec.max_agents)}` };
+  return { ...base, ...facts, age_min: age, state: 'fresh', words: `The production poll last reached the desk ${age} min ago (${ok.rec.last_polled_at}).${capWords(ok.rec.max_agents)}` };
 }
 
-module.exports = { FORMAT, REL, STALE_MIN, PER_AGENT_MIN, MARGIN_MIN, staleAfterMin, fieldsOf, record, view };
+module.exports = { FORMAT, REL, STALE_MIN, PER_AGENT_MIN, MARGIN_MIN, DESK_MAX_AGENTS, staleAfterMin, fieldsOf, record, view };
