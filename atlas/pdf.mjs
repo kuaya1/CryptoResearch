@@ -2,6 +2,7 @@
 // atlas/CryptoResearch-System-Atlas.pdf with headless Chrome or Edge over the
 // DevTools protocol (local only; no network beyond the browser's own loopback).
 //   node atlas/build.mjs && node atlas/pdf.mjs
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,7 +53,12 @@ try {
     <span>CryptoResearch · The Living System Atlas</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>`;
   const { data } = await send('Page.printToPDF', { printBackground: true, preferCSSPageSize: true, displayHeaderFooter: true,
     headerTemplate: '<div></div>', footerTemplate: footer, generateTaggedPDF: true });
-  fs.writeFileSync(out, Buffer.from(data, 'base64'));
+  const pdf = Buffer.from(data, 'base64');
+  fs.writeFileSync(out, pdf);
+  // What this PDF was rendered from, so a test can tell when it has gone stale.
+  const sha = (b) => createHash('sha256').update(b).digest('hex');
+  const sources = ['index.html', 'atlas.css', 'atlas.js', 'system.js', 'evidence.generated.js', 'design-tokens/tokens.css'];
+  fs.writeFileSync(path.join(here, 'pdf-source.json'), JSON.stringify({ page_sha256: sha(sources.map((f) => sha(fs.readFileSync(path.join(here, f)))).join('\n')), pdf_sha256: sha(pdf) }, null, 1) + '\n');
   ws.close();
   console.log(`atlas pdf: ${path.relative(process.cwd(), out)} (${Math.round(fs.statSync(out).size / 1024)} KB)`);
 } finally {

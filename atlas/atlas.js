@@ -41,8 +41,8 @@
   }
   const evHtml = (e) => { const l = evLink(e); return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${ic('code')}<span>${esc(l.label)} <em>${esc(l.what)}</em></span></a>`; };
   const sha = esc(EV.commit.slice(0, 7));
-  document.getElementById('pin').innerHTML = `Source baseline <code>${sha}</code>`;
-  document.getElementById('pin').title = A.baseline.note;
+  document.getElementById('pin').innerHTML = `Static map · source baseline <code>${sha}</code>`;
+  document.getElementById('pin').title = `${A.staticNotice} ${A.baseline.note}`;
 
   const stMark = (s) => `<i class="st-mark st-${s}" aria-hidden="true"></i>`;
   const statusPill = (s) => `<span class="pill">${stMark(s)}${esc(A.statuses[s].name)}</span>`;
@@ -68,12 +68,12 @@
       : ext ? 'Not ours to deploy'
       : gh ? 'Runs on GitHub from main'
       : n.band === 'engineering' ? 'A practice, not a service'
-      : `Online desk: ${A.baseline.deployed.rev}, same application code (R0, ${A.baseline.deployed.at}). PC desk: ${UNKNOWN}`);
+      : `Online desk: ${UNKNOWN} at this baseline; last receipt ${A.baseline.deployed.rev} (R0, ${A.baseline.deployed.at}). PC desk: ${UNKNOWN}`);
     const pr = n.proof ? n.proof.words : n.status === 'planned' || n.status === 'retired' ? '—' : `${UNKNOWN}: no receipt cited`;
     return [['Implemented', impl], ['Enabled', en], ['Deployed', dep], ['Operating proven', pr, n.proof && n.proof.evidence]];
   }
   const DEFAULT_IMPL = `Yes, at ${sha}`;
-  const DEFAULT_DEP = () => `Online desk: ${A.baseline.deployed.rev}, same application code (R0, ${A.baseline.deployed.at}). PC desk: ${UNKNOWN}`;
+  const DEFAULT_DEP = () => `Online desk: ${UNKNOWN} at this baseline; last receipt ${A.baseline.deployed.rev} (R0, ${A.baseline.deployed.at}). PC desk: ${UNKNOWN}`;
   const fieldsHtml = (n, brief) => `<dl class="facts4">${fields(n).filter(([k, v]) => !brief || !((k === 'Implemented' && v === DEFAULT_IMPL) || (k === 'Deployed' && v === DEFAULT_DEP()))).map(([k, v, e]) => `<div><dt>${k}</dt><dd${/UNKNOWN|^None|^Not current/.test(v) ? ' class="unk"' : ''}>${esc(v)}${e ? ` ${e.map((x) => { const l = evLink(x); return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`; }).join(' ')}` : ''}</dd></div>`).join('')}</dl>`;
   const claimsHtml = (where) => { const cs = claimsOf(where); return cs.length ? `<ul class="claims">${cs.map((c) => `<li>${ic('gate')}<span>${esc(c.what)}</span><a href="${esc(claimUrl(c))}" target="_blank" rel="noopener">${esc(c.path.split('/').pop())}:${c.line}</a></li>`).join('')}</ul>` : ''; };
 
@@ -115,8 +115,9 @@
       <div class="eyebrow">CryptoResearch · read from the code</div>
       <h1>The Living System Atlas</h1>
       <p class="lede">A private research desk where models read and argue, code measures and keeps the books, and Eric decides. Here is the code at one baseline, each part linked to the source that makes it true, with what is switched on, deployed and proven kept apart.</p>
+      <p class="static-note">${esc(A.staticNotice)}</p>
       <div class="doors">
-        <a class="door" href="#/read"><span class="n">I</span><h2>The Litepaper</h2><p>Twelve short chapters, from the owner’s map to what is not built, disabled or unproven.</p><div class="go">Start reading →</div></a>
+        <a class="door" href="#/read"><span class="n">I</span><h2>The Litepaper</h2><p>Thirteen short chapters, from the owner’s map to what is held, unproven and next.</p><div class="go">Start reading →</div></a>
         <a class="door" href="#/map"><span class="n">II</span><h2>The Map</h2><p>The five handoffs first; then every component and connection. Follow a path from a link to a decision.</p><div class="go">Open the map →</div></a>
       </div>
       <div class="facts">
@@ -180,6 +181,26 @@
           ['Wallet sync', 'ALCHEMY_API_KEY and a wallet he adds', 'No wallet', 'Removing the key or wallet']
         ].map((r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td class="off">${esc(r[2])}</td><td>${esc(r[3])}</td></tr>`).join('')}
         </tbody></table></div>`,
+    stage15: () => {
+      const S = A.stage15;
+      const cite = (e) => { const l = evLink(e); return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`; };
+      const prUrl = (n) => `https://github.com/${esc(EV.repo)}/pull/${n}`;
+      return `<p class="static-note">${esc(A.staticNotice)}</p>
+        ${Object.entries(S.classes).map(([k, c]) => `<div class="opengroup st15-group st15-${k}"><h3><i class="pip" aria-hidden="true"></i>${esc(c.name)} <span>${esc(c.words)}</span></h3>
+          <ul class="openlist">${S.items.filter((i) => i.cls === k).map((i) => `<li><i class="n15">${i.n}</i><b>${esc(i.name)}${i.slice ? ` <em class="slice">${esc(i.slice)}</em>` : ''}</b><p>${esc(i.now)}</p>${i.evidence.map(cite).join('')}</li>`).join('')}</ul></div>`).join('')}
+        <p class="st15-note">${esc(S.classSource)}</p>
+        <h3 class="st15-h">Where each part runs</h3>
+        <div class="tablebox"><table class="st15-table"><thead><tr><th>Host</th><th>What runs there</th></tr></thead><tbody>
+          ${S.hosts.map((h) => `<tr><td><b>${esc(h.name)}</b></td><td>${esc(h.runs)} ${cite(h.evidence)}</td></tr>`).join('')}</tbody></table></div>
+        <h3 class="st15-h">The sheet’s boxes</h3>
+        <p class="st15-note">${esc(S.boxNote)}</p>
+        <ol class="st15-boxes">${S.lifecycle.map((b) => `<li>${esc(b)}</li>`).join('')}</ol>
+        <p class="st15-note"><b>Over the whole path:</b> ${S.overlays.map(esc).join(' · ')}</p>
+        <h3 class="st15-h">Where this status comes from</h3>
+        <div class="tablebox"><table class="st15-table"><thead><tr><th>Pull request</th><th>Merge commit</th><th>What it did</th></tr></thead><tbody>
+          ${S.prs.map(([n, c, w]) => `<tr><td><a href="${prUrl(n)}" target="_blank" rel="noopener">#${n}</a></td><td>${c ? `<code>${esc(c)}</code>` : 'Not merged'}</td><td>${esc(w)}</td></tr>`).join('')}</tbody></table></div>
+        <p class="st15-note">${esc(S.prNote)}</p>`;
+    },
     next: () => [['unbuilt', 'Not built', 'The thing does not exist.'], ['disabled', 'Built, off by default', 'In the code; does nothing until enabled.'], ['unproven', 'No operating proof', 'No receipt in the repository shows it working.'], ['questions', 'Still open', 'Eric’s own decisions.']]
       .map(([k, h, sub]) => `<div class="opengroup og-${k}"><h3>${esc(h)} <span>${esc(sub)}</span></h3><ul class="openlist">${A.open[k].map(([t, d, e]) => { const l = evLink(e); return `<li><i class="dash" aria-hidden="true"></i><b>${esc(t)}</b><p>${esc(d)}</p><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a></li>`; }).join('')}</ul></div>`).join('')
   };
@@ -549,7 +570,7 @@
     const statusRows = [
       ['Implemented', 'Code exists at the baseline.', `Read from the repository at ${sha}; the build checks each cited line and claim.`],
       ['Enabled', 'Configuration permits it to act.', 'Only the default in code is given. Each desk’s current settings are not read: UNKNOWN.'],
-      ['Deployed', 'The named revision is serving.', `The R0 receipt: the online desk served ${A.baseline.deployed.rev} at ${A.baseline.deployed.at}. The PC desk: UNKNOWN.`],
+      ['Deployed', 'The named revision is serving.', `The last receipt, R0: the online desk served ${A.baseline.deployed.rev} at ${A.baseline.deployed.at}, older than this baseline. Current revision: UNKNOWN. The PC desk: UNKNOWN.`],
       ['Operating proven', 'The workflow completed correctly.', 'Given only where a repository receipt says so; otherwise UNKNOWN or “none recorded”.']
     ];
     app.innerHTML = `<div class="printdoc">
@@ -561,7 +582,7 @@
           <div><b>${A.nodes.length}</b>components</div><div><b>${A.edges.length}</b>connections</div>
           <div><b>${evCount}</b>source links</div><div><b>${(EV.claims || []).length}</b>claims checked</div></div>
         <div class="hero-fig">${FIG.owner(true)}</div>
-        <div class="baseline"><b>Source baseline ${sha}</b> · ${esc(EV.repo)} · built ${esc(built)}<br>${esc(A.baseline.deployed.words)}<br>This atlas describes code. It grants no authority, and it is not proof that code, deployment and operation match.</div>
+        <div class="baseline"><b>Source baseline ${sha}</b> · ${esc(EV.repo)} · built ${esc(built)}<br>${esc(A.baseline.deployed.words)}<br>${esc(A.staticNotice)}<br>This atlas describes code. It grants no authority, and it is not proof that code, deployment and operation match.</div>
       </section>
 
       <section class="pp">
