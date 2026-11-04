@@ -126,6 +126,9 @@ test('each item\'s facts still hold in the code (a later slice updates its own i
   assert.match(read('dashboard', 'core', 'tickets.js'), /contract_screen: require\('\.\/screening'\)\.packetSection\(/, 'item 4: tickets no longer carry the screen');
   assert.match(item(4).now, /new research and ticket packets carry/);
   assert.match(item(4).now, /No real run has used it yet/, 'item 4: built is not run');
+  assert.match(SHEET, /New research and ticket packets now carry GoPlus's contract flags from the saved screen \(C2/, 'item 4: the sheet stopped saying so');
+  assert.doesNotMatch(read('atlas', 'system.js'), /Still in monitor mode|packet_mode is “monitor”/, 'the map still says monitor');
+  assert.match(read('atlas', 'atlas.css'), /\.st15-built h3 \.pip \{/, 'the built class has no mark on the page');
   // Holds.
   assert.match(read('dashboard', 'core', 'paper-trader.js'), /function venueSend\(/, 'item 3');
   assert.match(item(3).now, /None exists/);

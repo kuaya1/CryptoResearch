@@ -587,6 +587,9 @@ test('C2: a cache that does not read is not a pass, screening turned off says so
   assert.equal(disabled.state, 'disabled');
   assert.match(disabled.reason, /turned off/);
   assert.equal(disabled.contracts[0].status, 'not_screened');
+  const { ws: offHeld } = workspace(t, 'scr-c2-off-monitor', { screening: { enabled: false, packet_mode: 'monitor' } });
+  const offHeldId = addProject(offHeld);
+  assert.equal(screening.packetSection(offHeld, project(offHeld, offHeldId), { now: NOW }).state, 'disabled', 'turned off is said first, whatever the mode');
 
   const thrower = { get identity() { throw new Error('FICTIONAL read failure'); } };
   const broken = screening.packetSection(ws, thrower, { now: NOW });
