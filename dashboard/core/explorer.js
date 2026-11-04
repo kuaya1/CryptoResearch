@@ -11,8 +11,10 @@
 // --fixtures` sends the FICTIONAL fixture records through the database
 // function public.explorer_import(), which stores each report whole or not
 // at all and refuses changed content under a known report ID. Real records
-// can only be previewed, one project at a time (`explorer export --project
-// <id> --dry-run`, no network); sending them is not enabled. Opening the
+// go one project at a time and only by Eric's confirmation (Stage 1.5 C3):
+// `explorer export --project <id> --dry-run` previews, with no network, and
+// `--confirm <confirm_sha256>` sends those exact bytes to that destination
+// from a terminal. Sending every project at once is not a command. Opening the
 // Explorer reads; it never writes, screens, prices or starts research.
 //
 // Configuration (never in the page, logs, settings or Git):
@@ -90,10 +92,13 @@ function keyKind(key) {
 
 // The configuration in words, plus (internally, in _key) the key itself,
 // which status(), read() and every reply leave out.
+const urlOf = (ws, env) => String(env.CR_SUPABASE_URL || (ws.settings && ws.settings.explorer && ws.settings.explorer.supabase_url) || '').trim().replace(/\/+$/, '');
+const urlAllowed = (ws, url) => URL_RE.test(url) || (ws.kind === 'test' && LOOPBACK_RE.test(url));
+
 function resolve(ws, env = process.env) {
   const s = (ws.settings && ws.settings.explorer) || {};
   const off = String(env.CR_EXPLORER || '').trim().toLowerCase() === 'off' || s.enabled === false;
-  const url = String(env.CR_SUPABASE_URL || s.supabase_url || '').trim().replace(/\/+$/, '');
+  const url = urlOf(ws, env);
   const urlSource = env.CR_SUPABASE_URL ? 'environment variable CR_SUPABASE_URL' : s.supabase_url ? 'settings (explorer.supabase_url)' : null;
   let key = env.CR_SUPABASE_SECRET_KEY || null;
   let keySource = key ? 'environment variable CR_SUPABASE_SECRET_KEY' : null;
@@ -113,7 +118,7 @@ function resolve(ws, env = process.env) {
   const missing = [];
   if (secretsUnreadable) problems.push(`${secretsFile()} is not valid JSON (often a missing comma or quote), so no key in it can be read. Fix the file; nothing else is needed.`);
   if (!url) missing.push('the Supabase project URL (node dashboard/cli.js explorer configure --url https://<ref>.supabase.co, or CR_SUPABASE_URL)');
-  else if (!URL_RE.test(url) && !(ws.kind === 'test' && LOOPBACK_RE.test(url))) problems.push('The Supabase URL must be a project address, https://<20-character ref>.supabase.co, and nothing else.');
+  else if (!urlAllowed(ws, url)) problems.push('The Supabase URL must be a project address, https://<20-character ref>.supabase.co, and nothing else.');
   if (!key) missing.push(`a Supabase secret key ("supabase_secret_key" in ${secretsFile()}, or CR_SUPABASE_SECRET_KEY)`);
   else if (kind === 'publishable' || kind === 'anon_jwt') problems.push('The key given is a publishable (anon) key: it can read nothing in the Explorer by design. The desk needs a secret key, kept on this server only.');
   else if (kind === 'unknown') problems.push('The key given is not a Supabase secret key (sb_secret_...) or service_role key.');
@@ -378,7 +383,8 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
       reason: !last ? 'Nothing has been exported to the Explorer yet (node dashboard/cli.js explorer export --fixtures).' : stale ? `The last export finished ${Math.floor((now() - lastAt) / 86400000)} days ago; the Explorer may not match the desk.` : null,
       fetched_at: new Date(now()).toISOString(),
       served: 'supabase',
-      demo: datasets.includes('demo'),
+      // The page says every record here is fictional, so only when every one is.
+      demo: datasets.includes('demo') && !datasets.includes('desk'),
       datasets,
       stale_after_days: STALE_DAYS,
       last_export: last,
@@ -479,6 +485,25 @@ function fixtureBatch(ws) {
   return adapter.buildBatch(ws, adapter.loadFixtures(), { dataset: 'demo', source: adapter.FIXTURE_REL });
 }
 
+// One call is one database transaction: a refusal wrote nothing, and after a
+// lost answer a repeat settles it (stored reports come back "unchanged").
+async function postBatch(cfg, batch) {
+  try {
+    const out = await rest(cfg, 'POST', '/rpc/explorer_import', { body: { batch }, timeoutMs: EXPORT_TIMEOUT_MS });
+    memory = null;
+    return out;
+  } catch (err) {
+    if (['TIMEOUT', 'NETWORK', 'SUPABASE_ERROR'].includes(err.code)) err.message += ' Whether Supabase stored it is unknown; running the export again is safe (identical reports come back unchanged).';
+    else err.message += ' Nothing was stored: the export is one transaction.';
+    throw err;
+  }
+}
+
+function exportStatus(out) {
+  const refused = (out.results || []).filter((x) => x.status === 'conflict' || x.status === 'refused');
+  return refused.some((x) => x.status === 'conflict') ? 'conflict' : refused.length ? 'rejected' : 'exported';
+}
+
 // Sends the FICTIONAL fixture records. Repeatable: identical reports come back
 // "unchanged", nothing is duplicated, and a timeout after Supabase committed
 // is settled by running it again.
@@ -496,21 +521,9 @@ async function exportFixtures(ws, { dryRun = false, completeExisting = false, en
   if (cfg.state !== 'configured') {
     throw new ExplorerError('REFUSED', cfg.state === 'off' ? 'The Research Explorer is switched off (explorer.enabled or CR_EXPLORER). Nothing was sent.' : `The Research Explorer is not set up: ${[...cfg.problems, ...cfg.missing.map((m) => `missing ${m}`)].join('; ')}. Nothing was sent.`);
   }
-  let out;
-  try {
-    out = await rest(cfg, 'POST', '/rpc/explorer_import', { body: { batch }, timeoutMs: EXPORT_TIMEOUT_MS });
-  } catch (err) {
-    // One call is one database transaction: a refusal wrote nothing, and
-    // after a lost answer a repeat settles it (stored reports come back
-    // "unchanged").
-    if (['TIMEOUT', 'NETWORK', 'SUPABASE_ERROR'].includes(err.code)) err.message += ' Whether Supabase stored it is unknown; running the export again is safe (identical reports come back unchanged).';
-    else err.message += ' Nothing was stored: the export is one transaction.';
-    throw err;
-  }
-  memory = null;
-  const refused = (out.results || []).filter((x) => x.status === 'conflict' || x.status === 'refused');
+  const out = await postBatch(cfg, batch);
   return {
-    status: refused.some((x) => x.status === 'conflict') ? 'conflict' : refused.length ? 'rejected' : 'exported',
+    status: exportStatus(out),
     dataset: 'demo',
     export_id: out.export_id,
     finished_at: out.finished_at,
@@ -529,21 +542,41 @@ async function exportFixtures(ws, { dryRun = false, completeExisting = false, en
 
 const sha256 = (text) => require('crypto').createHash('sha256').update(text, 'utf8').digest('hex');
 
-// One real project, the canary. --dry-run reads its records through the same
-// adapter and returns the exact request body explorer_import would receive,
-// with the SHA-256 of that body and of each report row: no key is read, no
-// network call is made and nothing is written. Sending stays refused until
-// Eric enables real-record export.
-function exportProject(ws, projectId, { dryRun = false } = {}) {
-  if (!dryRun) {
-    throw new ExplorerError('REFUSED', `Sending real desk records to the Explorer is not enabled. Nothing was sent. Preview exactly what would be sent with: explorer export --project ${String(projectId).slice(0, 80)} --dry-run`);
-  }
+// One real project's request, as both the preview and the send build it. The
+// confirmation is the hash of the destination and the exact body, so it opens
+// that send and no other. It proves the send matches a preview, not that a
+// person read the preview; the CLI also asks for a terminal, and that is as
+// far as the code can go.
+function projectRequest(ws, projectId, env) {
   const { batch, skipped } = adapter.buildBatch(ws, adapter.deskSourceFor(ws, projectId), { dataset: 'desk', source: `desk:projects/${projectId}` });
+  const stray = [...new Set([...batch.projects, ...batch.reports].map((x) => x.project_id))].filter((id) => id !== projectId);
+  if (stray.length || !batch.projects.length) throw new ExplorerError('INTEGRITY', `The export for ${projectId} also holds ${stray.slice(0, 3).join(', ') || 'no project row'}. Nothing was sent.`);
   const body = JSON.stringify({ batch });
+  const url = urlOf(ws, env);
+  const destination = urlAllowed(ws, url) ? url : null;
+  return { batch, skipped, body, destination, token: sha256(`${destination}\n${body}`) };
+}
+
+// One real project: the preview. It reads the project's records through the
+// same adapter and returns the exact request body explorer_import would
+// receive, with the SHA-256 of that body and of each report row, where it would
+// go, and the confirmation for that send: no key is read, no network call is
+// made and nothing is written.
+function exportProject(ws, projectId, { dryRun = false, env = process.env } = {}) {
+  if (!dryRun) {
+    throw new ExplorerError('REFUSED', `Sending a real project takes the preview's confirm_sha256. Nothing was sent. Preview exactly what would be sent with: explorer export --project ${String(projectId).slice(0, 80)} --dry-run`);
+  }
+  const { batch, skipped, body, destination, token } = projectRequest(ws, projectId, env);
+  const confirmable = destination && batch.reports.length;
   return {
     status: 'dry_run',
     dataset: 'desk',
     project_id: projectId,
+    project_name: batch.projects[0].name,
+    ticker: batch.projects[0].ticker,
+    destination,
+    confirm_sha256: confirmable ? token : null,
+    confirm_with: confirmable ? `node dashboard/cli.js explorer export --project ${projectId} --confirm ${token}` : !destination ? 'No valid Supabase URL is set, so nothing can be confirmed (node dashboard/cli.js explorer configure --url https://<ref>.supabase.co).' : 'This project has no report to send.',
     sent: false,
     network: 'none',
     request: { method: 'POST', path: '/rest/v1/rpc/explorer_import', body_bytes: Buffer.byteLength(body, 'utf8'), body_sha256: sha256(body) },
@@ -557,8 +590,38 @@ function exportProject(ws, projectId, { dryRun = false } = {}) {
   };
 }
 
+// One real project: the send (CLI only). Everything is checked before any
+// request, and against records read now, so what goes is what the preview
+// showed or nothing goes.
+async function sendProject(ws, projectId, { confirm, env = process.env } = {}) {
+  const refuse = (code, words) => new ExplorerError(code, `${words} Nothing was sent.`);
+  if (typeof confirm !== 'string' || !/^[0-9a-f]{64}$/.test(confirm)) throw refuse('BAD_CONFIRM', 'The confirmation is the confirm_sha256 from this project\'s preview.');
+  if (ws.kind !== 'real' && ws.kind !== 'test') throw refuse('REFUSED', 'This is a demo workspace, and its records are not the desk\'s.');
+  if (require('./research').restoredHold(ws)) throw refuse('REFUSED', 'This is a restored copy that has not been released.');
+  const { batch, skipped, body, destination, token } = projectRequest(ws, projectId, env);
+  if (!batch.reports.length) throw refuse('REFUSED', `${projectId} has no report to send.`);
+  const cfg = resolve(ws, env);
+  if (cfg.state !== 'configured') throw refuse('REFUSED', cfg.state === 'off' ? 'The Research Explorer is switched off (explorer.enabled or CR_EXPLORER).' : `The Research Explorer is not set up: ${[...cfg.problems, ...cfg.missing.map((m) => `missing ${m}`)].join('; ')}.`);
+  if (confirm !== token) throw refuse('CONFIRM_MISMATCH', `That confirmation is not for this send: the records of ${projectId} changed since the preview, or it was made for another project or destination. Preview again with: explorer export --project ${projectId} --dry-run.`);
+  const out = await postBatch(cfg, batch);
+  return {
+    status: exportStatus(out),
+    dataset: 'desk',
+    project_id: projectId,
+    destination,
+    export_id: out.export_id,
+    finished_at: out.finished_at,
+    projects: out.projects,
+    reports: out.reports,
+    scores_inserted: out.scores_inserted,
+    results: out.results,
+    skipped,
+    body_sha256: sha256(body),
+  };
+}
+
 function resetMemory() {
   memory = null;
 }
 
-module.exports = { ExplorerError, keyKind, resolve, status, navInfo, read, compareData, shapeReport, orderKey, exportFixtures, exportProject, fixtureBatch, resetMemory, STALE_DAYS, URL_RE };
+module.exports = { ExplorerError, keyKind, resolve, status, navInfo, read, compareData, shapeReport, orderKey, exportFixtures, exportProject, sendProject, fixtureBatch, resetMemory, STALE_DAYS, URL_RE };
