@@ -40,6 +40,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawnSync, spawn } = require('child_process');
+const { isGithubCredentialName, withoutGithubCredentials } = require('../core/child-env');
 
 const ROOT = path.join(__dirname, '..', '..');
 const CLI = path.join(ROOT, 'dashboard', 'cli.js');
@@ -78,7 +79,7 @@ function parse(argv) {
 const say = (s) => process.stdout.write(`${s}\n`);
 
 function cli(args, { text = false } = {}) {
-  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: ROOT, env: withoutGithubCredentials(process.env), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`cli ${args.slice(0, 2).join(' ')} failed: ${(r.stderr || r.stdout || '').trim().slice(0, 600)}`);
   if (text) return r.stdout;
   try {
@@ -168,7 +169,9 @@ function launchEnv(parent = process.env) {
   const out = {};
   for (const k of Object.keys(parent)) {
     const u = k.toUpperCase();
-    if (ENV_KEEP.has(u) || ENV_KEEP_RE.test(u)) out[k] = parent[k];
+    // The credential rule is applied after the allowlist, so a later entry on it
+    // cannot carry a GitHub credential to a session (Law 1, core/child-env.js).
+    if ((ENV_KEEP.has(u) || ENV_KEEP_RE.test(u)) && !isGithubCredentialName(u)) out[k] = parent[k];
   }
   out.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
   return out;
@@ -270,7 +273,7 @@ const REG_SCRIPT = [
 
 function regQuery(env, run = spawnSync) {
   const ps = path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  return run(ps, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(REG_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
+  return run(ps, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(REG_SCRIPT, 'utf16le').toString('base64')], { env: withoutGithubCredentials(process.env), encoding: 'utf8', windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
 }
 
 // The registry answer, judged: [] only when every policy key is confirmed absent.
@@ -990,7 +993,7 @@ function runnerRevision({ env = process.env, root = ROOT, run = spawnSync, hasGi
     if (rc) return { commit: rc, source: 'render_env_no_git', clean: null };
     return { commit: null, source: null, clean: null, words: raw ? 'This checkout has no .git, and RENDER_GIT_COMMIT is not a 40-character commit ID.' : 'This checkout has no .git and RENDER_GIT_COMMIT is not set; its commit is unknown.' };
   }
-  const git = (args) => run('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  const git = (args) => run('git', ['-C', root, ...args], { env: withoutGithubCredentials(process.env), encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
   const head = git(['rev-parse', 'HEAD']);
   if (!head || head.error || head.status !== 0) return { commit: null, source: 'git', clean: null, words: `This checkout's commit could not be read (${head && head.error ? head.error.code || 'git did not run' : `git exited ${head ? head.status : 'unknown'}`}).` };
   const commit = String(head.stdout || '').trim().toLowerCase();
@@ -1312,7 +1315,7 @@ async function main() {
   runLocal(o);
 }
 
-module.exports = { HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, pingWord, hasGitAt, runnerRevision, deskRevision, revisionGuard, HEALTHZ_TIMEOUT_MS, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
+module.exports = { cli, HEALTH_FORMAT, HEALTH_ORDER, rowHealth, runHealth, rowLabel, runLabel, HEARTBEAT_ENV, HEARTBEAT_TIMEOUT_MS, HEARTBEAT_FINAL, heartbeatBase, heartbeatFinal, sendPing, pingWord, hasGitAt, runnerRevision, deskRevision, revisionGuard, HEALTHZ_TIMEOUT_MS, resolveClaude, parse, forcedTicket, runOnline, completeOnline, savePendingSubmission, COMPLETE_BACKOFF_MS, PENDING_FORMAT, runLocal, runAll, takeLock, lockPath, pilotLogPath, LOCK_STALE_MS,readPollToken, readWorkerToken, POLL_TOKEN_ENV, WORKER_TOKEN_ENV, ENV_KEEP, ENV_KEEP_RE, lostComplete, LOST_FORMAT, LOST_FIELDS, workerCall, deskUrlOf, pollOnline, pollLocal, sightOnline, runnerIdOf, RUNNER_ID_ENV, FORCE_WORDS, ALL_ORDER, RECONCILE_WORDS, ONLINE_RECONCILE, WEB_TOOLS, AGENT_TOOLS, CLAIM_STOPS, LAUNCH_FORMAT, DENIED_TOOLS, REQUIRED_FLAGS, launchArgs, launchEnv, sessionChoice, userModelSettings, managedPolicy, policyFileState, readPolicyRegistry, regQuery, REG_FORMAT, REG_SCRIPT, POLICY_SUBKEY, judgeProbe, capabilityOf, probeTools, makeLauncher };
 
 if (require.main === module) {
   Promise.resolve().then(main).catch((err) => {

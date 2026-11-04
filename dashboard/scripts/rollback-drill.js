@@ -21,13 +21,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { withoutGithubCredentials } = require('../core/child-env');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SCHEMA = 'cr.rollback-drill.v1';
 const NEWER = /made under a newer rule/i;
 
 const git = (cwd, args, { allowFail = false } = {}) => {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('git', args, { cwd, env: withoutGithubCredentials(process.env), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw r.error;
   if (r.status !== 0 && !allowFail) throw new Error(`git ${args.join(' ')} failed: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`);
   return (r.stdout || '').trim();
@@ -105,7 +106,7 @@ function drill({ cwd = ROOT, from, record = null, read = null, build = null } = 
   const to = git(cwd, ['rev-parse', '--short', 'HEAD']);
   const fromSha = git(cwd, ['rev-parse', '--verify', '--short', `${from}^{commit}`]);
   const reader = read || ((codeRoot, wsRoot) => {
-    const r = spawnSync(process.execPath, [__filename, '--child', codeRoot, wsRoot], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    const r = spawnSync(process.execPath, [__filename, '--child', codeRoot, wsRoot], { env: withoutGithubCredentials(process.env), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     try { return JSON.parse(r.stdout); } catch (_) { return { fatal: `The previous release's code failed to run: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}` }; }
   });
   const make = build || (() => require('../tests/drill-fixture').buildDrillWorkspace());

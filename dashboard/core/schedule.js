@@ -9,13 +9,14 @@
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { withoutGithubCredentials } = require('./child-env');
 
 const TASK_PATH = '\\CryptoResearch\\';
 const TASK_NAME = 'Hourly';
 
 function ps(script, timeout = 60000) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { encoding: 'utf8', timeout, windowsHide: true });
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { env: withoutGithubCredentials(process.env), encoding: 'utf8', timeout, windowsHide: true });
   return { ok: r.status === 0, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), error: r.error ? r.error.message : null };
 }
 

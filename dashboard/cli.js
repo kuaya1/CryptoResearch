@@ -379,10 +379,11 @@ async function run(argv) {
   }
   if (cmd === 'test') {
     const { spawnSync } = require('child_process');
+    const { withoutGithubCredentials } = require('./core/child-env');
     const dir = path.join(__dirname, 'tests');
     const sim = path.join(dir, 'sim');
     const files = [dir, sim].filter((d) => fs.existsSync(d)).flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.test.js')).map((f) => path.join(d, f)));
-    const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+    const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', env: withoutGithubCredentials(process.env) });
     process.exitCode = r.status;
     return { _silent: true };
   }
@@ -409,8 +410,13 @@ async function run(argv) {
 
   switch (cmd) {
     case 'doctor':
-      // The explicit diagnostic: it includes the write test.
-      return require('./core/doctor').doctor(ws, { writeProbe: true });
+      // The explicit diagnostic: it includes the write test and the GitHub access
+      // read, which asks GitHub only for a real workspace. The desk's /api/doctor
+      // has neither, so a web request never starts gh.
+      return require('./core/doctor').doctor(ws, { writeProbe: true, credentials: () => {
+        const { readGithubAccess, credentialLine } = require('./core/child-env');
+        return credentialLine(readGithubAccess({ sessionEnv: require('./scripts/pilot').launchEnv, network: ws.kind === 'real' }));
+      } });
     case 'capabilities':
       return { ...require('./core/doctor').sessionCapabilities(ws), runtime: require('./core/doctor').runtimeInfo(ws) };
     case 'recover': {
