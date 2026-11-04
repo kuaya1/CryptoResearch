@@ -130,7 +130,9 @@ test('each item\'s facts still hold in the code (a later slice updates its own i
   // Scheduled slices: each of these goes red in the pull request that builds it.
   assert.match(read('dashboard', 'core', 'screening.js'), /packet_mode: 'monitor'/, 'item 4: C2 changed the default, so update item 4');
   assert.match(read('dashboard', 'core', 'explorer.js'), /if \(!dryRun\) \{\s*throw new ExplorerError\('REFUSED', `Sending real desk records/, 'item 5: C3 changed the refusal, so update item 5');
-  assert.match(SHEET, /Still his and still open: the Law 1 credential, A5, the Constitution's Invariant 3 wording, and the baseline and fee-drag comparison/, 'item 7: the sheet\'s open list changed, so update item 7');
+  assert.match(SHEET, /Still his and still open: the Law 1 credential, A5, and the baseline and fee-drag comparison/, 'item 7: the sheet\'s open list changed, so update item 7');
+  assert.match(item(7).now, /Invariant 3 now names all nine protected files \(B2\)/);
+  assert.match(item(7).now, /the stored gh login still reaches admin/, 'item 7: B1 closed the environment path only');
 });
 
 test('no operating proof is claimed while the sheet says there is none', () => {
