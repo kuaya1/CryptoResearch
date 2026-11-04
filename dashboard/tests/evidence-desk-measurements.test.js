@@ -50,10 +50,10 @@ test('a project with readings gets bounded, dated rows of the last 7 days only',
     assert.deepEqual(Object.keys(r).sort(), ['as_of', 'cost_complete', 'cost_pct', 'method', 'route_scope', 'size_usd', 'status']);
     assert.ok(Date.now() - Date.parse(r.as_of) <= 7 * 24 * H);
   }
-  // The run's packet carries it, under v3, with the exclusions unchanged.
+  // The run's packet carries it, with the exclusions unchanged.
   const run = research.createRun(s.ws, { project_id: s.pid, providers: ['claude'] });
   const packet = readJson(path.join(s.root, run.run.evidence_packet.path));
-  assert.equal(packet.schema_version, 'cr.evidence-packet.v3');
+  assert.equal(packet.schema_version, 'cr.evidence-packet.v4');
   assert.equal(packet.desk_measurements.exit_quotes.length, sizes.length - 1);
   assert.deepEqual(packet.excluded, ['your holdings and transactions', 'your notes and journal', 'other models\' reports and scores']);
   assert.ok(fs.readFileSync(path.join(s.root, run.run.prompt.path), 'utf8').includes('"desk_measurements"'), 'the prompt shows it to Agent 1');

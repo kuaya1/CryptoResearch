@@ -811,6 +811,9 @@ function budgetWait(check, now) {
 // revenue series for the project's bound entity, read from the saved cache
 // (fundamentals.js; never fetched here), or why there is none. A run keeps the
 // packet it was created with: v1 packets and their prompts stay as they are.
+// v4 (Stage 1.5 C2) adds `contract_screen`: GoPlus's contract flags from the
+// saved screen (screening.js packetSection; never fetched here), or the state
+// that says why there are none.
 
 // What the saved fundamentals say for this project. Research never waits for
 // or depends on them: a cache that cannot be read is frozen as unavailable.
@@ -872,7 +875,7 @@ function evidencePacket(ws, project, { profileRef = null } = {}) {
   const id = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
   const obs = id && latest.assets ? latest.assets[id] : null;
   return {
-    schema_version: 'cr.evidence-packet.v3',
+    schema_version: 'cr.evidence-packet.v4',
     captured_at: new Date().toISOString(),
     note: 'Dated public context captured by the dashboard. Starting point only: verify what you rely on. Contains no holdings, private notes, or other models\' conclusions.',
     project: {
@@ -905,6 +908,7 @@ function evidencePacket(ws, project, { profileRef = null } = {}) {
     market_context: require('./cycle').packetContext(ws),
     fundamentals: fundamentalsBlock(ws, project),
     desk_measurements: deskMeasurements(ws, project),
+    contract_screen: require('./screening').packetSection(ws, project),
     excluded: ['your holdings and transactions', 'your notes and journal', 'other models\' reports and scores'],
   };
 }

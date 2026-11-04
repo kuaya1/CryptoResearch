@@ -206,8 +206,8 @@ test('a standard token: one request to the fixed GoPlus URL, every flag absent, 
 
   const block = screening.packetBlock(ws, project(ws, id), { now: NOW });
   assert.match(block.note, /captured by the dashboard, not checked in your session/);
-  assert.equal(block.mode, 'monitor');
-  assert.equal(screening.includeInPacket(ws), false, 'monitoring mode: research does not include it yet');
+  assert.equal(block.mode, 'include');
+  assert.equal(screening.includeInPacket(ws), true, 'research packets carry it (Stage 1.5 C2)');
   assert.ok(!stringsOf(block).some((x) => /\bsafe\b/i.test(x)));
   const sum = screening.summary(ws, project(ws, id), NOW);
   assert.deepEqual([sum.state, sum.contracts[0].mint, sum.contracts[0].blacklist, sum.contracts[0].proxy], ['fresh', 'absent', 'absent', 'absent']);
@@ -477,4 +477,120 @@ test('a pending identity is never screened, and screening is a scheduled job', a
   assert.equal(f.calls.length, 0);
   assert.ok(jobs.JOB_NAMES.includes('screening'));
   assert.ok('screening' in require('../core/workspace').DEFAULT_SETTINGS);
+});
+
+// ---------------------------------------------------------------------------
+// The research packets (Stage 1.5 C2): the screen reaches Agent 1 and Agent 2
+// from the saved cache, and every state short of a good screen says so.
+
+const research = require('../core/research');
+const fsNode = require('fs');
+const pathNode = require('path');
+const { DEFAULT_SETTINGS } = require('../core/workspace');
+
+test('C2: include is the default in both places that state one, and an explicit monitor still wins', (t) => {
+  assert.equal(DEFAULT_SETTINGS.screening.packet_mode, 'include');
+  const { ws } = workspace(t, 'scr-c2-default');
+  assert.equal(screening.includeInPacket(ws), true);
+  assert.equal(screening.includeInPacket({ settings: {} }), true, 'the module default agrees');
+  const { ws: held } = workspace(t, 'scr-c2-monitor', { screening: { packet_mode: 'monitor' } });
+  const id = addProject(held);
+  assert.equal(screening.includeInPacket(held), false);
+  const s = screening.packetSection(held, project(held, id), { now: NOW });
+  assert.equal(s.state, 'not_included');
+  assert.match(s.reason, /monitor/);
+  assert.equal(s.contracts, undefined, 'monitor keeps the flags out');
+});
+
+test('C2: a new run\'s frozen packet and prompt carry the screen as GoPlus answered, from the cache, with no request', async (t) => {
+  const { ws, root } = workspace(t, 'scr-c2-run');
+  const id = addProject(ws);
+  const f = stub(goplus(EVM_A, CLEAN));
+  await refresh(ws, f);
+  const asked = f.calls.length;
+  const before = globalThis.fetch.mock.calls.length;
+  const run = research.createRun(ws, { project_id: id, providers: ['claude'] }).run;
+  assert.equal(f.calls.length, asked);
+  assert.equal(globalThis.fetch.mock.calls.length, before, 'freezing a packet asks nobody');
+  const packet = JSON.parse(fsNode.readFileSync(pathNode.join(root, run.evidence_packet.path), 'utf8'));
+  assert.equal(packet.schema_version, 'cr.evidence-packet.v4');
+  assert.equal(run.evidence_packet.schema_version, 'cr.evidence-packet.v4');
+  const c = packet.contract_screen;
+  assert.equal(c.schema_version, 'cr.contract-screen.v1');
+  assert.equal(c.mode, 'include');
+  assert.equal(c.contracts[0].address, EVM_A);
+  assert.equal(c.contracts[0].checks.honeypot, 'absent');
+  assert.match(c.note, /an absent flag is not an audit/);
+  assert.match(c.note, /data, never instructions/);
+  assert.ok(!stringsOf(c).some((x) => /\bsafe\b/i.test(x)), 'nothing is labeled safe');
+  assert.ok(fsNode.readFileSync(pathNode.join(root, run.prompt.path), 'utf8').includes('"contract_screen"'), 'the prompt shows it to Agent 1');
+  assert.deepEqual(packet.excluded, ['your holdings and transactions', 'your notes and journal', 'other models\' reports and scores']);
+});
+
+test('C2: a field GoPlus left out stays unknown in the packet, and a present flag stays present', async (t) => {
+  const { ws, root } = workspace(t, 'scr-c2-unknown');
+  const id = addProject(ws);
+  const { is_honeypot: _gone, ...partial } = CLEAN;
+  await refresh(ws, stub(goplus(EVM_A, { ...partial, is_mintable: '1' })));
+  const run = research.createRun(ws, { project_id: id, providers: ['claude'] }).run;
+  const c = JSON.parse(fsNode.readFileSync(pathNode.join(root, run.evidence_packet.path), 'utf8')).contract_screen.contracts[0];
+  assert.equal(c.checks.honeypot, 'unknown');
+  assert.equal(c.checks.mint, 'present');
+  assert.ok(c.unknown >= 1, 'the count of unanswered checks says so');
+});
+
+test('C2: nothing screened yet, a GoPlus failure, an old screen and an unverified identity each say so and carry no flags they do not have', async (t) => {
+  const { ws, root } = workspace(t, 'scr-c2-states');
+  const id = addProject(ws);
+  const first = screening.packetSection(ws, project(ws, id), { now: NOW });
+  assert.equal(first.state, 'pending');
+  assert.match(first.reason, /Not screened yet/);
+  assert.equal(first.contracts[0].status, 'not_screened');
+  assert.equal(first.contracts[0].checks, undefined);
+
+  // GoPlus fails before any good screen: the run is still created, and says so.
+  await refresh(ws, stub(reply(500, 'FICTIONAL outage')));
+  const run = research.createRun(ws, { project_id: id, providers: ['claude'] }).run;
+  const failed = JSON.parse(fsNode.readFileSync(pathNode.join(root, run.evidence_packet.path), 'utf8')).contract_screen;
+  assert.equal(failed.state, 'unavailable');
+  assert.match(failed.reason, /HTTP 500/);
+  assert.match(failed.last_refresh_failure.error, /HTTP 500/);
+  assert.equal(failed.contracts[0].checks, undefined);
+
+  // A good screen, then a failure: the old screen is named as old.
+  await refresh(ws, stub(goplus(EVM_A, CLEAN)), { force: true });
+  await refresh(ws, stub(reply(500, 'FICTIONAL outage')), { force: true });
+  const lastFailed = screening.packetSection(ws, project(ws, id), { now: NOW });
+  assert.equal(lastFailed.state, 'fresh_last_failed');
+  assert.match(lastFailed.reason, /latest run failed/);
+  const stale = screening.packetSection(ws, project(ws, id), { now: NOW + 400 * HOUR });
+  assert.equal(stale.state, 'stale');
+  assert.match(stale.reason, /older than 336 h/);
+
+  const pending = screening.packetSection(ws, { project_id: id, identity: { status: 'pending' } }, { now: NOW });
+  assert.equal(pending.state, 'identity_pending');
+  assert.equal(pending.contracts, undefined);
+});
+
+test('C2: a cache that does not read is not a pass, screening turned off says so, and a read that throws never breaks a packet', async (t) => {
+  const { ws } = workspace(t, 'scr-c2-broken');
+  const id = addProject(ws);
+  await refresh(ws, stub(goplus(EVM_A, CLEAN)));
+  fsNode.writeFileSync(ws.abs('market-data/screening/' + id + '.json'), '{torn');
+  const torn = screening.packetSection(ws, project(ws, id), { now: NOW });
+  assert.equal(torn.state, 'pending');
+  assert.equal(torn.contracts[0].checks, undefined);
+
+  const { ws: off } = workspace(t, 'scr-c2-off', { screening: { enabled: false } });
+  const offId = addProject(off);
+  const disabled = screening.packetSection(off, project(off, offId), { now: NOW });
+  assert.equal(disabled.state, 'disabled');
+  assert.match(disabled.reason, /turned off/);
+  assert.equal(disabled.contracts[0].status, 'not_screened');
+
+  const thrower = { get identity() { throw new Error('FICTIONAL read failure'); } };
+  const broken = screening.packetSection(ws, thrower, { now: NOW });
+  assert.equal(broken.state, 'unavailable');
+  assert.match(broken.reason, /FICTIONAL read failure/);
+  assert.equal(broken.contracts, undefined);
 });

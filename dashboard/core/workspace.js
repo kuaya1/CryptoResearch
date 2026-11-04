@@ -63,8 +63,8 @@ const DEFAULT_SETTINGS = {
   // (screening.js): keyless, refreshed per project every refresh_hours. Alerts
   // only on severe changes (mint, proxy, blacklist or freeze newly present, the
   // sell tax rising above sell_tax_alert_pct), kept in the review queue for
-  // alert_days. packet_mode "monitor" keeps the block out of research packets
-  // ("include" puts it in).
+  // alert_days. packet_mode "include" puts the flags in new research and ticket
+  // packets (Stage 1.5 C2); "monitor" keeps them out and the packet says so.
   screening: {
     enabled: true,
     refresh_hours: 168,
@@ -77,7 +77,7 @@ const DEFAULT_SETTINGS = {
     backoff_max_minutes: 720,
     sell_tax_alert_pct: 10,
     alert_days: 14,
-    packet_mode: 'monitor',
+    packet_mode: 'include',
   },
   // Forensics & Resilience (forensics.js, forensic-monitor.js). preferences
   // are Eric's own screening choices, never universal rules: each new

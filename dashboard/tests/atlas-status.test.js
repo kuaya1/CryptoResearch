@@ -102,21 +102,30 @@ test('it says it is a static map, not live telemetry, on every surface', () => {
   assert.match(read('atlas', 'README.md'), /not a live telemetry backend/);
 });
 
-test('the seven items carry Eric\'s classes, in three that stay apart', () => {
+test('the seven items carry Eric\'s classes, in four that stay apart', () => {
   assert.deepEqual(S.items.map((i) => i.n).sort(), [1, 2, 3, 4, 5, 6, 7]);
   const classOf = Object.fromEntries(S.items.map((i) => [i.n, i.cls]));
-  assert.deepEqual(classOf, { 1: 'proof', 2: 'proof', 3: 'hold', 4: 'code', 5: 'code', 6: 'hold', 7: 'code' });
+  assert.deepEqual(classOf, { 1: 'proof', 2: 'proof', 3: 'hold', 4: 'built', 5: 'code', 6: 'hold', 7: 'built' });
   assert.equal(S.classes.hold.name, 'Intentional hold by design');
   assert.equal(S.classes.proof.name, 'Pending operating proof');
   assert.equal(S.classes.code.name, 'Scheduled Stage 1.5 code slice');
+  assert.equal(S.classes.built.name, 'Built in code');
+  assert.match(S.classes.built.words, /not that it has run on real records/);
   assert.match(S.classes.hold.words, /not an engineering failure/);
-  assert.equal(item(4).slice, 'C2');
+  assert.equal(item(4).slice, null, 'item 4 was built by C2');
   assert.equal(item(5).slice, 'C3');
   assert.equal(item(7).slice, null, 'item 7 has no slice left: what stays open is Eric\'s');
   assert.match(S.classSource, /Neither is a file in this repository/, 'the rulings are said to live outside the repository');
 });
 
 test('each item\'s facts still hold in the code (a later slice updates its own item)', () => {
+  // Built in code: goes red if the default or either packet's wiring moves back.
+  assert.match(read('dashboard', 'core', 'screening.js'), /packet_mode: 'include'/, 'item 4: the default moved, so update item 4');
+  assert.match(read('dashboard', 'core', 'workspace.js'), /packet_mode: 'include'/, 'item 4: the settings default moved, so update item 4');
+  assert.match(read('dashboard', 'core', 'research.js'), /contract_screen: require\('\.\/screening'\)\.packetSection\(/, 'item 4: research no longer carries the screen');
+  assert.match(read('dashboard', 'core', 'tickets.js'), /contract_screen: require\('\.\/screening'\)\.packetSection\(/, 'item 4: tickets no longer carry the screen');
+  assert.match(item(4).now, /new research and ticket packets carry/);
+  assert.match(item(4).now, /No real run has used it yet/, 'item 4: built is not run');
   // Holds.
   assert.match(read('dashboard', 'core', 'paper-trader.js'), /function venueSend\(/, 'item 3');
   assert.match(item(3).now, /None exists/);
@@ -128,12 +137,11 @@ test('each item\'s facts still hold in the code (a later slice updates its own i
   assert.match(read('dashboard', 'cli.js'), /cmd === 'prove-autonomy'/, 'item 2');
   assert.match(item(2).now, /prove-autonomy \(#169, #171\)/);
   // Scheduled slices: each of these goes red in the pull request that builds it.
-  assert.match(read('dashboard', 'core', 'screening.js'), /packet_mode: 'monitor'/, 'item 4: C2 changed the default, so update item 4');
   assert.match(read('dashboard', 'core', 'explorer.js'), /if \(!dryRun\) \{\s*throw new ExplorerError\('REFUSED', `Sending real desk records/, 'item 5: C3 changed the refusal, so update item 5');
-  assert.match(SHEET, /Still his and still open: the Law 1 credential, and the buy-and-hold baseline comparison/, 'item 7: the sheet\'s open list changed, so update item 7');
+  assert.match(SHEET, /Still his and still open: the Law 1 credential\. The buy-and-hold baseline comparison is deferred to Stage 2/, 'item 7: the sheet\'s open list changed, so update item 7');
   assert.match(read('dashboard', 'core', 'grade-outcome-view.js'), /function accountingOf\(/, 'item 7: the fee accounting moved or went');
   assert.doesNotMatch(read('dashboard', 'core', 'grade-outcome-view.js'), /buy_and_hold|buy-and-hold/, 'item 7: a baseline was built, so update item 7');
-  assert.match(item(7).now, /buy-and-hold baseline is not built/);
+  assert.match(item(7).now, /buy-and-hold baseline is not built; Eric deferred it to Stage 2/);
   assert.match(read('dashboard', 'core', 'paper.js'), /function parseRecords\(text\)[\s\S]*?new OpError\('INTEGRITY'/, 'item 7: A5 is closed only while the book refuses a bad line');
   assert.match(item(7).now, /A5 is closed in code \(B3\)/);
   assert.match(item(7).now, /Invariant 3 now names all nine protected files \(B2\)/);
