@@ -234,6 +234,21 @@ function release(ws, owner) {
     logOp(ws, { phase: 'lock_release_skipped', reason: cur ? 'lock now belongs to another owner' : 'lock already gone', token: owner.token });
     return;
   }
+  // Free the name first. Deleting lock.json in place could make the next
+  // process's exclusive open answer EPERM on Windows for a moment, which crashed
+  // its command. A session known not to delete skips this, or the renamed files
+  // would pile up; it keeps the marker below.
+  if (!ws._caps || ws._caps.delete) {
+    const aside = path.join(crDir(ws), `lock-released-${fileTs()}-${randomId(4)}.json`);
+    try {
+      fs.renameSync(p, aside);
+      tryRemove(ws, aside);
+      return;
+    } catch (err) {
+      if (err.code === 'ENOENT') return;
+      // Cannot rename here: release in place, as below.
+    }
+  }
   try {
     fs.unlinkSync(p);
   } catch (err) {
@@ -822,7 +837,7 @@ function recoverLocked(ws) {
   // Housekeeping a run that can delete does for one that could not.
   if (capabilities(ws).delete) {
     for (const f of listDir(crDir(ws), { dirs: false })) {
-      if (/^lock-broken-|^doctor-[0-9a-f]+\.probe$/.test(f)) tryRemove(ws, path.join(crDir(ws), f));
+      if (/^lock-broken-|^lock-released-|^doctor-[0-9a-f]+\.probe$/.test(f)) tryRemove(ws, path.join(crDir(ws), f));
     }
   }
   return results;
