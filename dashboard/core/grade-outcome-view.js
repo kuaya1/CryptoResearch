@@ -122,6 +122,42 @@ function fillOf(req, exec) {
   return { client_order_id: ordered.client_order_id, order_state: state, ordered_quantity: str(want), filled_quantity: str(got), fill, fee_taker_rate: ordered.venue && ordered.venue.taker_rate !== undefined ? String(ordered.venue.taker_rate) : null };
 }
 
+// Fee accounting (Stage 1.5 C1), one closed position's own, from the book's
+// fills and exits. Gross is proceeds less the fills' notional; net is gross
+// less every fee. An unknown part leaves what needs it null, never zero. A net
+// that differs from the book's realized result does not hold: the book's own
+// records disagree, and the view is refused rather than choosing one. Rows
+// only, with no totals: Q3 allows counts and rows before 50 closed positions.
+const known = (v) => typeof v === 'string' && v !== '';
+function accountingOf(fills, exits, realizedPnlUsd) {
+  const closed = fills.length > 0 && exits.length > 0;
+  const flows = closed && fills.every((f) => known(f.notional_usd)) && exits.every((e) => known(e.proceeds_usd));
+  const fees = [...fills.map((f) => f.fee_usd), ...exits.map((e) => e.fee_usd)];
+  const gross = flows ? exits.reduce((a, e) => a + dec(e.proceeds_usd), 0n) - fills.reduce((a, f) => a + dec(f.notional_usd), 0n) : null;
+  const total = closed && fees.every(known) ? fees.reduce((a, f) => a + dec(f), 0n) : null;
+  const net = gross !== null && total !== null ? gross - total : null;
+  return {
+    gross_pnl_usd: gross === null ? null : str(gross),
+    total_fees_usd: total === null ? null : str(total),
+    net_pnl_usd: net === null ? null : str(net),
+    holds: net === null || !known(realizedPnlUsd) || net === dec(realizedPnlUsd),
+  };
+}
+
+// The fills' quantity-weighted price against the signal, in basis points of the
+// signal: positive paid more than it, negative less. No fill or no usable
+// signal is null, never zero.
+const BPS = dec('10000');
+function signalVsFillBps(signal, fills) {
+  if (!known(signal) || !fills.length || dec(signal) <= 0n) return null;
+  const quantity = fills.reduce((a, f) => a + dec(f.quantity), 0n);
+  const paid = fills.reduce((a, f) => a + D.mul(dec(f.quantity), dec(f.price)), 0n);
+  const atSignal = D.mul(quantity, dec(signal));
+  if (atSignal <= 0n) return null;
+  return str(D.div(D.mul(paid - atSignal, BPS), atSignal));
+}
+const SIGNAL_BASIS = 'Against the order\'s limit as reserved, weighted by quantity. Negative means the fills were below it. The book never fills a buy above its limit.';
+
 function positionOf(req, exec, tv) {
   const p = req.position || null;
   if (!p) return null;
@@ -130,18 +166,27 @@ function positionOf(req, exec, tv) {
   const exits = exec ? exec.exits : [];
   const fees = [...fills.map((f) => f.fee_usd), ...exits.map((e) => e.fee_usd)];
   const feesKnown = fees.length > 0 && fees.every((f) => typeof f === 'string' && f !== '');
+  const ordered = exec && exec.reserved.length ? exec.reserved.find((r) => r.side === 'OPEN_LONG') || null : null;
+  const signal = {
+    signal_vs_fill_bps: ordered ? signalVsFillBps(ordered.entry_price, fills.filter((f) => f.client_order_id === ordered.client_order_id)) : null,
+    signal_basis: SIGNAL_BASIS,
+  };
   if (p.state === 'closed' && closed) {
+    const { holds, ...accounting } = accountingOf(fills, exits, closed.realized_pnl_usd);
     return {
       state: 'closed',
       position_id: closed.position_id,
       realized_pnl_usd: closed.realized_pnl_usd,
+      ...accounting,
+      ...signal,
+      ...(holds ? {} : { does_not_reconcile: `Its fills and exits give a net of ${accounting.net_pnl_usd}, and the book's realized result is ${closed.realized_pnl_usd}.` }),
       fees_usd: feesKnown ? sumDec(fees) : null,
       fees: feesKnown ? 'complete' : 'incomplete',
       exit_reason: closed.exits && closed.exits.length ? closed.exits[closed.exits.length - 1].reason : null,
       basis: 'Trader Sim: proceeds less every fee less the fills\' cost',
     };
   }
-  return { state: 'open', position_id: p.position_id || null, realized_pnl_usd: null, fees: feesKnown ? 'complete' : 'incomplete' };
+  return { state: 'open', position_id: p.position_id || null, realized_pnl_usd: null, gross_pnl_usd: null, total_fees_usd: null, net_pnl_usd: null, ...signal, fees: feesKnown ? 'complete' : 'incomplete' };
 }
 
 function groupKeyOf(row) {
@@ -240,6 +285,7 @@ function view(ws, { now, from = null, to = null } = {}) {
       not_recorded_at_execution: exec ? exec.not_recorded : [],
     };
     row.group = groupKeyOf(row);
+    if (row.position && row.position.does_not_reconcile) refused.push({ decision_id: req.decision_id, project_id: req.project_id, record: 'book_accounting', state: 'integrity', code: 'INTEGRITY', words: row.position.does_not_reconcile });
     rows.push(row);
   }
   const count = (f) => rows.filter(f).length;
@@ -294,4 +340,4 @@ function view(ws, { now, from = null, to = null } = {}) {
   };
 }
 
-module.exports = { FORMAT, VIEWS, NO_RATE, view };
+module.exports = { FORMAT, VIEWS, NO_RATE, view, accountingOf, signalVsFillBps };

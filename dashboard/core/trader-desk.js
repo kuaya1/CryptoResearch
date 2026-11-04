@@ -958,7 +958,7 @@ function executionFor(ws, decisionId) {
       if (!b || b.client_order_id !== e.client_order_id || (b.position_id || null) !== (e.position_id || null) || b.quantity !== e.quantity) throw new OpError('INTEGRITY', `${PT.JOURNAL} reserves ${e.client_order_id} for ${decisionId}, but the book does not hold that order as recorded. Nothing is shown until it is repaired.`);
       coids.add(e.client_order_id);
       if (e.position_id) positions.add(e.position_id);
-      out.reserved.push({ at: e.at, intent_id: e.intent_id, intent_sha256: e.intent_sha256 || null, side: e.intent.side || null, client_order_id: e.client_order_id, position_id: e.position_id || null, quantity: e.quantity, notional_usd: e.notional_usd || null, loss_at_stop_usd: e.loss_at_stop_usd || null, valid_until_effective: e.valid_until_effective || null, venue: e.venue || null, grant: e.grant || null });
+      out.reserved.push({ at: e.at, intent_id: e.intent_id, intent_sha256: e.intent_sha256 || null, side: e.intent.side || null, entry_price: e.intent.entry_price || null, client_order_id: e.client_order_id, position_id: e.position_id || null, quantity: e.quantity, notional_usd: e.notional_usd || null, loss_at_stop_usd: e.loss_at_stop_usd || null, valid_until_effective: e.valid_until_effective || null, venue: e.venue || null, grant: e.grant || null });
     }
     for (const e of events) {
       if (e.type === 'fill' && coids.has(e.client_order_id)) out.fills.push({ at: e.at, hour: e.hour, client_order_id: e.client_order_id, quantity: e.quantity, price: e.price, notional_usd: e.notional_usd, fee_usd: e.fee_usd, fee_kind: e.fee_kind });

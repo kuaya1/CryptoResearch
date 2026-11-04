@@ -112,7 +112,7 @@ test('the seven items carry Eric\'s classes, in three that stay apart', () => {
   assert.match(S.classes.hold.words, /not an engineering failure/);
   assert.equal(item(4).slice, 'C2');
   assert.equal(item(5).slice, 'C3');
-  assert.equal(item(7).slice, 'C1');
+  assert.equal(item(7).slice, null, 'item 7 has no slice left: what stays open is Eric\'s');
   assert.match(S.classSource, /Neither is a file in this repository/, 'the rulings are said to live outside the repository');
 });
 
@@ -130,7 +130,10 @@ test('each item\'s facts still hold in the code (a later slice updates its own i
   // Scheduled slices: each of these goes red in the pull request that builds it.
   assert.match(read('dashboard', 'core', 'screening.js'), /packet_mode: 'monitor'/, 'item 4: C2 changed the default, so update item 4');
   assert.match(read('dashboard', 'core', 'explorer.js'), /if \(!dryRun\) \{\s*throw new ExplorerError\('REFUSED', `Sending real desk records/, 'item 5: C3 changed the refusal, so update item 5');
-  assert.match(SHEET, /Still his and still open: the Law 1 credential, and the baseline and fee-drag comparison/, 'item 7: the sheet\'s open list changed, so update item 7');
+  assert.match(SHEET, /Still his and still open: the Law 1 credential, and the buy-and-hold baseline comparison/, 'item 7: the sheet\'s open list changed, so update item 7');
+  assert.match(read('dashboard', 'core', 'grade-outcome-view.js'), /function accountingOf\(/, 'item 7: the fee accounting moved or went');
+  assert.doesNotMatch(read('dashboard', 'core', 'grade-outcome-view.js'), /buy_and_hold|buy-and-hold/, 'item 7: a baseline was built, so update item 7');
+  assert.match(item(7).now, /buy-and-hold baseline is not built/);
   assert.match(read('dashboard', 'core', 'paper.js'), /function parseRecords\(text\)[\s\S]*?new OpError\('INTEGRITY'/, 'item 7: A5 is closed only while the book refuses a bad line');
   assert.match(item(7).now, /A5 is closed in code \(B3\)/);
   assert.match(item(7).now, /Invariant 3 now names all nine protected files \(B2\)/);
