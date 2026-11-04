@@ -571,7 +571,9 @@ async function refresh(ws, opts = {}) {
       counts.problems.length ? `${counts.problems.length} problem${counts.problems.length === 1 ? '' : 's'}: ${counts.problems.slice(0, 3).map((p) => p.words).join(' ')}` : null,
     ].filter(Boolean);
     return {
-      status: !did && !counts.problems.length && !counts.budget ? 'noop' : counts.budget ? 'budget_paused' : counts.problems.length || counts.refused || counts.wait_until ? 'attention' : 'ok',
+      // A problem or a refused hour outranks the used-up budget, or the job would
+      // count it as a success (audit 2026-11-04, R04). The budget alone is a pause.
+      status: !did && !counts.problems.length && !counts.budget ? 'noop' : counts.problems.length || counts.refused ? 'attention' : counts.budget ? 'budget_paused' : counts.wait_until ? 'attention' : 'ok',
       message: `${words.join('; ')}.`,
       counts,
     };
