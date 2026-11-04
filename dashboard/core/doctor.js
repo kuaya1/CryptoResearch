@@ -116,7 +116,7 @@ function sessionCapabilities(ws) {
 // The diagnostics. The write test (a durable write of a probe file, read back
 // and compared) runs only when asked for: the CLI's doctor command and the
 // dashboard's "Run write test" (POST). An ordinary status read writes nothing.
-async function doctor(ws, { writeProbe = false } = {}) {
+async function doctor(ws, { writeProbe = false, credentials = null } = {}) {
   const checks = [];
   const add = (name, ok, detail, level = ok ? 'ok' : 'fail') => checks.push({ name, status: level, detail });
   const rt = runtimeInfo(ws);
@@ -310,6 +310,12 @@ async function doctor(ws, { writeProbe = false } = {}) {
 
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   add('Time zone', true, `System ${tz}; review dates use America/New_York`, 'ok');
+  // Only `cli doctor` passes this. What cannot be read is information, never a failure.
+  if (credentials) {
+    let line;
+    try { line = credentials(); } catch (_) { line = { ok: true, level: 'info', detail: 'GitHub access could not be read.' }; }
+    add('GitHub credentials', line.ok, line.detail, line.level);
+  }
   const worst = checks.some((c) => c.status === 'fail') ? 'fail' : checks.some((c) => c.status === 'warn') ? 'warn' : 'ok';
   // verified_write: true or false when the write test ran; null when it did not.
   const wt = checks.find((c) => c.name === 'Write test');

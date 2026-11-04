@@ -30,6 +30,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { withoutGithubCredentials } = require('./core/child-env');
 const { readJson, jsonText, fileInfo, listDir, toPosix, sha256 } = require('./core/fsx');
 const { isProjectId, isRecordId } = require('./core/ids');
 const { PROVIDERS } = require('./core/workspace');
@@ -69,9 +70,9 @@ const CHANGE_LOG_MAX = 200;
 
 function openBrowser(url) {
   try {
-    if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-    else if (process.platform === 'darwin') spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
-    else spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+    if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', url], { env: withoutGithubCredentials(process.env), detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    else if (process.platform === 'darwin') spawn('open', [url], { env: withoutGithubCredentials(process.env), detached: true, stdio: 'ignore' }).unref();
+    else spawn('xdg-open', [url], { env: withoutGithubCredentials(process.env), detached: true, stdio: 'ignore' }).unref();
   } catch (_) { /* the URL is printed anyway */ }
 }
 

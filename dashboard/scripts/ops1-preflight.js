@@ -20,6 +20,7 @@
 
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { withoutGithubCredentials } = require('../core/child-env');
 const P = require('./pilot');
 const PC = require('../core/pilot-claims');
 
@@ -49,7 +50,7 @@ function redactor(env) {
 
 function runChild(cmd, args, { run = spawnSync, env, timeoutMs = 120000 } = {}) {
   try {
-    const r = run(cmd, args, { cwd: ROOT, env, encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
+    const r = run(cmd, args, { cwd: ROOT, env: withoutGithubCredentials(env || process.env), encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
     return { status: typeof r.status === 'number' ? r.status : null, stdout: String(r.stdout || ''), error: r.error ? (r.error.code || r.error.message) : null };
   } catch (err) {
     return { status: null, stdout: '', error: err && (err.code || err.message) };
