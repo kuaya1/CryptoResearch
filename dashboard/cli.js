@@ -223,8 +223,13 @@ Data, jobs and maintenance
                                          also adds, once, the exact order and values that reports stored
                                          before 2026-10-07 lack (only where they agree with what is stored)
   explorer export --project <id> --dry-run
-                                         preview one real project: the exact request body and its SHA-256
-                                         hashes; no network, nothing written (sending real records: not enabled)
+                                         preview one real project: the exact request body, its SHA-256
+                                         hashes, the destination and its confirm_sha256; no network,
+                                         nothing written
+  explorer export --project <id> --confirm <confirm_sha256>
+                                         send that one project, from your own terminal: only the exact
+                                         bytes the preview showed, to its destination; any change since
+                                         sends nothing
   demo build                             build the FICTIONAL demo workspace (dashboard/demo-workspace)
   test                                   run the automated tests
 
@@ -1298,19 +1303,26 @@ async function run(argv) {
         return { status: 'saved', verified: out.verified, ...st, next: st.state === 'configured' ? 'node dashboard/cli.js explorer status' : st.state === 'off' ? 'Switched off.' : `Still missing: ${[...st.problems, ...st.missing].join('; ')}` };
       }
       if (sub === 'export') {
-        const usage = 'explorer export --fixtures [--dry-run] | --project <project_id> --dry-run (real records: a preview only; nothing is sent)';
+        const usage = 'explorer export --fixtures [--dry-run] | --project <project_id> --dry-run | --project <project_id> --confirm <confirm_sha256 from its preview>';
         if ([flags.fixtures, flags.project, flags.desk].filter(Boolean).length > 1) throw Object.assign(new Error(`Choose one of --fixtures, --project <id> or --desk. ${usage}`), { code: 'USAGE' });
         // Exporting every real record at once is not a command (subtraction stage 6.1).
         if (flags.desk) throw Object.assign(new Error(`Exporting all real desk records is not a command; nothing was sent. ${usage}`), { code: 'USAGE' });
         if (flags.project !== undefined) {
           const id = one(flags.project);
           if (typeof id !== 'string' || !id.trim()) throw Object.assign(new Error(`--project needs a project ID. ${usage}`), { code: 'USAGE' });
+          if (Array.isArray(flags.project)) throw Object.assign(new Error(`One project at a time; nothing was sent. ${usage}`), { code: 'USAGE' });
+          if (flags.confirm !== undefined) {
+            if (flags.dry_run) throw Object.assign(new Error(`Choose --dry-run or --confirm; nothing was sent. ${usage}`), { code: 'USAGE' });
+            if (typeof flags.confirm !== 'string') throw Object.assign(new Error(`A bare --confirm proves nothing, and one value only; nothing was sent. ${usage}`), { code: 'USAGE' });
+            if (!process.stdin.isTTY || !process.stdout.isTTY) throw Object.assign(new Error('Sending real records runs from your own terminal, not a script, a pipe or an assistant. Nothing was sent.'), { code: 'NOT_INTERACTIVE' });
+            return xp.sendProject(ws, id.trim(), { confirm: flags.confirm });
+          }
           return xp.exportProject(ws, id.trim(), { dryRun: Boolean(flags.dry_run) });
         }
         if (!flags.fixtures) throw Object.assign(new Error(usage), { code: 'USAGE' });
         return xp.exportFixtures(ws, { dryRun: Boolean(flags.dry_run), completeExisting: Boolean(flags.complete_existing) });
       }
-      throw Object.assign(new Error('explorer status | configure --url <url> | --off | --on | export --fixtures [--dry-run] | export --project <id> --dry-run'), { code: 'USAGE' });
+      throw Object.assign(new Error('explorer status | configure --url <url> | --off | --on | export --fixtures [--dry-run] | export --project <id> --dry-run | export --project <id> --confirm <confirm_sha256>'), { code: 'USAGE' });
     }
     case 'restored-copy': {
       // A restored copy holds research (no provider asked for anything) until
@@ -1360,7 +1372,7 @@ if (require.main === module) {
     })
     .catch((err) => {
       // These errors are raised before anything is committed.
-      const beforeCommit = ['USAGE', 'INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'REFUSED', 'CONFLICT', 'CONFIRM', 'WORKSPACE_UNREACHABLE', 'NOT_A_WORKSPACE', 'WORKSPACE_BUSY', 'ALREADY_EXISTS', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT', 'AMBIGUOUS', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code);
+      const beforeCommit = ['USAGE', 'INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'REFUSED', 'CONFLICT', 'CONFIRM', 'BAD_CONFIRM', 'CONFIRM_MISMATCH', 'NOT_INTERACTIVE', 'WORKSPACE_UNREACHABLE', 'NOT_A_WORKSPACE', 'WORKSPACE_BUSY', 'ALREADY_EXISTS', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT', 'AMBIGUOUS', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code);
       const payload = { status: 'error', code: err.code || 'ERROR', error: err.message, saved: beforeCommit ? false : 'unknown' };
       if (asJson) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
       else process.stderr.write(`Error (${payload.code}): ${err.message}\n${beforeCommit ? 'Nothing was saved by this command.' : 'The command did not finish. Run "node dashboard/cli.js status" to see what was saved.'}\n`);

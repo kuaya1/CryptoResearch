@@ -302,7 +302,7 @@ test('adapter: zero is a number, a malformed grade is refused (never mended), id
   }
 });
 
-test('adapter: real desk records can be read (prepared) but no command exports them', async () => {
+test('adapter: real desk records can be read (prepared) but no command exports them all', async () => {
   const { ws, cleanup } = tempWorkspace('xp-desk');
   try {
     addFixtureProject(ws);
@@ -319,7 +319,7 @@ test('adapter: real desk records can be read (prepared) but no command exports t
   }
 });
 
-test('export --project (the canary): one real project previewed as the exact request body with its hashes; no network, nothing written; sending stays refused', async (t) => {
+test('export --project (the canary): one real project previewed as the exact request body with its hashes; no network, nothing written; sending without its confirmation stays refused', async (t) => {
   const { ws, root, cleanup } = tempWorkspace('xp-canary');
   t.after(cleanup);
   addFixtureProject(ws);
@@ -349,15 +349,15 @@ test('export --project (the canary): one real project previewed as the exact req
   assert.equal(a.hashes.length, a.batch.reports.length);
   for (const [i, h] of a.hashes.entries()) assert.equal(h.row_sha256, sha(JSON.stringify(a.batch.reports[i])));
   assert.ok(a.batch.reports.flatMap((r) => r.category_scores).every((s) => ['scored', 'range', 'unknown', 'not_applicable'].includes(s.status)));
-  // Sending real records stays refused; refused requests send nothing either.
-  assert.throws(() => explorer.exportProject(ws, pid), /not enabled\. Nothing was sent/);
+  // Sending without the preview's confirmation stays refused, and sends nothing.
+  assert.throws(() => explorer.exportProject(ws, pid), /takes the preview's confirm_sha256\. Nothing was sent/);
   assert.equal(calls, 0, 'no network call at all');
   assert.deepEqual(hashTree(path.join(root, 'projects')), before, 'nothing written');
   // Through the CLI, as Eric runs it.
   const cli = require('../cli');
   const out = await cli.run(['explorer', 'export', '--project', pid, '--dry-run', '--workspace', root]);
   assert.equal(out.request.body_sha256, a.request.body_sha256);
-  await assert.rejects(cli.run(['explorer', 'export', '--project', pid, '--workspace', root]), /not enabled/);
+  await assert.rejects(cli.run(['explorer', 'export', '--project', pid, '--workspace', root]), /Nothing was sent/);
   await assert.rejects(cli.run(['explorer', 'export', '--project', '--dry-run', '--workspace', root]), /--project needs a project ID/);
   await assert.rejects(cli.run(['explorer', 'export', '--project', pid, '--fixtures', '--dry-run', '--workspace', root]), /Choose one of/);
   await assert.rejects(cli.run(['explorer', 'export', '--project', 'no-such-project', '--dry-run', '--workspace', root]), (e) => e.code === 'NOT_FOUND');
@@ -1239,4 +1239,227 @@ test('finding 4: an export committing between any two reads is never shown as sy
   assert.match(old.reason, /no consistency marker \(public\.explorer_state, migration explorer_exact_order_precision_marker\)/);
   si.st.noMarker = false;
   assert.ok(si.st.requests.filter((r) => !r.url.startsWith('/rest/v1/rpc/')).every((r) => r.method === 'GET'), 'reads only');
+});
+
+// ---------------------------------------------------------------------------
+// One real project, deliberately confirmed (Stage 1.5 C3). The confirmation is
+// the hash of the exact bytes and the exact destination the preview showed, so
+// a bare flag, another project, changed records or another database send nothing.
+
+const C3_PID = 'example-payfi-fictional';
+const c3Sha = (s) => require('crypto').createHash('sha256').update(s, 'utf8').digest('hex');
+function c3Desk(t, label, url) {
+  const made = explorerWorkspace(label, url);
+  t.after(made.cleanup);
+  addFixtureProject(made.ws);
+  importAllFixtures(made.ws);
+  explorer.resetMemory();
+  return made;
+}
+async function c3StandIn(t) {
+  const si = await standIn();
+  t.after(() => si.server.close());
+  return si;
+}
+const c3Env = { CR_SUPABASE_SECRET_KEY: KEY };
+const c3Posts = (si) => si.st.requests.filter((r) => r.method === 'POST');
+
+test('C3: the preview names the project and the destination, and its confirmation binds both to the exact body, with no key and no network', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws } = c3Desk(t, 'xp-c3-preview', si.url);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: {} });
+  assert.equal(p.destination, si.url);
+  assert.equal(p.confirm_sha256, c3Sha(si.url + '\n' + JSON.stringify({ batch: p.batch })));
+  assert.equal(p.project_name, p.batch.projects[0].name);
+  assert.equal(p.ticker, p.batch.projects[0].ticker);
+  assert.equal(p.confirm_with, 'node dashboard/cli.js explorer export --project ' + C3_PID + ' --confirm ' + p.confirm_sha256);
+  assert.equal(si.st.requests.length, 0, 'a preview asks nobody');
+  assert.ok(!JSON.stringify(p).includes(KEY));
+});
+
+test('C3: without a destination there is nothing to confirm', async (t) => {
+  const { ws, cleanup } = tempWorkspace('xp-c3-nourl');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  importAllFixtures(ws);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: {} });
+  assert.equal(p.destination, null);
+  assert.equal(p.confirm_sha256, null);
+  assert.match(p.confirm_with, /No valid Supabase URL/);
+});
+
+test('C3: a confirmed export sends exactly the previewed bytes, in one call, for one project; a repeat is unchanged; the key stays in its header', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws } = c3Desk(t, 'xp-c3-send', si.url);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env });
+  const out = await explorer.sendProject(ws, C3_PID, { confirm: p.confirm_sha256, env: c3Env });
+  assert.equal(out.status, 'exported');
+  assert.equal(out.dataset, 'desk');
+  assert.equal(out.project_id, C3_PID);
+  assert.equal(out.destination, si.url);
+  assert.ok(out.export_id);
+  assert.equal(out.reports.inserted, p.reports);
+  const posts = c3Posts(si);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].url, '/rest/v1/rpc/explorer_import');
+  assert.equal(c3Sha(posts[0].body), p.request.body_sha256, 'the bytes sent are the bytes previewed');
+  assert.ok(!posts[0].url.includes(KEY) && !posts[0].body.includes(KEY) && !JSON.stringify(out).includes(KEY));
+  const again = await explorer.sendProject(ws, C3_PID, { confirm: p.confirm_sha256, env: c3Env });
+  assert.equal(again.reports.unchanged, p.reports);
+  assert.equal(again.reports.inserted, 0);
+});
+
+test('C3: every wrong confirmation sends nothing: malformed, another destination, another project, changed records', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws, root } = c3Desk(t, 'xp-c3-wrong', si.url);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env });
+  for (const bad of [undefined, true, '', 'yes', p.confirm_sha256.slice(1), p.confirm_sha256.toUpperCase()]) {
+    await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: bad, env: c3Env }), (e) => e.code === 'BAD_CONFIRM' && /Nothing was sent/.test(e.message), String(bad));
+  }
+  // The hash of the body alone is not the confirmation.
+  await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: p.request.body_sha256, env: c3Env }), (e) => e.code === 'CONFIRM_MISMATCH');
+  // A preview made for another destination.
+  const other = c3Sha('http://127.0.0.1:1\n' + JSON.stringify({ batch: p.batch }));
+  await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: other, env: c3Env }), (e) => e.code === 'CONFIRM_MISMATCH');
+  // A second project's confirmation does not open the first.
+  const added = require('../core/projects').addProject(ws, { name: 'Second (FICTIONAL)', symbol: 'SECF', official_website: 'https://second.example.org/', coingecko_id: 'second-fictional', assets: [{ chain: 'second-chain', contract_address: 'FICTIONAL-CONTRACT-SECF' }], evidence: [{ url: 'https://second.example.org/', note: 'fictional test evidence' }] }).project_id;
+  assert.notEqual(added, C3_PID, 'the fixture really is a second project');
+  const second = explorer.exportProject(ws, added, { dryRun: true, env: c3Env });
+  const secondToken = c3Sha(si.url + '\n' + JSON.stringify({ batch: second.batch }));
+  await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: secondToken, env: c3Env }), (e) => e.code === 'CONFIRM_MISMATCH');
+  // The records changed after the preview.
+  const file = path.join(root, 'projects', C3_PID, 'project.json');
+  atomicWrite(file, jsonText({ ...readJson(file, null), name: 'Renamed after the preview (FICTIONAL)' }));
+  await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: p.confirm_sha256, env: c3Env }), (e) => e.code === 'CONFIRM_MISMATCH' && /changed/.test(e.message) && /Nothing was sent/.test(e.message));
+  assert.equal(si.st.requests.length, 0, 'nothing reached Supabase');
+});
+
+test('C3: the desk refuses before any request when it cannot or must not send', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws, root } = c3Desk(t, 'xp-c3-refuse', si.url);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env });
+  const send = (over = {}, w = ws) => explorer.sendProject(w, C3_PID, { confirm: p.confirm_sha256, env: c3Env, ...over });
+  await assert.rejects(send({ env: {} }), (e) => e.code === 'REFUSED' && /not set up/.test(e.message));
+  await assert.rejects(send({ env: { ...c3Env, CR_EXPLORER: 'off' } }), (e) => e.code === 'REFUSED' && /switched off/.test(e.message));
+  await assert.rejects(send({}, { ...ws, kind: 'demo' }), (e) => e.code === 'REFUSED' && /demo workspace/.test(e.message));
+  const restored = path.join(root, 'config', 'restored-copy.json');
+  atomicWrite(restored, jsonText({ research_held: true }));
+  await assert.rejects(send(), (e) => e.code === 'REFUSED' && /restored copy/.test(e.message));
+  fs.rmSync(restored);
+  require('../core/projects').archiveProject(ws, C3_PID, 'test');
+  await assert.rejects(send(), (e) => e.code === 'REFUSED' && /archived/.test(e.message));
+  assert.equal(si.st.requests.length, 0);
+});
+
+test('C3: a project with no report to send is refused, however it is confirmed', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws, cleanup } = explorerWorkspace('xp-c3-empty', si.url);
+  t.after(cleanup);
+  addFixtureProject(ws);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env });
+  assert.equal(p.reports, 0);
+  assert.equal(p.confirm_sha256, null);
+  await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: c3Sha(si.url + '\n' + JSON.stringify({ batch: p.batch })), env: c3Env }), (e) => e.code === 'REFUSED' && /no report to send/.test(e.message));
+  assert.equal(si.st.requests.length, 0);
+});
+
+test('C3: a batch holding anything beyond the one project named is refused, in the preview and the send', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws } = c3Desk(t, 'xp-c3-scope', si.url);
+  const good = adapter.deskSourceFor(ws, C3_PID);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env });
+  const extra = { project: { ...good[0].project, project_id: 'stowaway-fictional' }, reports: [] };
+  t.mock.method(adapter, 'deskSourceFor', () => [...good, extra]);
+  assert.throws(() => explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env }), (e) => e.code === 'INTEGRITY' && /stowaway-fictional/.test(e.message));
+  await assert.rejects(explorer.sendProject(ws, C3_PID, { confirm: p.confirm_sha256, env: c3Env }), (e) => e.code === 'INTEGRITY');
+  adapter.deskSourceFor.mock.restore();
+  const realBuild = adapter.buildBatch;
+  t.mock.method(adapter, 'buildBatch', (...a) => {
+    const real = realBuild(...a);
+    real.batch.reports[0] = { ...real.batch.reports[0], project_id: 'stowaway-fictional' };
+    return real;
+  });
+  assert.throws(() => explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env }), (e) => e.code === 'INTEGRITY');
+  assert.equal(si.st.requests.length, 0);
+});
+
+test('C3: the batch carries the listed columns only, so holdings, notes and full reports cannot ride along', async (t) => {
+  const { ws, cleanup } = tempWorkspace('xp-c3-columns');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  importAllFixtures(ws);
+  const { batch } = explorer.exportProject(ws, C3_PID, { dryRun: true, env: {} });
+  assert.deepEqual(Object.keys(batch).sort(), ['adapter_version', 'dataset', 'projects', 'reports', 'source']);
+  assert.deepEqual(Object.keys(batch.projects[0]).sort(), ['chain', 'contract_address', 'identity_status', 'name', 'native_chain', 'project_id', 'ticker']);
+  const allowed = ['category_scores', 'evidence_coverage', 'evidence_high', 'evidence_low', 'evidence_medium', 'evidence_summary', 'grade_coverage_pct', 'grade_high', 'grade_low', 'grade_reason', 'grade_status', 'grade_unscored', 'grade_value', 'horizon_end', 'horizon_start', 'horizon_text', 'model', 'model_version', 'order_at', 'order_basis', 'profile_version', 'project_id', 'prompt_version', 'report_format', 'report_id', 'research_date', 'research_run_id', 'revision_basis', 'revision_kind', 'revision_note', 'revision_of', 'rubric_version', 'saved_at', 'verdict'];
+  const seen = [...new Set(batch.reports.flatMap((r) => Object.keys(r)))].sort();
+  assert.deepEqual(seen.filter((k) => !allowed.includes(k)), [], 'a new column needs a decision: this goes to Supabase');
+  const scoreColumns = ['category_id', 'category_label', 'confidence', 'evidence_flags', 'evidence_refs', 'main_weakness', 'position', 'rationale', 'score', 'score_high', 'score_low', 'status', 'unknown_reason'];
+  const seenScores = [...new Set(batch.reports.flatMap((r) => r.category_scores).flatMap((s) => Object.keys(s)))].sort();
+  assert.deepEqual(seenScores.filter((k) => !scoreColumns.includes(k)), [], 'a new column needs a decision: this goes to Supabase');
+  assert.doesNotMatch(JSON.stringify(batch), /"(quantity|cost_basis|holdings?|journal|wallet|address_label|raw_json|original_text|note)"/);
+});
+
+test('C3: through the CLI the confirmation must be the hash, must not be a dry run, and must come from a person at a terminal', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws, root } = c3Desk(t, 'xp-c3-cli', si.url);
+  const cli = require('../cli');
+  const saved = { key: process.env.CR_SUPABASE_SECRET_KEY, inTty: process.stdin.isTTY, outTty: process.stdout.isTTY };
+  process.env.CR_SUPABASE_SECRET_KEY = KEY;
+  const tty = (a, b) => { process.stdin.isTTY = a; process.stdout.isTTY = b; };
+  t.after(() => {
+    if (saved.key === undefined) delete process.env.CR_SUPABASE_SECRET_KEY; else process.env.CR_SUPABASE_SECRET_KEY = saved.key;
+    tty(saved.inTty, saved.outTty);
+  });
+  const base = ['explorer', 'export', '--project', C3_PID, '--workspace', root];
+  const p = await cli.run([...base, '--dry-run']);
+  assert.equal(p.status, 'dry_run');
+  tty(true, true);
+  await assert.rejects(cli.run([...base, '--confirm']), (e) => e.code === 'USAGE' && /bare --confirm/.test(e.message));
+  await assert.rejects(cli.run([...base, '--confirm', p.confirm_sha256, '--confirm', p.confirm_sha256]), (e) => e.code === 'USAGE');
+  await assert.rejects(cli.run([...base, '--dry-run', '--confirm', p.confirm_sha256]), (e) => e.code === 'USAGE');
+  await assert.rejects(cli.run(['explorer', 'export', '--desk', '--confirm', p.confirm_sha256, '--workspace', root]), /not a command; nothing was sent/);
+  await assert.rejects(cli.run(['explorer', 'export', '--project', C3_PID, '--project', 'second', '--confirm', p.confirm_sha256, '--workspace', root]), (e) => e.code === 'USAGE');
+  tty(false, true);
+  await assert.rejects(cli.run([...base, '--confirm', p.confirm_sha256]), (e) => e.code === 'NOT_INTERACTIVE' && /your own terminal/.test(e.message));
+  tty(true, false);
+  await assert.rejects(cli.run([...base, '--confirm', p.confirm_sha256]), (e) => e.code === 'NOT_INTERACTIVE');
+  assert.equal(si.st.requests.length, 0);
+  tty(true, true);
+  const out = await cli.run([...base, '--confirm', p.confirm_sha256]);
+  assert.equal(out.status, 'exported');
+  assert.equal(c3Posts(si).length, 1);
+  assert.equal(ws.kind, 'test');
+});
+
+test('C3: only the CLI can send: no route, connector, job or script calls it', () => {
+  const dash = path.join(__dirname, '..');
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (['node_modules', 'app', 'tests', 'demo-workspace'].includes(e.name)) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|mjs|cjs|jsx)$/.test(e.name)) files.push(p);
+    }
+  };
+  walk(dash);
+  const callers = files.filter((p) => /\bsendProject\b/.test(fs.readFileSync(p, 'utf8'))).map((p) => path.relative(dash, p).replace(/\\/g, '/')).sort();
+  assert.deepEqual(callers, ['cli.js', 'core/explorer.js']);
+});
+
+test('C3: a real project beside fictional ones is never covered by "every record here is fictional"', async (t) => {
+  const si = await c3StandIn(t);
+  const { ws } = c3Desk(t, 'xp-c3-mixed', si.url);
+  await explorer.exportFixtures(ws, { env: c3Env });
+  explorer.resetMemory();
+  const demoOnly = await explorer.read(ws, { env: c3Env, refresh: true });
+  assert.equal(demoOnly.demo, true);
+  assert.deepEqual(demoOnly.datasets, ['demo']);
+  const p = explorer.exportProject(ws, C3_PID, { dryRun: true, env: c3Env });
+  await explorer.sendProject(ws, C3_PID, { confirm: p.confirm_sha256, env: c3Env });
+  explorer.resetMemory();
+  const mixed = await explorer.read(ws, { env: c3Env, refresh: true });
+  assert.deepEqual(mixed.datasets, ['demo', 'desk']);
+  assert.equal(mixed.demo, false, 'the page says every record is fictional only when every record is');
 });

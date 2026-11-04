@@ -102,18 +102,18 @@ test('it says it is a static map, not live telemetry, on every surface', () => {
   assert.match(read('atlas', 'README.md'), /not a live telemetry backend/);
 });
 
-test('the seven items carry Eric\'s classes, in four that stay apart', () => {
+test('the seven items carry Eric\'s classes, in three that stay apart', () => {
   assert.deepEqual(S.items.map((i) => i.n).sort(), [1, 2, 3, 4, 5, 6, 7]);
   const classOf = Object.fromEntries(S.items.map((i) => [i.n, i.cls]));
-  assert.deepEqual(classOf, { 1: 'proof', 2: 'proof', 3: 'hold', 4: 'built', 5: 'code', 6: 'hold', 7: 'built' });
+  assert.deepEqual(classOf, { 1: 'proof', 2: 'proof', 3: 'hold', 4: 'built', 5: 'built', 6: 'hold', 7: 'built' });
   assert.equal(S.classes.hold.name, 'Intentional hold by design');
   assert.equal(S.classes.proof.name, 'Pending operating proof');
-  assert.equal(S.classes.code.name, 'Scheduled Stage 1.5 code slice');
+  assert.equal(S.classes.code, undefined, 'no code slice is left scheduled');
   assert.equal(S.classes.built.name, 'Built in code');
   assert.match(S.classes.built.words, /not that it has run on real records/);
   assert.match(S.classes.hold.words, /not an engineering failure/);
   assert.equal(item(4).slice, null, 'item 4 was built by C2');
-  assert.equal(item(5).slice, 'C3');
+  assert.equal(item(5).slice, null, 'item 5 was built by C3');
   assert.equal(item(7).slice, null, 'item 7 has no slice left: what stays open is Eric\'s');
   assert.match(S.classSource, /Neither is a file in this repository/, 'the rulings are said to live outside the repository');
 });
@@ -140,7 +140,11 @@ test('each item\'s facts still hold in the code (a later slice updates its own i
   assert.match(read('dashboard', 'cli.js'), /cmd === 'prove-autonomy'/, 'item 2');
   assert.match(item(2).now, /prove-autonomy \(#169, #171\)/);
   // Scheduled slices: each of these goes red in the pull request that builds it.
-  assert.match(read('dashboard', 'core', 'explorer.js'), /if \(!dryRun\) \{\s*throw new ExplorerError\('REFUSED', `Sending real desk records/, 'item 5: C3 changed the refusal, so update item 5');
+  assert.match(read('dashboard', 'core', 'explorer.js'), /if \(confirm !== token\) throw refuse\('CONFIRM_MISMATCH'/, 'item 5: the send no longer checks the preview\'s hash, so update item 5');
+  assert.match(read('dashboard', 'cli.js'), /if \(flags\.desk\) throw/, 'item 5: the whole desk is no longer refused, so update item 5');
+  assert.match(read('dashboard', 'cli.js'), /code: 'NOT_INTERACTIVE'/, 'item 5: the terminal check went, so update item 5');
+  assert.match(item(5).now, /No real record has been sent/, 'item 5: built is not sent');
+  assert.match(SHEET, /no real record has been sent/, 'item 5: the sheet stopped saying so');
   assert.match(SHEET, /Still his and still open: the Law 1 credential\. The buy-and-hold baseline comparison is deferred to Stage 2/, 'item 7: the sheet\'s open list changed, so update item 7');
   assert.match(read('dashboard', 'core', 'grade-outcome-view.js'), /function accountingOf\(/, 'item 7: the fee accounting moved or went');
   assert.doesNotMatch(read('dashboard', 'core', 'grade-outcome-view.js'), /buy_and_hold|buy-and-hold/, 'item 7: a baseline was built, so update item 7');
