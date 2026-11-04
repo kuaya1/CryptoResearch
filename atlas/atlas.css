@@ -566,6 +566,7 @@ body.printing { font-size: 14px; }
 .st15-hold h3 .pip { background: var(--cr-obsidian); border-radius: 2px; }
 .st15-proof h3 .pip { background: var(--cr-tuning); }
 .st15-code h3 .pip { background: var(--cr-read); }
+.st15-built h3 .pip { background: var(--cr-live-text); }
 .st15-group .n15 { font: 500 13px/1.5 var(--mono); font-style: normal; color: var(--ink-3); }
 .st15-group .slice { margin-left: 6px; padding: 1px 8px; border: var(--cr-border-outline); border-radius: var(--cr-radius-pill); font: 12.5px var(--mono); color: var(--ink-2); }
 .st15-note { margin: 14px 0 0; font-size: 14px; color: var(--ink-2); }

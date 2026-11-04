@@ -187,9 +187,9 @@ window.ATLAS = {
       evidence: [['dashboard/core/fundamentals.js', 'refresh'], ['dashboard/core/fundamentals.js', 'packetBlock']] },
     { id: 'screening', layer: 'intake', support: true, col: 1, row: 8, kind: 'service', status: 'operational', control: 'automated',
       name: 'Contract screening', short: 'GoPlus, weekly',
-      summary: 'GoPlus flags per contract, shown on the desk. Still in monitor mode, so they are not yet put into research packets.',
-      claims: [['dashboard/core/workspace.js', "packet_mode: 'monitor'", 'monitor mode by default'], ['dashboard/core/workspace.js', 'refresh_hours: 168', 'weekly']],
-      evidence: [['dashboard/core/screening.js', 'refresh'], ['dashboard/core/screening.js', 'includeInPacket'], ['dashboard/core/screening.js', '~packet_mode']] },
+      summary: 'GoPlus flags per contract, shown on the desk and carried into new research and ticket packets from the saved screen. An unanswered check stays unknown.',
+      claims: [['dashboard/core/workspace.js', "packet_mode: 'include'", 'carried into packets by default'], ['dashboard/core/workspace.js', 'refresh_hours: 168', 'weekly']],
+      evidence: [['dashboard/core/screening.js', 'refresh'], ['dashboard/core/screening.js', 'packetSection'], ['dashboard/core/screening.js', '~packet_mode']] },
 
     /* ── Research ────────────────────────────────────────────────── */
     { id: 'research-runs', layer: 'research', col: 2, row: 0, kind: 'service', status: 'operational', control: 'mixed',
@@ -452,6 +452,8 @@ window.ATLAS = {
     ['ext-goplus', 'screening', 'flags'],
     ['market', 'research-runs', 'dated prices in the packet'],
     ['fundamentals', 'research-runs', 'fundamentals in the packet'],
+    ['screening', 'research-runs', 'contract flags in the packet'],
+    ['screening', 'tickets', 'contract flags in the packet'],
     ['projects', 'research-runs', 'identity'],
     ['prompts', 'research-runs', 'the frozen prompt'],
     ['research-runs', 'ext-models', 'paid API call'],
@@ -645,7 +647,7 @@ window.ATLAS = {
       figure: 'next',
       nodes: ['ops1', 'pilot-runner', 'mandate', 'trader-book', 'explorer'] },
     { id: 'stage15', num: '13', title: 'Stage 1.5: holds, proof and what is next',
-      lede: 'Seven planning items in three classes that must never be read as one another: held on purpose, waiting for a real run, and code still to write. Operating proof: none yet.',
+      lede: 'Seven planning items in four classes that must never be read as one another: held on purpose, waiting for a real run, code still to write, and code built but not yet run on real records. Operating proof: none yet.',
       body: ['All the Stage 1.5 code slices come first. The live proof, R0 then B0 to B3, runs once afterward (Milestone D), so that main and the deployed revision stay frozen while it runs.'],
       figure: 'stage15',
       evidence: [['docs/ONE-SHEET.md', '~**Operating proof: none yet.**'], ['docs/engineering/AUTONOMY_PROOF_CLI.md', '']] }
@@ -658,9 +660,10 @@ window.ATLAS = {
     classes: {
       hold:  { name: 'Intentional hold by design', words: 'Eric chose this. It is not an engineering failure or a gap to close.' },
       proof: { name: 'Pending operating proof', words: 'The code or specification exists. No real run is recorded, and passing tests are not one.' },
-      code:  { name: 'Scheduled Stage 1.5 code slice', words: 'Not built yet. Each gets its own pull request and Eric’s merge.' }
+      code:  { name: 'Scheduled Stage 1.5 code slice', words: 'Not built yet. Each gets its own pull request and Eric’s merge.' },
+      built: { name: 'Built in code', words: 'On main once merged. This says the code exists, not that it has run on real records. Whatever stays open is named.' }
     },
-    classSource: 'The three classes and each item’s class are Eric’s rulings of 2026-11-03, in his Stage 1.5 directive and his order for this pull request. Neither is a file in this repository, so the build checks the facts cited here but cannot check the rulings.',
+    classSource: 'The classes and each item’s class are Eric’s rulings of 2026-11-03, in his Stage 1.5 directive and his orders for these pull requests; his order for C2 moved items 4 and 7 to built in code. Neither is a file in this repository, so the build checks the facts cited here but cannot check the rulings.',
     items: [
       { n: 3, name: 'Real trading venue', cls: 'hold', now: 'None exists. The Trader’s venue is a file, and Stage 1.5 stays paper-only. Stage 2 needs Eric’s separate authorization.',
         evidence: [['dashboard/core/paper-trader.js', 'venueSend']], claims: [['dashboard/core/paper-trader.js', 'function venueSend\\(', 'The venue is local code in the Paper Book']] },
@@ -670,12 +673,12 @@ window.ATLAS = {
         evidence: [['docs/engineering/OPS1_RENDER_CRON.md', '~**Status: defined, not created.**']], claims: [['docs/engineering/OPS1_RENDER_CRON.md', '\\*\\*Status: defined, not created\\.\\*\\*', 'The specification says it is not created']] },
       { n: 2, name: 'B0 to B3: the operating proof', cls: 'proof', now: 'prove-autonomy (#169, #171) now reads the evidence for each step, without running anything. No real B0, B1, B2, B3 or cutover evidence exists yet, and R0 must be repeated.',
         evidence: [['docs/engineering/AUTONOMY_PROOF_CLI.md', ''], ['dashboard/core/autonomy-proof.js', '']], claims: [['dashboard/cli.js', "cmd === 'prove-autonomy'", 'The command exists']] },
-      { n: 4, name: 'GoPlus in research packets', cls: 'code', slice: 'C2', now: 'Still in monitor mode. Eric’s direction is to make it active. Unknown never reads as safe.',
-        evidence: [['dashboard/core/screening.js', "~packet_mode: 'monitor'"]], claims: [['dashboard/core/screening.js', "packet_mode: 'monitor'", 'The default is monitor']] },
+      { n: 4, name: 'GoPlus in research packets', cls: 'built', slice: null, now: 'Active in code (C2): new research and ticket packets carry GoPlus’s flags from the saved screen. An unanswered check stays unknown, a missing, old or failed screen says so, and nothing is labeled safe. No real run has used it yet.',
+        evidence: [['dashboard/core/screening.js', "~packet_mode: 'include'"], ['dashboard/core/screening.js', 'packetSection'], ['dashboard/core/research.js', '~contract_screen'], ['dashboard/core/tickets.js', '~contract_screen']], claims: [['dashboard/core/screening.js', "packet_mode: 'include'", 'The default is include'], ['dashboard/core/research.js', 'contract_screen: require', 'Research packets carry it'], ['dashboard/core/tickets.js', 'contract_screen: require', 'Ticket packets carry it']] },
       { n: 5, name: 'Real records in the Explorer', cls: 'code', slice: 'C3', now: 'Refused in code today. Eric’s direction is a deliberately confirmed export of one project; the whole desk stays refused.',
         evidence: [['dashboard/core/explorer.js', 'exportProject']], claims: [] },
-      { n: 7, name: 'Owner questions and protected correctness', cls: 'code', slice: null, now: 'Two still open, with no slice left for either. The Law 1 credential: B1 kept GitHub credentials out of child environments, but the stored gh login still reaches admin, so the law stays procedural until Eric separates it. The buy-and-hold baseline is not built: C1 built the fee accounting (gross, fees, net and signal against fill per position), and the baseline stays Eric’s choice. A5 is closed in code (B3): a paper record that does not read is an INTEGRITY refusal, never a shorter book. The Constitution’s Invariant 3 now names all nine protected files (B2).',
-        evidence: [['docs/ONE-SHEET.md', '~Still his and still open'], ['docs/CONSTITUTION.md', '~Protected accounting modules'], ['dashboard/core/child-env.js', '~Removing variables cannot stop that'], ['dashboard/core/paper.js', '~function parseRecords'], ['dashboard/core/grade-outcome-view.js', '~function accountingOf']], claims: [['docs/ONE-SHEET.md', 'Still his and still open: the Law 1 credential, and the buy-and-hold baseline comparison', 'The sheet lists both'],['docs/CONSTITUTION.md', 'templates/schemas/trade-intent\\.v3\\.schema\\.json', 'Invariant 3 names the schemas too']] }
+      { n: 7, name: 'Owner questions and protected correctness', cls: 'built', slice: null, now: 'One still open, with no slice left: the Law 1 credential. B1 kept GitHub credentials out of child environments, but the stored gh login still reaches admin, so the law stays procedural until Eric separates it. C1 built the fee accounting (gross, fees, net and signal against fill per position). The buy-and-hold baseline is not built; Eric deferred it to Stage 2. A5 is closed in code (B3): a paper record that does not read is an INTEGRITY refusal, never a shorter book. The Constitution’s Invariant 3 now names all nine protected files (B2).',
+        evidence: [['docs/ONE-SHEET.md', '~Still his and still open'], ['docs/CONSTITUTION.md', '~Protected accounting modules'], ['dashboard/core/child-env.js', '~Removing variables cannot stop that'], ['dashboard/core/paper.js', '~function parseRecords'], ['dashboard/core/grade-outcome-view.js', '~function accountingOf']], claims: [['docs/ONE-SHEET.md', 'Still his and still open: the Law 1 credential' + '\\. The buy-and-hold baseline comparison is deferred to Stage 2', 'The sheet lists the credential and defers the baseline'],['docs/CONSTITUTION.md', 'templates/schemas/trade-intent\\.v3\\.schema\\.json', 'Invariant 3 names the schemas too']] }
     ],
     /* The sheet's table, name for name. The test compares them. */
     hosts: [
@@ -720,7 +723,6 @@ window.ATLAS = {
       ['Automatic lead admission', 'Off by default, with an expiry when armed.', ['dashboard/core/workspace.js', '~lead_admission: { enabled: false']],
       ['Standing exit-quote approvals', 'exit_quotes_auto is false by default.', ['dashboard/core/workspace.js', '~exit_quotes_auto: false']],
       ['Contract reads and the contract gate', 'contracts.enabled is false; the gate observes.', ['dashboard/core/workspace.js', '~contracts: {']],
-      ['GoPlus in research packets', 'packet_mode is “monitor”.', ['dashboard/core/screening.js', '~packet_mode']],
       ['Real records in the Explorer', 'Refused in code today; a confirmed single-project export is scheduled (C3).', ['dashboard/core/explorer.js', 'exportProject']],
       ['Gemini on the online desk', 'On hold; nothing new is assigned to it.', ['dashboard/hosted.js', '~GEMINI_HOLD']]
     ],
@@ -731,7 +733,7 @@ window.ATLAS = {
       ['Each desk’s current settings', 'Not read by this atlas: UNKNOWN.', ['dashboard/core/workspace.js', '~automation: {']]
     ],
     questions: [
-      ['Eric’s open questions', 'The Law 1 credential and the buy-and-hold baseline. B1 closed only the credential’s environment path; C1 built the fee accounting, not the baseline. See chapter 13.', ['docs/ONE-SHEET.md', '~Still his and still open']]
+      ['Eric’s open questions', 'The Law 1 credential: B1 closed only its environment path. The buy-and-hold baseline is deferred to Stage 2 by Eric’s ruling. See chapter 13.', ['docs/ONE-SHEET.md', '~Still his and still open']]
     ]
   },
 
