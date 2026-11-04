@@ -2484,3 +2484,25 @@ test('cr-ticket-sizing@3: with lower bounds only, the cheapest is read and still
   assert.deepEqual([saved.receipt.desk.exit_cost_500_usd_pct, saved.receipt.desk.exit_cost_500_complete], [3, false]);
   assert.match(saved.receipt.desk.gate.reasons.join(' '), /at least 3% \(network fee unknown\): a lower bound does not prove it/);
 });
+
+// A5 (Stage 1.5, PR B3 [P]): a grant on a paper book that does not read.
+test('A5: a grant on an unreadable paper book is recorded with its paper effect failed; nothing is added to the file; the card says unreadable, never missing; once restored, the same decision completes it', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const bad = '{"event":"open","decision_id":"dc_torn\n';
+  fs.mkdirSync(path.dirname(s.ws.abs(P.REL)), { recursive: true });
+  fs.writeFileSync(s.ws.abs(P.REL), bad);
+  const dec = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  assert.equal(dec.result.paper.status, 'failed');
+  assert.match(dec.result.paper.error, /paper\/positions\.jsonl has a line that does not read \(line 1\)/);
+  assert.equal(fs.readFileSync(s.ws.abs(P.REL), 'utf8'), bad, 'nothing was added to a file that does not read');
+  assert.equal(T.readDecisions(s.ws, s.pid).filter((d) => d.action === 'approve').length, 1, 'Eric\'s decision stands');
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'unreadable');
+  fs.rmSync(s.ws.abs(P.REL));
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'missing', 'the file is back, and now the position is known to be missing');
+  const again = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  assert.equal(again.result.paper.status, 'saved');
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'open');
+  assert.equal(P.readRecords(s.ws).filter((l) => l.event === 'open').length, 1);
+});

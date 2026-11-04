@@ -2351,13 +2351,14 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
 
 // Whether a grant in force has its paper position: 'open', 'missing' (the
 // decision is recorded but its position is not; the same decision again
-// completes it), or null for a decision that grants nothing.
+// completes it), 'unreadable' (the book did not read, so neither is known), or
+// null for a decision that grants nothing.
 function paperStateOf(ws, decision) {
   if (!paperWanted(decision) || !(decision.pm_approved_risk_usd > 0)) return null;
   try {
     return require('./paper').readRecords(ws).some((l) => l.event === 'open' && l.decision_id === decision.decision_id) ? 'open' : 'missing';
   } catch (_) {
-    return null;
+    return 'unreadable';
   }
 }
 

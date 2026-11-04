@@ -263,11 +263,22 @@ function portableLocked(ws) {
         events: notes.loadEvents(ws, 'portfolio'),
         computed: data.pf,
       },
-      paper: { positions: require('./paper').readRecords(ws) },
+      paper: paperForExport(ws),
       market_data: { latest: data.latest, status: market.readStatus(ws) },
       consistency,
     },
   };
+}
+
+// A paper book that does not read is said here, never exported as empty, and
+// does not take the rest of the export down with it (A5).
+function paperForExport(ws) {
+  try {
+    return { positions: require('./paper').readRecords(ws) };
+  } catch (err) {
+    if (err && err.code === 'INTEGRITY') return { positions: null, unreadable: err.message };
+    throw err;
+  }
 }
 
 function tables(ws, data) {
