@@ -112,7 +112,7 @@ test('the seven items carry Eric\'s classes, in three that stay apart', () => {
   assert.match(S.classes.hold.words, /not an engineering failure/);
   assert.equal(item(4).slice, 'C2');
   assert.equal(item(5).slice, 'C3');
-  assert.equal(item(7).slice, 'B1, B2, B3, C1');
+  assert.equal(item(7).slice, 'B3, C1');
   assert.match(S.classSource, /Neither is a file in this repository/, 'the rulings are said to live outside the repository');
 });
 
