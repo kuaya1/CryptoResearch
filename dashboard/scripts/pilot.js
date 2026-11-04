@@ -1309,7 +1309,19 @@ async function main() {
   }
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(o.project)) throw new Error(`"${o.project}" is not a project ID.`);
   if (o.unattended && !o.model) throw new Error('An unattended run names its model: --model=<id>. Nothing was claimed or dispatched.');
-  if (o.desk === 'online') { const r = await runOnline(o); if (r && r.stop === 'reconcile') process.exitCode = 3; return; }
+  if (o.desk === 'online') {
+    // The same guard as --pilot-all, before the launch check, the token or a
+    // claim (audit 2026-11-04, R03). A dry run has no effect to guard here and
+    // needs no network. No --pilot-all lock: the desk's claim keeps runs apart.
+    if (o.unattended && !o.dryRun) {
+      const g = await revisionGuard(o, { env: process.env, fetchImpl: globalThis.fetch, runnerRevisionImpl: () => runnerRevision({ env: process.env }), deskRevisionImpl: deskRevision });
+      if (g.why) throw new Error(`Revision guard: ${g.why} Nothing was claimed or dispatched.`);
+      say(`Revision: ${g.rec.runner.slice(0, 7)} (${g.rec.source}, ${g.rec.clean === true ? 'clean' : 'no .git: cleanliness not checked'}) matches the desk.`);
+    }
+    const r = await runOnline(o);
+    if (r && r.stop === 'reconcile') process.exitCode = 3;
+    return;
+  }
   if (o.desk !== 'local') throw new Error('--desk is local or online.');
   await preflightOf(claude, o);
   runLocal(o);
