@@ -143,8 +143,8 @@ test('each item\'s facts still hold in the code (a later slice updates its own i
   assert.match(read('dashboard', 'core', 'explorer.js'), /if \(confirm !== token\) throw refuse\('CONFIRM_MISMATCH'/, 'item 5: the send no longer checks the preview\'s hash, so update item 5');
   assert.match(read('dashboard', 'cli.js'), /if \(flags\.desk\) throw/, 'item 5: the whole desk is no longer refused, so update item 5');
   assert.match(read('dashboard', 'cli.js'), /code: 'NOT_INTERACTIVE'/, 'item 5: the terminal check went, so update item 5');
-  assert.match(item(5).now, /No real record has been sent/, 'item 5: built is not sent');
-  assert.match(SHEET, /no real record has been sent/, 'item 5: the sheet stopped saying so');
+  assert.match(item(5).now, /This work sent no real record/, 'item 5: built is not sent');
+  assert.match(SHEET, /One real project can now go to the Research Explorer, only by the preview's hash from his own terminal \(C3\); sending the whole desk stays refused, and this work sent no real record/, 'item 5: the sheet stopped saying so');
   assert.match(SHEET, /Still his and still open: the Law 1 credential\. The buy-and-hold baseline comparison is deferred to Stage 2/, 'item 7: the sheet\'s open list changed, so update item 7');
   assert.match(read('dashboard', 'core', 'grade-outcome-view.js'), /function accountingOf\(/, 'item 7: the fee accounting moved or went');
   assert.doesNotMatch(read('dashboard', 'core', 'grade-outcome-view.js'), /buy_and_hold|buy-and-hold/, 'item 7: a baseline was built, so update item 7');
