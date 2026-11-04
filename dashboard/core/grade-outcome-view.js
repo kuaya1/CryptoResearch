@@ -149,7 +149,7 @@ function accountingOf(fills, exits, realizedPnlUsd) {
 // signal is null, never zero.
 const BPS = dec('10000');
 function signalVsFillBps(signal, fills) {
-  if (!known(signal) || !fills.length || dec(signal) <= 0n) return null;
+  if (!known(signal) || !fills.length) return null;
   const quantity = fills.reduce((a, f) => a + dec(f.quantity), 0n);
   const paid = fills.reduce((a, f) => a + D.mul(dec(f.quantity), dec(f.price)), 0n);
   const atSignal = D.mul(quantity, dec(signal));
