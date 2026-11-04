@@ -229,9 +229,34 @@ function listReceipts(ws, pid) {
     .sort((a, b) => `${a.saved_at || ''}|${a.receipt_id}`.localeCompare(`${b.saved_at || ''}|${b.receipt_id}`));
 }
 
+// A line that does not read is skipped, never fatal: historical logs must keep
+// reading (Eric's ruling, 2026-11-03). Skipping has a cost, since a damaged veto
+// or Undo does not count, so it warns. The warning goes to the server log because
+// a read must not write a record, and it carries numbers only because a line can
+// hold anything. This log is read on every page, so the same damage warns once.
+const WARNED_DECISION_LOGS = new Map();
+function warnSkippedDecisions(ws, rel, skipped) {
+  const key = `${ws.root}\n${rel}`;
+  if (!skipped.length) { WARNED_DECISION_LOGS.delete(key); return; }
+  const seen = skipped.join(',');
+  if (WARNED_DECISION_LOGS.get(key) === seen) return;
+  WARNED_DECISION_LOGS.set(key, seen);
+  const more = skipped.length > 20 ? ` and ${skipped.length - 20} more` : '';
+  console.warn(`[audit] ${rel}: ${skipped.length} unreadable line${skipped.length === 1 ? '' : 's'} skipped (line ${skipped.slice(0, 20).join(', ')}${more}). A skipped veto or Undo does not count. The log was not changed.`);
+}
+
 function readDecisions(ws, pid) {
-  const text = readText(ws, decisionsRel(pid)) || '';
-  return text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+  const rel = decisionsRel(pid);
+  const rows = [];
+  const skipped = [];
+  (readText(ws, rel) || '').split('\n').forEach((line, i) => {
+    if (!line) return;
+    let row = null;
+    try { row = JSON.parse(line); } catch (_) { /* reported below */ }
+    if (row) rows.push(row); else skipped.push(i + 1);
+  });
+  warnSkippedDecisions(ws, rel, skipped);
+  return rows;
 }
 
 function readProfile(ws, pid) {
