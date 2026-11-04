@@ -68,7 +68,7 @@ Four different things, never read as one another. Merged is not deployed, and de
   - the runner's unattended mode and revision guard (blueprint PR 1), #163 `94cede6`;
   - honest job and housekeeping status (blueprint PR 2), #164 `21a11fa`;
   - this sheet's host legend and the canon sync (blueprint PR 3), #165 `fbfb640`;
-  - Ops-1 defined, suspended: the Render Cron Job's specification and its preflight (blueprint PR 4), #166 (this pull request).
+  - Ops-1 defined, suspended: the Render Cron Job's specification and its preflight (blueprint PR 4), #166 `5a8e75b`.
 - **Proposed** (not on `main` until Eric merges): the combined blueprint of 2026-11-02 (#134, closed unmerged).
 - **Deployed: the `/healthz` revision, read at a stated time.** Deployed means the commit on the `revision` line of the online desk's `/healthz`, read back at a stated UTC time, and nothing else: a merge, a Render dashboard or a doctor report is not a readback. Last read: `fbfb640` (#165) at 16:22Z on 2026-11-03. A later merge is not deployed until it is read back the same way.
 - **Operating proof: none yet.** The Ops-1 service is not created. No unattended run on the runner host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation.
