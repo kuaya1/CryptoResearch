@@ -674,8 +674,8 @@ window.ATLAS = {
         evidence: [['dashboard/core/screening.js', "~packet_mode: 'monitor'"]], claims: [['dashboard/core/screening.js', "packet_mode: 'monitor'", 'The default is monitor']] },
       { n: 5, name: 'Real records in the Explorer', cls: 'code', slice: 'C3', now: 'Refused in code today. Eric’s direction is a deliberately confirmed export of one project; the whole desk stays refused.',
         evidence: [['dashboard/core/explorer.js', 'exportProject']], claims: [] },
-      { n: 7, name: 'Owner questions and protected correctness', cls: 'code', slice: 'B3, C1', now: 'Three still open. The Law 1 credential: B1 kept GitHub credentials out of child environments, but the stored gh login still reaches admin, so the law stays procedural until Eric separates it. A5 paper-record integrity, a protected change (B3). The fee-drag baseline (C1). The Constitution’s Invariant 3 now names all nine protected files (B2).',
-        evidence: [['docs/ONE-SHEET.md', '~Still his and still open'], ['docs/CONSTITUTION.md', '~Protected accounting modules'], ['dashboard/core/child-env.js', '~Removing variables cannot stop that']], claims: [['docs/ONE-SHEET.md', 'Still his and still open: the Law 1 credential, A5, and the baseline and fee-drag comparison', 'The sheet lists all three'], ['docs/CONSTITUTION.md', 'templates/schemas/trade-intent\\.v3\\.schema\\.json', 'Invariant 3 names the schemas too']] }
+      { n: 7, name: 'Owner questions and protected correctness', cls: 'code', slice: 'C1', now: 'Two still open. The Law 1 credential: B1 kept GitHub credentials out of child environments, but the stored gh login still reaches admin, so the law stays procedural until Eric separates it. The fee-drag baseline (C1). A5 is closed in code (B3): a paper record that does not read is an INTEGRITY refusal, never a shorter book. The Constitution’s Invariant 3 now names all nine protected files (B2).',
+        evidence: [['docs/ONE-SHEET.md', '~Still his and still open'], ['docs/CONSTITUTION.md', '~Protected accounting modules'], ['dashboard/core/child-env.js', '~Removing variables cannot stop that'], ['dashboard/core/paper.js', '~function parseRecords']], claims: [['docs/ONE-SHEET.md', 'Still his and still open: the Law 1 credential, and the baseline and fee-drag comparison', 'The sheet lists both'],['docs/CONSTITUTION.md', 'templates/schemas/trade-intent\\.v3\\.schema\\.json', 'Invariant 3 names the schemas too']] }
     ],
     /* The sheet's table, name for name. The test compares them. */
     hosts: [
@@ -731,7 +731,7 @@ window.ATLAS = {
       ['Each desk’s current settings', 'Not read by this atlas: UNKNOWN.', ['dashboard/core/workspace.js', '~automation: {']]
     ],
     questions: [
-      ['Eric’s open questions', 'The Law 1 credential, A5 and the fee-drag baseline. B1 closed only the credential’s environment path; A5 and the baseline are slices B3 and C1. See chapter 13.', ['docs/ONE-SHEET.md', '~Still his and still open']]
+      ['Eric’s open questions', 'The Law 1 credential and the fee-drag baseline. B1 closed only the credential’s environment path; the baseline is slice C1. See chapter 13.', ['docs/ONE-SHEET.md', '~Still his and still open']]
     ]
   },
 

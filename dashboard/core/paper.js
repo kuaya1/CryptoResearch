@@ -39,20 +39,47 @@ const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const round = (x, d = 2) => (isNum(x) ? Math.round(x * 10 ** d) / 10 ** d : null);
 const iso = (ms) => new Date(ms).toISOString();
 
+// Every line or none (A5, Stage 1.5 PR B3): a line that does not read is an
+// INTEGRITY refusal, never a shorter book, and a missing file is the only empty
+// one. The words name lines and codes, never what a line holds or a folder.
+function parseRecords(text) {
+  const lines = [];
+  const bad = [];
+  text.replace(/^\uFEFF/, '').split('\n').forEach((l, i) => {
+    if (!l.trim()) return;
+    let rec = null;
+    try { rec = JSON.parse(l); } catch (_) { /* counted below */ }
+    if (rec && typeof rec === 'object' && !Array.isArray(rec)) lines.push(rec);
+    else bad.push(i + 1);
+  });
+  if (bad.length) throw new OpError('INTEGRITY', `${REL} has ${bad.length === 1 ? 'a line that does' : `${bad.length} lines that do`} not read (line ${bad.slice(0, 5).join(', ')}). It is not rebuilt; restore it from a backup.`, { path: REL, lines: bad.slice(0, 20) });
+  return lines;
+}
+
+function unreadable(err) {
+  return new OpError('INTEGRITY', `${REL} could not be read (${(err && err.code) || 'unknown error'}). The book is not shown as empty.`, { path: REL });
+}
+
 function readRecords(ws) {
-  let text = '';
+  let text;
   try {
     text = require('fs').readFileSync(ws.abs(REL), 'utf8');
-  } catch (_) {
-    return [];
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw unreadable(err);
   }
-  return text.split('\n').filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+  return parseRecords(text);
 }
 
 function append(ws, summary, build) {
   return runOp(ws, { type: 'paper_position', summary }, (op) => {
-    const cur = op.readText(REL, '');
-    const lines = cur.split('\n').filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+    let cur;
+    try {
+      cur = op.readText(REL, '');
+    } catch (err) {
+      throw unreadable(err);
+    }
+    const lines = parseRecords(cur);
     const rec = build(lines);
     if (!rec) return { status: 'unchanged' };
     op.write(REL, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(rec)}\n`);
