@@ -269,6 +269,7 @@ test('C1: fills at several prices weigh by quantity, a loss stays negative, and 
   // (40 × 10.00 + 40 × 9.90) / 80 = 9.95, or 50 bps under $10.00.
   assert.equal(v.rows[0].order.filled_quantity, '80');
   assert.equal(p.signal_vs_fill_bps, '-50');
+  assert.equal(V.signalVsFillBps('10', [{ quantity: '30', price: '10' }, { quantity: '10', price: '9' }]), '-250', 'unequal fills: (300 + 90) / 40 = 9.75');
   assert.ok(Number(p.gross_pnl_usd) < 0, p.gross_pnl_usd);
   assert.equal(p.net_pnl_usd, p.realized_pnl_usd);
   const D = require('../core/decimal');
