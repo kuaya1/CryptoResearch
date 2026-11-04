@@ -228,3 +228,96 @@ test('reading it writes nothing, in process and through the signed-in route, whi
   assert.equal((await get('/api/research/attribution', {})).status, 401);
   assert.deepEqual(tree(s.root), started, 'the route wrote nothing');
 });
+
+// ---- Fee accounting (Stage 1.5 C1): gross, fees, net and signal against fill,
+// each closed position's own, from the book's own fills and exits.
+
+// A limit buy of 100 at $10.00: 40 at the limit, 40 at $9.90 (the hour opened
+// below it), then the next hour's stop at $9.50 closes before the last 20 fill.
+function stoppedOut(t) {
+  const s = ticketed(t);
+  TD.applyHours(s.ws, Array.from({ length: 16 }, (_, i) => calm(s.top - (16 - i) * H)), { now: iso(Date.now()) });
+  const d = T.decide(s.ws, s.pid, { receipt_id: s.rid, action: 'approve', by: 'eric' }).result;
+  assert.equal(d.trader.status, 'order');
+  const { top } = s;
+  TD.applyHours(s.ws, [calm(top)], { now: iso(top + H + 11 * M) });
+  TD.applyHours(s.ws, [bar(top + H, { open: '10.05', high: '10.10', low: '9.90', close: '10.00', volume: '400' })], { now: iso(top + 2 * H + 11 * M) });
+  const open = iso(top + 2 * H + 12 * M);
+  const openView = V.view(s.ws, { now: open });
+  TD.applyHours(s.ws, [bar(top + 2 * H, { open: '9.90', high: '9.95', low: '9.80', close: '9.90', volume: '400' })], { now: iso(top + 3 * H + 11 * M) });
+  TD.applyHours(s.ws, [bar(top + 3 * H, { open: '9.60', high: '9.60', low: '9.40', close: '9.45', volume: '400' })], { now: iso(top + 4 * H + 11 * M) });
+  return { ...s, openView, end: iso(top + 4 * H + 12 * M) };
+}
+
+test('C1: the illustration\'s closed position states gross, fees and net, and net is the book\'s own result', (t) => {
+  const s = illustrated(t);
+  const p = V.view(s.ws, { now: s.end }).rows[0].position;
+  assert.equal(p.gross_pnl_usd, '32', '$432.00 proceeds − $400.00 of fills');
+  assert.equal(p.total_fees_usd, '0.832', '$0.40 + $0.432');
+  assert.equal(p.net_pnl_usd, '31.168');
+  assert.equal(p.net_pnl_usd, p.realized_pnl_usd, 'net is the book\'s realized result, not a second opinion');
+  assert.equal(p.signal_vs_fill_bps, '0', 'every fill at the order\'s limit');
+  assert.match(p.signal_basis, /limit/);
+});
+
+test('C1: fills at several prices weigh by quantity, a loss stays negative, and the figures add up', (t) => {
+  const s = stoppedOut(t);
+  const v = V.view(s.ws, { now: s.end });
+  const p = v.rows[0].position;
+  assert.equal(p.state, 'closed');
+  assert.equal(p.exit_reason, 'stop');
+  // (40 × 10.00 + 40 × 9.90) / 80 = 9.95, or 50 bps under $10.00.
+  assert.equal(v.rows[0].order.filled_quantity, '80');
+  assert.equal(p.signal_vs_fill_bps, '-50');
+  assert.equal(V.signalVsFillBps('10', [{ quantity: '30', price: '10' }, { quantity: '10', price: '9' }]), '-250', 'unequal fills: (300 + 90) / 40 = 9.75');
+  assert.ok(Number(p.gross_pnl_usd) < 0, p.gross_pnl_usd);
+  assert.equal(p.net_pnl_usd, p.realized_pnl_usd);
+  const D = require('../core/decimal');
+  assert.equal(D.of(p.gross_pnl_usd) - D.of(p.total_fees_usd), D.of(p.net_pnl_usd), 'gross − fees = net, exactly');
+  assert.ok(D.of(p.net_pnl_usd) < D.of(p.gross_pnl_usd), 'fees only ever lower it');
+});
+
+test('C1: an open position has no gross or net to state, and never reads as zero; its fills still say how they compare', (t) => {
+  const s = stoppedOut(t);
+  const p = s.openView.rows[0].position;
+  assert.equal(p.state, 'open');
+  assert.equal(p.gross_pnl_usd, null);
+  assert.equal(p.total_fees_usd, null);
+  assert.equal(p.net_pnl_usd, null);
+  assert.equal(p.signal_vs_fill_bps, '0');
+});
+
+test('C1: a result the fills cannot reproduce refuses the view and names the decision; it is not averaged away', (t) => {
+  const s = illustrated(t);
+  const real = TD.view;
+  TD.view = (...a) => {
+    const v = real(...a);
+    v.results.closed_positions[0].realized_pnl_usd = '30';
+    return v;
+  };
+  t.after(() => { TD.view = real; });
+  assert.throws(() => V.view(s.ws, { now: s.end }), (e) => {
+    assert.equal(e.code, 'INTEGRITY');
+    assert.match(e.message, new RegExp(`Decision ${s.decision.decision_id}`));
+    assert.match(e.message, /31\.168/);
+    assert.match(e.message, /30/);
+    return true;
+  });
+});
+
+test('C1: what is not known stays unknown: a missing fee or proceeds is null, never zero', () => {
+  const fills = [{ quantity: '40', price: '10', notional_usd: '400', fee_usd: '0.4' }];
+  const exits = [{ proceeds_usd: '432', fee_usd: '0.432' }];
+  const whole = V.accountingOf(fills, exits, '31.168');
+  assert.deepEqual([whole.gross_pnl_usd, whole.total_fees_usd, whole.net_pnl_usd, whole.holds], ['32', '0.832', '31.168', true]);
+  const noFee = V.accountingOf(fills, [{ proceeds_usd: '432' }], '31.168');
+  assert.deepEqual([noFee.gross_pnl_usd, noFee.total_fees_usd, noFee.net_pnl_usd, noFee.holds], ['32', null, null, true]);
+  const noProceeds = V.accountingOf(fills, [{ fee_usd: '0.432' }], '31.168');
+  assert.deepEqual([noProceeds.gross_pnl_usd, noProceeds.total_fees_usd, noProceeds.net_pnl_usd, noProceeds.holds], [null, '0.832', null, true]);
+  const noExit = V.accountingOf(fills, [], '31.168');
+  assert.deepEqual([noExit.gross_pnl_usd, noExit.total_fees_usd, noExit.net_pnl_usd], [null, null, null]);
+  assert.equal(V.signalVsFillBps('10', []), null, 'no fill, no comparison');
+  assert.equal(V.signalVsFillBps(null, fills), null, 'no signal, no comparison');
+  assert.equal(V.signalVsFillBps('0', fills), null, 'a zero signal divides nothing');
+  assert.equal(V.signalVsFillBps('10', [{ quantity: '1', price: '10.2' }]), '200', 'a fill above the signal is positive');
+});
