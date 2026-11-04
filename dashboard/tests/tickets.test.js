@@ -2506,3 +2506,20 @@ test('A5: a grant on an unreadable paper book is recorded with its paper effect 
   assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'open');
   assert.equal(P.readRecords(s.ws).filter((l) => l.event === 'open').length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// The contract screen reaches Agent 2 (Stage 1.5 C2)
+
+test('C2: a new ticket packet and its prompt carry the contract screen as a state, and the frozen packet still checks out at the save', (t) => {
+  const s = withReport(t);
+  const tk = riskTicket(s, 1.5);
+  const packet = JSON.parse(require('fs').readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
+  const c = packet.contract_screen;
+  assert.equal(c.schema_version, 'cr.contract-screen.v1');
+  assert.equal(c.mode, 'include');
+  assert.ok(c.state && c.state !== 'not_included', 'the packet says what the screen is');
+  assert.doesNotMatch(JSON.stringify(c), /\bsafe\b/i, 'nothing is labeled safe');
+  assert.ok(packet.notes.some((n) => /^contract_screen: .*an absent flag is not an audit/.test(n)));
+  assert.ok(require('fs').readFileSync(s.ws.abs(tk.prompt.path), 'utf8').includes('"contract_screen"'), 'the prompt shows it to Agent 2');
+  assert.equal(T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) }).status, 'saved', 'the frozen packet still checks out at the save');
+});

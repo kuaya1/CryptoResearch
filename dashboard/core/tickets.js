@@ -691,6 +691,7 @@ function createTicket(ws, args = {}) {
     exits_missing: [],
     ...(args.exit_quote ? { exit_quote_attempt: args.exit_quote } : {}),
     sell_tax: taxOf(ws, project, now),
+    contract_screen: require('./screening').packetSection(ws, project, { now }),
     fundamentals: fundamentalsOf(ws, project, now),
     held,
     sizing,
@@ -698,6 +699,7 @@ function createTicket(ws, args = {}) {
     notes: [
       'exits: the desk\'s own exit-quote readings (aggregator quotes or constant-product reserves) as the Forensics tab reads them, at each size the cheapest current reading whose cost is known in full, else the cheapest; a cost not known in full is a lower bound.',
       'held: whether Eric records an open position in this token (Portfolio); never its size.',
+      'contract_screen: GoPlus\'s flags from the saved screen, as data. A present flag is a capability, an absent flag is not an audit, and its state says when the screen is missing, old or failed.',
     ],
   };
   // Whether the identity says this is the chain's own coin (never inferred
