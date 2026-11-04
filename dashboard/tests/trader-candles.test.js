@@ -16,6 +16,7 @@ const PT = require('../core/paper-trader');
 const C = require('../core/trader-candles');
 const A = require('../core/call-accounting');
 const MC = require('./meter-cases');
+const jobs = require('../core/jobs');
 const { ymdInTz } = require('../core/dates');
 
 const H = 3600000;
@@ -369,4 +370,189 @@ test('the job runs on the desk\'s 30-minute timer, and the read reaches the trad
   for (const re of [/process\.env/, /secrets/i, /api[_-]?key/i, /wallet/i, /\beval\(/]) assert.doesNotMatch(src, re, String(re));
   assert.deepEqual([...new Set(src.match(/https?:\/\/[a-z0-9.-]+/gi))], ['https://api.geckoterminal.com'], 'one origin');
   assert.equal(C.ORIGIN, 'https://api.geckoterminal.com');
+});
+
+// ---------------------------------------------------------------------------
+// A real candle problem is never hidden by a used-up budget (audit 2026-11-04,
+// R04). One pair's problem did not stop the loop; a later pair met the budget;
+// the read said budget_paused, the job counted it a success, and the problem
+// showed nowhere in the job's state.
+
+// The day's budget with `left` requests remaining, on the day of `ms`.
+function budgetLeft(ws, ms, left = 0) {
+  fs.mkdirSync(path.dirname(ws.abs(C.STATUS_REL)), { recursive: true });
+  const day = ymdInTz(new Date(ms));
+  fs.writeFileSync(ws.abs(C.STATUS_REL), JSON.stringify({ schema_version: 'cr.trader-candles-status.v1', calls: { month: day.slice(0, 7), month_count: C.DAILY_BUDGET - left, day, day_count: C.DAILY_BUDGET - left } }));
+}
+// More pairs for the read, `first` ahead of the desk's own and `after` behind it.
+function alsoWanted(t, { first = [], after = [] }) {
+  const real = TD.wanted;
+  TD.wanted = (...a) => [...first, ...real(...a), ...after];
+  t.after(() => { TD.wanted = real; });
+}
+// A pair with no pool and no project: a problem found without any request.
+const NO_POOL = { pair: 'GHOST/USDC', project_id: null, why: 'open', last_hour: null };
+const candleJob = (ws) => jobs.readJobState(ws).jobs.trader || {};
+const noRequests = (t) => {
+  const real = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => { asked.push(String(url)); throw new Error(`FICTIONAL: no network to ${url}`); };
+  t.after(() => { globalThis.fetch = real; });
+  return asked;
+};
+const quietSweep = (t) => {
+  const real = T.mandateSweep;
+  T.mandateSweep = () => ({ status: 'ok', message: 'FICTIONAL sweep: nothing to grant.' });
+  t.after(() => { T.mandateSweep = real; });
+};
+// One clean trader run first, so last_success_at has a value to keep.
+async function primedJob(t, ws) {
+  quietSweep(t);
+  noRequests(t);
+  const real = C.refresh;
+  C.refresh = async () => ({ status: 'ok', message: 'FICTIONAL hours applied.', counts: { problems: [], step: { done: 1, problems: 0 } } });
+  await jobs.runJobs(ws, ['trader'], { trigger: 'dashboard' });
+  C.refresh = real;
+  const before = candleJob(ws);
+  assert.equal(before.last_status, 'ok');
+  assert.equal(before.last_failure_at, undefined);
+  await new Promise((r) => setTimeout(r, 5));
+  return before;
+}
+
+test('R04: a problem, then the used-up budget: the read says attention, with both facts in its words', async (t) => {
+  const s = deskWith(t);
+  const clock = clockFrom();
+  budgetLeft(s.ws, clock.t);
+  alsoWanted(t, { first: [NO_POOL] });
+  const g = gecko(clock);
+  const r = await run(s.ws, clock, g);
+  assert.equal(r.status, 'attention');
+  assert.equal(r.counts.budget, true);
+  assert.equal(r.counts.problems.length, 1);
+  assert.equal(g.calls.length, 0);
+  assert.match(r.message, /GHOST\/USDC has no pool on record/);
+  assert.match(r.message, /the request budget is used up/);
+});
+
+test('R04: an answered read that fails, then the used-up budget: attention, the last request spent on the failure', async (t) => {
+  const s = deskWith(t);
+  const clock = clockFrom();
+  budgetLeft(s.ws, clock.t, 1);
+  alsoWanted(t, { after: [{ pair: 'OTHER/USDC', project_id: s.pid, why: 'open', last_hour: null }] });
+  const g = gecko(clock, { pools: () => json({ errors: [] }, 404) });
+  const r = await run(s.ws, clock, g);
+  assert.equal(g.calls.length, 1, 'the budget held one request');
+  assert.equal(r.status, 'attention', r.message);
+  assert.equal(r.counts.budget, true);
+  assert.ok(r.counts.problems.length >= 1, r.message);
+});
+
+test('R04: hours the book did not take, then the used-up budget: attention, even with no problem line', async (t) => {
+  const s = deskWith(t);
+  const clock = clockFrom();
+  budgetLeft(s.ws, clock.t, 2);
+  alsoWanted(t, { after: [{ pair: 'OTHER/USDC', project_id: s.pid, why: 'open', last_hour: null }] });
+  const real = TD.applyHours;
+  TD.applyHours = (ws, bars) => bars.map((b) => ({ pair: b.pair, hour: b.hour, status: 'skipped', words: 'FICTIONAL: not taken.' }));
+  t.after(() => { TD.applyHours = real; });
+  const r = await run(s.ws, clock, gecko(clock));
+  assert.ok(r.counts.refused > 0, r.message);
+  assert.deepEqual(r.counts.problems, []);
+  assert.equal(r.counts.budget, true);
+  assert.equal(r.status, 'attention', r.message);
+});
+
+test('R04: the used-up budget alone is still a pause; a problem alone is still attention', async (t) => {
+  const s = deskWith(t);
+  const clock = clockFrom();
+  budgetLeft(s.ws, clock.t);
+  const paused = await run(s.ws, clock, gecko(clock));
+  assert.equal(paused.status, 'budget_paused');
+  assert.deepEqual(paused.counts.problems, []);
+
+  const o = deskWith(t);
+  alsoWanted(t, { first: [NO_POOL] });
+  const r = await run(o.ws, clock, gecko(clock));
+  assert.equal(r.counts.budget, false);
+  assert.ok(r.counts.problems.length >= 1);
+  assert.equal(r.status, 'attention');
+});
+
+test('R04: the job after a mix is impaired: not a success, last_success_at kept, the problem in last_error', async (t) => {
+  const s = deskWith(t);
+  const before = await primedJob(t, s.ws);
+  budgetLeft(s.ws, Date.now());
+  alsoWanted(t, { first: [NO_POOL] });
+  const [result] = await jobs.runJobs(s.ws, ['trader'], { trigger: 'dashboard' });
+  assert.equal(result.status, 'impaired');
+  assert.deepEqual(result.impaired, ['candle_problems']);
+  assert.equal(jobs.OK_STATUSES.has(result.status), false);
+  const after = candleJob(s.ws);
+  assert.equal(after.last_status, 'impaired');
+  assert.equal(after.last_success_at, before.last_success_at, 'last_success_at is not advanced');
+  assert.equal(after.last_success_day, before.last_success_day);
+  assert.ok(after.last_failure_at > before.last_success_at, 'last_failure_at is set');
+  assert.match(after.last_error, /^Impaired \(candle_problems\): /);
+  assert.match(after.last_error, /GHOST\/USDC has no pool on record/);
+});
+
+test('R04: the job after the budget alone stays a success, with no failure recorded', async (t) => {
+  const s = deskWith(t);
+  const before = await primedJob(t, s.ws);
+  budgetLeft(s.ws, Date.now());
+  const [result] = await jobs.runJobs(s.ws, ['trader'], { trigger: 'dashboard' });
+  assert.equal(result.status, 'budget_paused');
+  assert.equal(result.impaired, undefined);
+  const after = candleJob(s.ws);
+  assert.equal(after.last_status, 'budget_paused');
+  assert.ok(after.last_success_at > before.last_success_at);
+  assert.equal(after.last_failure_at, undefined);
+});
+
+test('R04: recovery: once the problem is gone the job is a success again, and the failure stays on record', async (t) => {
+  const s = deskWith(t);
+  await primedJob(t, s.ws);
+  budgetLeft(s.ws, Date.now());
+  const real = TD.wanted;
+  TD.wanted = (...a) => [NO_POOL, ...real(...a)];
+  t.after(() => { TD.wanted = real; });
+  await jobs.runJobs(s.ws, ['trader'], { trigger: 'dashboard' });
+  const failed = candleJob(s.ws);
+  assert.equal(failed.last_status, 'impaired');
+  await new Promise((r) => setTimeout(r, 5));
+  TD.wanted = real;
+  await jobs.runJobs(s.ws, ['trader'], { trigger: 'dashboard' });
+  const after = candleJob(s.ws);
+  assert.equal(after.last_status, 'budget_paused');
+  assert.ok(after.last_success_at > failed.last_failure_at, 'a success again');
+  assert.equal(after.last_failure_at, failed.last_failure_at, 'the failure stays on record');
+  assert.equal(after.last_error, failed.last_error);
+});
+
+test('R04: unchanged: a restored copy is a skip, not a failure, and asks nothing', async (t) => {
+  const s = deskWith(t);
+  const before = await primedJob(t, s.ws);
+  const asked = noRequests(t);
+  budgetLeft(s.ws, Date.now());
+  alsoWanted(t, { first: [NO_POOL] });
+  fs.writeFileSync(s.ws.abs('config/restored-copy.json'), JSON.stringify({ research_held: true }));
+  const [result] = await jobs.runJobs(s.ws, ['trader'], { trigger: 'dashboard' });
+  assert.equal(result.status, 'skipped');
+  const after = candleJob(s.ws);
+  assert.equal(after.last_failure_at, undefined);
+  assert.ok(after.last_success_at >= before.last_success_at);
+  assert.deepEqual(asked, []);
+});
+
+test('R04: unchanged: accounting that cannot be read is its own impairment, and no pair is read', async (t) => {
+  const s = deskWith(t);
+  const before = await primedJob(t, s.ws);
+  fs.mkdirSync(path.dirname(s.ws.abs(C.STATUS_REL)), { recursive: true });
+  fs.writeFileSync(s.ws.abs(C.STATUS_REL), '{"schema_version": "cr.trader-candles-status.v1", "calls": {"month": "2026-13"}}\n');
+  alsoWanted(t, { first: [NO_POOL] });
+  const [result] = await jobs.runJobs(s.ws, ['trader'], { trigger: 'dashboard' });
+  assert.equal(result.status, 'impaired');
+  assert.deepEqual(result.impaired, ['accounting_unknown']);
+  assert.equal(candleJob(s.ws).last_success_at, before.last_success_at);
 });
