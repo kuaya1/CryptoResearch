@@ -20,6 +20,10 @@ Setup and health
                  [--evidence DIR] [--offline] [--fixture] [--base SHA]
                  [--mode development|post-merge] [--expected-revision SHA]
                                          read-only evidence verifier; writes a new report bundle only
+  prove-autonomy r0|b0 --template --evidence=DIR
+                                         blank forms and the exact commands for you to run; runs none
+  prove-autonomy <step> --seal --baseline=SHA --evidence=DIR
+                                         close a filled folder with its manifest; judges nothing
   serve [--port 4729] [--open]           start the local dashboard (127.0.0.1 only)
   recover [--status] [--resolve [--force --reason TEXT]]   finish/roll back interrupted writes; inspect or clear a write block
 
@@ -374,6 +378,7 @@ async function run(argv) {
   // Before openWorkspace: even opening it normally may recover interrupted writes.
   if (cmd === 'prove-autonomy') {
     if (rest.length) throw Object.assign(new Error('prove-autonomy accepts exactly one step.'), { code: 'USAGE' });
+    if (flags.template || flags.seal) return require('./core/proof-capture').command(sub, flags);
     return require('./core/autonomy-proof').command(sub, flags);
   }
 

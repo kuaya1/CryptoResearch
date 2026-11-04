@@ -977,4 +977,4 @@ async function command(step, flags, deps = {}) {
   const bundle = writeBundle(report, flags.out, { ...deps, forbiddenRoots: [flags.workspace, deps.repoRoot, ...(deps.forbiddenRoots || [])].filter(Boolean) });
   return redact({ ...report, bundle }, deps.env || process.env);
 }
-module.exports = { FORMAT, STEPS, GATES, READERS, FOLDERS, NARRATIVES, BLUEPRINT, READINESS, OPS1, R0_RECEIPT, HEALTHZ, aggregate, usableAt, gitRevision, healthRead, verify, outputRoot, render, writeBundle, command };
+module.exports = { FORMAT, STEPS, GATES, READERS, FOLDERS, NARRATIVES, OWNER_RECORDS, SECRET_ENV, SECRET_SHAPES, FICTION, MAX_FILE, absolute, noLinks, readBounded, textOf, jsonOf, BLUEPRINT, READINESS, OPS1, R0_RECEIPT, HEALTHZ, aggregate, usableAt, gitRevision, healthRead, verify, outputRoot, render, writeBundle, command };
