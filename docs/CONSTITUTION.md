@@ -47,7 +47,7 @@ Never confuse planned loss-at-stop with notional position size. Sizing must enfo
 ### Invariant 3: Circuit Breakers & Clean Gating
 - Keep only deterministic status checks (like `test`) as required merge gates on `main`.
 - Never rely on external paid AI API calls (`agent-review`) as a hard requirement to merge code.
-- Protected accounting modules (`dashboard/core/paper.js`, `dashboard/core/trade-risk.js`) require deliberate manual review and cannot be modified unattended.
+- Protected accounting modules (`dashboard/core/trade-risk.js`, `dashboard/core/paper.js`, `dashboard/core/paper-trader.js`, `dashboard/core/decimal.js`), the tests that guard them (`dashboard/tests/trade-risk.test.js`, `dashboard/tests/paper-trader.test.js`, `dashboard/tests/trader-boundary.test.js`) and the trade-intent schemas (`templates/schemas/trade-intent.v2.schema.json`, `templates/schemas/trade-intent.v3.schema.json`) require deliberate manual review and cannot be modified unattended.
 
 ---
 
