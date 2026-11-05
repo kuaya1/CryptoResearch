@@ -184,22 +184,62 @@ function heldProviders(ws) {
 // restore into a new folder): while it holds research, the runner asks no
 // provider for anything, new or collected, and creates no scheduled run.
 const RESTORED_REL = 'config/restored-copy.json';
+const NO_MARKER = Object.freeze({});
 function restoredHold(ws) {
-  const m = readJson(ws.abs(RESTORED_REL), null);
-  return m && typeof m === 'object' && m.research_held !== false ? m : null;
+  const m = readJson(ws.abs(RESTORED_REL), NO_MARKER);
+  if (m === NO_MARKER) return null;
+  // A marker that reads as anything but a record holds: only a release ends a hold.
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return { unreadable: true };
+  return m.research_held !== false ? m : null;
+}
+
+// Eric's hold, for a copy put back with no marker: after a Render disk restore or a
+// file copy, while the anchor still refuses (docs/engineering/PAPER_BOOK_RESTORE.md).
+function holdRestoredCopy(ws, { from = null } = {}) {
+  const words = typeof from === 'string' ? from.trim().slice(0, 200) : '';
+  if (!words) throw new OpError('INVALID', 'Say what was restored (--from <words>). Nothing was held.');
+  require('./ops').runOp(ws, { type: 'update_settings', summary: 'Hold a restored copy' }, (op) => {
+    op.writeJson(RESTORED_REL, { schema_version: 'cr.restored-copy.v1', restored_at: new Date().toISOString(), from: { kind: 'owner', words }, research_held: true, note: 'Held by Eric: research asks no provider, and the Paper Book funds nothing, sends no order and applies no hour, until released with node dashboard/cli.js restored-copy release --confirm.' });
+  });
+  return { status: 'saved', research_held: true, message: 'Held: no provider is asked and the book funds nothing, sends no order and applies no hour until this copy is released.' };
 }
 
 // Eric's release of a restored copy: queued jobs may then be sent and
 // accepted requests collected by their ID, within the limits; an uncertain
-// attempt is still never resent.
-function releaseRestoredCopy(ws) {
-  const cur = readJson(ws.abs(RESTORED_REL), null);
-  if (!cur) return { status: 'unchanged', message: 'This workspace is not a restored copy; nothing is held.' };
-  if (cur.research_held === false) return { status: 'unchanged', message: `Research was already released on ${cur.released_at || 'an earlier date'}.` };
-  const out = require('./ops').runOp(ws, { type: 'update_settings', summary: 'Release research in a restored copy' }, (op) => {
-    op.writeJson(RESTORED_REL, { ...cur, research_held: false, released_at: new Date().toISOString() });
+// attempt is still never resent. The Paper Book resumes with it, so the release
+// refuses until he has ruled on all that would run (trader-desk.js rulingsNeeded).
+// Accepting names work the book already holds. It writes nothing into the book, gives
+// no new authority and extends nothing; the engine reads that work afresh under every
+// gate. An opening cannot be accepted, and neither can a mandate. It all happens under
+// the workspace lock, so a decision cannot land between the ruling and the release, and
+// the marker is written once, whole: a release that fails or dies leaves the hold.
+function releaseRestoredCopy(ws, { accept = [] } = {}) {
+  const first = readJson(ws.abs(RESTORED_REL), NO_MARKER);
+  if (first === NO_MARKER) return { status: 'unchanged', message: 'This workspace is not a restored copy; nothing is held.' };
+  if (!first || typeof first !== 'object' || Array.isArray(first)) throw new OpError('INVALID', 'The restored-copy marker does not read, so this copy stays held. Write it again with restored-copy hold, then rule and release. Nothing was released.');
+  if (first.research_held === false) return { status: 'unchanged', message: `Research was already released on ${first.released_at || 'an earlier date'}.` };
+  let accepted = [];
+  const out = require('./ops').runOp(ws, { type: 'update_settings', summary: 'Release a restored copy' }, (op) => {
+    const cur = readJson(ws.abs(RESTORED_REL), null);
+    if (JSON.stringify(cur) !== JSON.stringify(first)) throw new OpError('CONFLICT', 'The restored-copy marker changed during this release. Nothing was released; read it again.');
+    const items = require('./trader-desk').rulingsNeeded(ws);
+    const named = new Set(accept);
+    const stray = [...named].filter((id) => !items.some((x) => x.id === id));
+    if (stray.length) throw new OpError('INVALID', `Not something this copy is waiting on: ${stray.join(', ')}. Nothing was released.`);
+    const cannot = items.filter((x) => named.has(x.id) && !x.may_accept);
+    if (cannot.length) throw new OpError('RULING_REQUIRED', `These cannot be accepted: ${cannot.map((x) => `${x.id} (${x.kind}). ${x.disposition}`).join(' ')} Nothing was released.`);
+    const left = items.filter((x) => !named.has(x.id));
+    if (left.length) throw new OpError('RULING_REQUIRED', `Rule on each of these first: ${left.map((x) => `${x.id} (${x.kind}). ${x.disposition}`).join(' ')} Nothing was released.`);
+    accepted = items.map((x) => ({ decision_id: x.decision_id, kind: x.kind, phase: x.phase, project_id: x.project_id }));
+    // A decision that does not stand on its own record is not accepted.
+    const basis = require('./decision-basis');
+    for (const a of accepted) {
+      const v = basis.viewOf(ws, a.project_id, a.decision_id);
+      if (!['decision_time', 'reconstructed'].includes(v.label)) throw new OpError('RULING_REQUIRED', `The basis of ${a.decision_id} reads as ${v.label}: ${v.words || 'it cannot be accepted'}. Nothing was released.`);
+    }
+    op.writeJson(RESTORED_REL, { ...cur, research_held: false, released_at: new Date().toISOString(), accepted });
   });
-  return { status: 'saved', verified: out.verified, research_held: false, message: 'Research released in this restored copy. Uncertain attempts are still never resent.' };
+  return { status: 'saved', verified: out.verified, research_held: false, accepted, message: 'Research released in this restored copy. Uncertain attempts are still never resent. The Paper Book resumes: hours held back now apply in order, so stops and targets in the gap settle.' };
 }
 
 // Jobs the runner never sends: queued for a model on hold, or held when their
@@ -2764,6 +2804,7 @@ module.exports = {
   RESTORED_REL,
   restoredHold,
   releaseRestoredCopy,
+  holdRestoredCopy,
   RUN_ID_RE,
   createRun,
   routeOf,

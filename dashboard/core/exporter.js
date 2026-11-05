@@ -673,7 +673,7 @@ function markRestoredCopy(dest, from) {
     restored_at: new Date().toISOString(),
     from,
     research_held: true,
-    note: 'A restored copy: research holds every provider request (new or collected) until released with node dashboard/cli.js restored-copy release --confirm. Nothing here was sent anywhere by the restore.',
+    note: 'A restored copy: research holds every provider request (new or collected), and the Paper Book funds nothing, sends no order and applies no hour, until released with node dashboard/cli.js restored-copy release --confirm. Nothing here was sent anywhere by the restore.',
   };
   writeDurable(path.join(dest, ...RESTORED_REL.split('/')), jsonText(doc));
   return doc;
@@ -1051,11 +1051,14 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
   if (inv && !inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
   const pre = createBackup(ws, { reason: 'pre-restore' });
   return withLock(ws, 'restore', () => {
+    // A hold first, and the backup's own marker is never copied over it: a restore
+    // that dies part way leaves a hold.
+    markRestoredCopy(ws.root, { kind: 'backup', name, mode: 'overlay' });
     let restored = 0;
     if (m) {
       m.items.forEach((it, i) => {
         const rel = inv.paths[i];
-        if (/^dashboard\//.test(rel) || /\.cmd$/.test(rel)) return; // records only; code is not overlaid
+        if (/^dashboard\//.test(rel) || /\.cmd$/.test(rel) || rel === RESTORED_REL) return; // records only; code is not overlaid
         const buf = fs.readFileSync(path.join(filesRoot, ...rel.split('/')));
         if (sha256(buf) !== it.sha256) throw new OpError('INVALID', `${rel} in backup ${name} changed after it was verified; stopped. The pre-restore backup ${pre.name} has the state before this restore.`);
         writeDurable(ws.abs(rel), buf);
@@ -1070,6 +1073,7 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
         restored++;
       }
     }
+    markRestoredCopy(ws.root, { kind: 'backup', name, mode: 'overlay' }); // an older unsealed backup copied whole folders
     logOp(ws, { phase: 'restore_overlay', from: name, pre_restore_backup: pre.name, restored });
     return { mode: 'overlay', restored_from: name, pre_restore_backup: pre.name, items: restored, note: 'Overlay restore: files created after the backup were left in place. This is not point-in-time recovery.' };
   }, { timeoutMs: 60000 });
@@ -1091,13 +1095,14 @@ function restoreBackupPointInTime(ws, name, { confirm = false } = {}) {
   // Captures made after the backup stay where the runner looks for them: one
   // whose attempt the restored records do not know is kept for inspection and
   // never imported automatically (captures.js).
-  const later = current.filter((rel) => !inBackup.has(rel) && !rel.startsWith('.cr/'));
-  const changed = current.filter((rel) => inBackup.has(rel) && sha256(fs.readFileSync(ws.abs(rel))) !== inBackup.get(rel).sha256);
-  const missingNow = [...inBackup.keys()].filter((rel) => !current.includes(rel));
+  const later = current.filter((rel) => !inBackup.has(rel) && !rel.startsWith('.cr/') && rel !== RESTORED_REL);
+  const changed = current.filter((rel) => inBackup.has(rel) && rel !== RESTORED_REL && sha256(fs.readFileSync(ws.abs(rel))) !== inBackup.get(rel).sha256);
+  const missingNow = [...inBackup.keys()].filter((rel) => !current.includes(rel) && rel !== RESTORED_REL);
   const preview = { mode: 'point_in_time', backup: name, backup_created_at: m.created_at, files_to_quarantine: later, files_to_replace: changed, files_to_restore: missingNow };
   if (!confirm) return { ...preview, status: 'preview', note: 'Nothing changed. Re-run with --point-in-time --confirm to apply. Quarantined files are moved, not deleted.' };
   const pre = createBackup(ws, { reason: 'pre-restore' });
   return withLock(ws, 'restore', () => {
+    markRestoredCopy(ws.root, { kind: 'backup', name, mode: 'point_in_time' }); // first: a restore that dies part way leaves a hold
     const qdir = `backups/quarantine/${fileTs()}`;
     for (const rel of later) {
       const to = ws.abs(`${qdir}/${rel}`);

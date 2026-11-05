@@ -218,7 +218,7 @@ Grades: each model's grade is shown separately. Missing, unknown or N/A inputs w
 | `job run --all-due` | Runs whatever is due, like the hourly task. |
 | `research reconcile <id> <run_id> --provider P (--charged-usd X \| --not-charged) --reason "..."` | Records what the provider charged for an uncertain attempt (Eric's decision only). |
 | `backup create` / `backup list` / `backup verify <name>` | Sealed local backups with SHA-256 manifests. |
-| `backup restore <name> --to <empty folder>` | Clean, verified restore into a separate folder (recommended). The copy holds research (no provider is asked for anything) until `restored-copy release --confirm`. |
+| `backup restore <name> --to <empty folder>` | Clean, verified restore into a separate folder (recommended). The copy holds research (no provider is asked for anything) and the Paper Book (nothing funded, ordered or applied) until `restored-copy release --confirm`, which Eric runs after ruling on what would run (`docs/engineering/PAPER_BOOK_RESTORE.md`). |
 | `offsite drill [<file>] [--to <empty folder>]` | Recovery drill: verifies the latest pulled desk copy, restores it into a new folder, checks records, originals and research states, and shows zero provider calls. Recorded in the offsite folder's `OFFSITE-DRILLS.json`. |
 | `package --out <file>` / `restore-package <file> --to <empty folder>` | Complete restorable package. |
 | `schedule status` | The Windows hourly task. `schedule install` / `remove` only if Eric asks. |
