@@ -592,8 +592,7 @@ function bootstrapBook(ws, { cash_usd, confirm, now } = {}) {
     assertNotBlocked(ws);
     recoverLocked(ws);
     assertNotBlocked(ws);
-    const a = assertAnchor(ws);
-    if (a.state === 'established') throw new OpError('INIT_REFUSED', `${TR.BOOK_ANCHOR_ENV} names an established book, so a new one is not started. Nothing was funded.`);
+    assertAnchor(ws);
     if (fs.existsSync(ws.abs(PT.JOURNAL)) || fs.existsSync(ws.abs(PT.HEAD))) throw new OpError('INIT_REFUSED', `${PT.JOURNAL} or its head is already on the disk, so this is not a new book. Nothing was funded.`);
     const lost = lostBook(ws, n.now);
     if (lost) throw new OpError('INTEGRITY', lost);
