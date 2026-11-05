@@ -881,7 +881,7 @@ function rulingsOf(ws, ctx) {
   const T = require('./tickets');
   const items = [];
   const owned = new Set();
-  const pmOpened = new Set(require('./paper').readRecords(ws).filter((l) => l.event === 'open').map((l) => l.decision_id));
+  const pmOpened = T.paperOpenedIds(ws);
   for (const g of ctx.grants) {
     const a = assess(ws, ctx, g, ctx.snap);
     const opening = intentIdOf(g.decision, 'open');

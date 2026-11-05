@@ -2403,6 +2403,12 @@ function paperStateOf(ws, decision) {
     return 'unreadable';
   }
 }
+// The decisions with a PM Cohort position on record, for the desk's adapter, which does not
+// reach that book itself (trader-boundary.test.js). A book that does not read throws: unknown
+// is not none.
+function paperOpenedIds(ws) {
+  return new Set(require('./paper').readRecords(ws).filter((l) => l.event === 'open').map((l) => l.decision_id));
+}
 
 function statusOf(decision, invalidation) {
   if (decision && decision.action === 'reopen') return 'reopened';
@@ -3445,6 +3451,7 @@ module.exports = {
   reconcileEffects,
   reconcileDesk,
   paperWanted,
+  paperOpenedIds,
   RECONCILE_FORMAT,
   invalidationOf,
   view,
