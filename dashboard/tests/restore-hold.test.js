@@ -127,7 +127,7 @@ test('while held no writer of the book is reached, on any path', async (t) => {
   assert.deepEqual(TD.step(ws).problems.map((p) => p.code), ['RESTORE_HELD'], 'the step');
   assert.deepEqual(TD.step(ws, { project: pid }).done, [], 'the step for one project');
   const rows = TD.applyHours(ws, [bar(next, { low: '0.60', close: '0.65' })], { now: iso(next + H + 60000) });
-  assert.deepEqual(rows.map((r) => [r.status, r.code]), [['refused', 'RESTORE_HELD']], 'the hours');
+  assert.deepEqual(rows.map((r) => [r.pair, r.status, r.code]), [[null, 'refused', 'RESTORE_HELD']], 'the hours, stopped before any pair');
   const u = T.decide(ws, pid, { receipt_id: rid, action: 'undo', request_id: 'req_hold_undo_all' });
   assert.ok(u.result.decision, 'a decision is still recorded');
   assert.ok(u.result.trader.problems.some((p) => p.code === 'RESTORE_HELD'), 'and says the hold');
@@ -200,6 +200,7 @@ test('a marker that does not read holds; only a release ends a hold', (t) => {
     TD.step(ws);
     assert.equal(has(ws, intent), false, `marker ${JSON.stringify(text)}`);
     assert.equal(TD.view(ws).restore_hold.held, true);
+    assert.equal(TD.view(ws).restore_hold.unreadable, true);
     const before = fs.readFileSync(ws.abs(MARK), 'utf8');
     assert.throws(() => RS.releaseRestoredCopy(ws), 'a release refuses');
     assert.equal(fs.readFileSync(ws.abs(MARK), 'utf8'), before);
@@ -212,6 +213,17 @@ test('a marker that does not read holds; only a release ends a hold', (t) => {
   const r = spawnSync(process.execPath, [path.join(CODE, 'cli.js'), 'restored-copy', 'hold', '--confirm', '--from', 'repaired', '--workspace', ws.root], { encoding: 'utf8', env: process.env, timeout: 60000 });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(RS.restoredHold(ws));
+});
+
+test('a marker that is not a record cannot be released, even with nothing to rule on', (t) => {
+  clean(t);
+  const { ws } = deskWith(t);
+  for (const text of ['[]', '"held"', '7', 'null']) {
+    fs.mkdirSync(path.dirname(ws.abs(MARK)), { recursive: true });
+    fs.writeFileSync(ws.abs(MARK), text);
+    assert.throws(() => RS.releaseRestoredCopy(ws), code('INVALID'), text);
+    assert.equal(fs.readFileSync(ws.abs(MARK), 'utf8'), text);
+  }
 });
 
 // --- Requirement 3: everything that could run is accounted for
@@ -260,6 +272,10 @@ test('a history that does not read refuses the release: unknown is not none', (t
   fs.appendFileSync(ws.abs(find(ws, 'decisions.jsonl').find((r) => r.includes(pid))), '{ not a line\n');
   assert.throws(() => RS.releaseRestoredCopy(ws));
   assert.equal(marker(ws), before);
+  // The read stays open and says so.
+  const seen = TD.view(ws).restore_hold;
+  assert.equal(seen.rulings_needed, null);
+  assert.ok(seen.rulings_unreadable);
 });
 
 test('an active mandate blocks the release and cannot be accepted; off, nothing grants after it', (t) => {
@@ -623,6 +639,7 @@ test('the command lines: hold, status, refused release, a release naming the wor
   const cli = (...a) => { const r = spawnSync(process.execPath, [path.join(CODE, 'cli.js'), ...a, '--workspace', ws.root], { encoding: 'utf8', env: process.env, timeout: 60000 }); return { code: r.status, out: `${r.stdout}${r.stderr}` }; };
   assert.notEqual(cli('restored-copy', 'hold').code, 0, 'words first');
   assert.notEqual(cli('restored-copy', 'hold', '--confirm').code, 0, 'says what was restored');
+  assert.notEqual(cli('restored-copy', 'hold', '--from', 'fictional disk').code, 0, 'needs --confirm');
   assert.equal(RS.restoredHold(ws), null);
   assert.equal(cli('restored-copy', 'hold', '--confirm', '--from', 'fictional disk').code, 0);
   assert.ok(RS.restoredHold(ws));
@@ -665,4 +682,183 @@ test('a close is listed and, accepted, goes as a new sell under its own decision
   assert.equal(RS.releaseRestoredCopy(ws, { accept: [d.decision_id] }).status, 'saved');
   TD.step(ws, { now: at });
   assert.equal(has(ws, sell), true, 'after the release, its own ID, made now');
+  hold(ws);
+  assert.equal(TD.rulingsNeeded(ws, { now: at }).some((x) => x.kind === 'unmatched_order'), false, 'its own sell is not unmatched');
+});
+
+// --- What the deliberate breaks asked for
+
+// The marker changes, not held: a read taken before it must not write. A fresh fence
+// at the write would see nothing wrong.
+const released = (ws, n = 1) => { fs.mkdirSync(path.dirname(ws.abs(MARK)), { recursive: true }); fs.writeFileSync(ws.abs(MARK), JSON.stringify({ schema_version: 'cr.restored-copy.v1', research_held: false, released_at: `2026-11-05T00:00:0${n}.000Z` })); };
+
+test('every write of the book carries the fence of the read it came from, by construction', () => {
+  const src = fs.readFileSync(path.join(CODE, 'core', 'trader-desk.js'), 'utf8').split('\n');
+  const sites = src.filter((l) => /underAnchor\(ws, \(\) => PT\./.test(l));
+  assert.equal(sites.length, 7);
+  for (const l of sites) assert.match(l, /, (ctx|n)\.fence\)/, l);
+});
+
+test('a marker that changed after the read refuses the fund, the order, the cancel and the hour', (t) => {
+  // The order, with the marker read before the book is.
+  const o = preCutoffGrant(t, 'staleorder');
+  const sends = [];
+  stub(t, PT, 'submitIntent', (real) => (...x) => { sends.push('submit'); return real(...x); });
+  let orderOnce = false;
+  const firstResults = PT.results;
+  PT.results = (...x) => { if (!orderOnce) { orderOnce = true; released(o.ws); } return firstResults(...x); };
+  const orderStep = TD.step(o.ws);
+  PT.results = firstResults;
+  assert.equal(orderOnce, true);
+  assert.deepEqual(sends, [], 'no order from the stale read');
+  assert.ok(orderStep.problems.some((p) => p.code === 'RESTORE_HELD'), JSON.stringify(orderStep.problems));
+  // The fund.
+  clean(t);
+  const a = deskWith(t);
+  settle(a.ws);
+  const called = [];
+  stub(t, PT, 'fund', (real) => (...x) => { called.push('fund'); return real(...x); });
+  let fundOnce = false;
+  const realResults = PT.results;
+  PT.results = (...x) => { if (!fundOnce) { fundOnce = true; released(a.ws); } return realResults(...x); };
+  const fundStep = TD.step(a.ws);
+  PT.results = realResults;
+  assert.equal(fundOnce, true);
+  assert.deepEqual(called, [], 'nothing funded from the stale read');
+  assert.ok(fundStep.problems.some((p) => p.code === 'RESTORE_HELD'), JSON.stringify(fundStep.problems));
+  // The cancel.
+  const b = liveOrder(t, { tag: 'stalecancel' });
+  hold(b.ws);
+  T.decide(b.ws, b.pid, { receipt_id: b.rid, action: 'undo', request_id: 'req_hold_stalecancel_u' });
+  released(b.ws, 1);
+  const cancels = [];
+  stub(t, PT, 'cancelOrder', (real) => (...x) => { cancels.push('cancel'); return real(...x); });
+  let cancelOnce = false;
+  PT.results = (...x) => { if (!cancelOnce) { cancelOnce = true; released(b.ws, 2); } return realResults(...x); };
+  const cancelStep = TD.step(b.ws);
+  PT.results = realResults;
+  assert.equal(cancelOnce, true);
+  assert.deepEqual(cancels, [], 'nothing cancelled from the stale read');
+  assert.ok(cancelStep.problems.some((p) => p.code === 'RESTORE_HELD'), JSON.stringify(cancelStep.problems));
+  // The hour.
+  const c = liveOrder(t, { fill: true, tag: 'stalehour' });
+  const journal = fs.readFileSync(c.ws.abs(PT.JOURNAL));
+  let hourOnce = false;
+  const realIntents = PT.intents;
+  PT.intents = (...x) => { const v = realIntents(...x); if (!hourOnce) { hourOnce = true; released(c.ws); } return v; };
+  const rows = TD.applyHours(c.ws, [bar(c.next)], { now: iso(c.next + H + 60000) });
+  PT.intents = realIntents;
+  assert.equal(hourOnce, true);
+  assert.ok(rows.some((x) => x.code === 'RESTORE_HELD'), JSON.stringify(rows));
+  assert.ok(fs.readFileSync(c.ws.abs(PT.JOURNAL)).equals(journal), 'no hour from the stale read');
+});
+
+test('a marker that could not be read when the step began refuses its writes', (t) => {
+  const { ws, intent } = preCutoffGrant(t, 'fenceread');
+  const real = fs.readFileSync;
+  let failed = false;
+  stub(t, fs, 'readFileSync', () => function read(p, ...a) {
+    if (!failed && String(p) === ws.abs(MARK)) { failed = true; throw Object.assign(new Error('no access'), { code: 'EACCES' }); }
+    return real.call(fs, p, ...a);
+  });
+  const r = TD.step(ws);
+  fs.readFileSync = real;
+  assert.equal(failed, true);
+  assert.equal(has(ws, intent), false, 'no order from a read that could not see the marker');
+  assert.ok(r.problems.some((p) => p.code === 'RESTORE_HELD'), JSON.stringify(r.problems));
+});
+
+test('an open position with no decision is named, even when its order has ended', (t) => {
+  const { ws, pid, next, intent } = liveOrder(t, { fill: true, tag: 'orphanpos' });
+  const at = iso(next + 3 * H + 60000);
+  TD.applyHours(ws, [bar(next), bar(next + H), bar(next + 2 * H)], { now: at });
+  assert.ok(!['ACKED', 'PARTIAL'].includes(PT.intents(ws).find((i) => i.intent_id === intent).state), 'its order has ended');
+  for (const r of find(ws, 'decisions.jsonl')) if (r.includes(pid)) fs.writeFileSync(ws.abs(r), '');
+  hold(ws);
+  assert.deepEqual(TD.rulingsNeeded(ws, { now: at }).map((x) => [x.id, x.kind, x.may_accept]), [[intent, 'unmatched_order', false]]);
+});
+
+test('a project that does not read and holds a grant blocks the release, and a history that does not read is not none', (t) => {
+  const { ws, pid } = preCutoffGrant(t, 'broken');
+  hold(ws);
+  fs.writeFileSync(ws.abs(`projects/${pid}/project.json`), '{ not a project');
+  assert.deepEqual(TD.rulingsNeeded(ws).map((x) => [x.id, x.kind, x.may_accept]), [[pid, 'broken_project', false]]);
+  const before = marker(ws);
+  assert.throws(() => RS.releaseRestoredCopy(ws), code('RULING_REQUIRED'));
+  assert.throws(() => RS.releaseRestoredCopy(ws, { accept: [pid] }), code('RULING_REQUIRED'));
+  assert.equal(marker(ws), before);
+  fs.appendFileSync(ws.abs(find(ws, 'decisions.jsonl').find((r) => r.includes(pid))), '{ not a line\n');
+  assert.throws(() => TD.rulingsNeeded(ws), (e) => e.code !== 'RULING_REQUIRED', 'unknown, not a list');
+});
+
+test('a release under the external refusal refuses: the anchor stops it too', (t) => {
+  const { ws } = preCutoffGrant(t, 'extrelease');
+  hold(ws);
+  const before = marker(ws);
+  process.env[VAR] = 'restore-hold';
+  assert.throws(() => RS.releaseRestoredCopy(ws), code('INTEGRITY'));
+  assert.equal(marker(ws), before);
+});
+
+test('a basis that reads unverified refuses the release; one rebuilt from before the basis existed does not', (t) => {
+  const a = liveOrder(t, { tag: 'unverified' });
+  hold(a.ws);
+  const rel = DB.basisRel(a.pid, a.d.decision_id);
+  const body = JSON.parse(fs.readFileSync(a.ws.abs(rel), 'utf8'));
+  delete body.digest_ledger;
+  fs.writeFileSync(a.ws.abs(rel), JSON.stringify(body));
+  fs.rmSync(a.ws.abs(DB.digestRel(a.pid)));
+  assert.equal(DB.viewOf(a.ws, a.pid, a.d.decision_id).label, 'unverified');
+  const before = marker(a.ws);
+  assert.throws(() => RS.releaseRestoredCopy(a.ws, { accept: [a.d.decision_id] }), code('RULING_REQUIRED'));
+  assert.equal(marker(a.ws), before);
+  const b = liveOrder(t, { tag: 'reconstructed' });
+  hold(b.ws);
+  fs.rmSync(b.ws.abs(DB.basisRel(b.pid, b.d.decision_id)));
+  fs.rmSync(b.ws.abs(DB.digestRel(b.pid)));
+  assert.equal(DB.viewOf(b.ws, b.pid, b.d.decision_id).label, 'reconstructed');
+  assert.equal(RS.releaseRestoredCopy(b.ws, { accept: [b.d.decision_id] }).status, 'saved');
+});
+
+test('a marker that changes during the release refuses it', (t) => {
+  clean(t);
+  const { ws } = deskWith(t);
+  hold(ws);
+  const ops = require('../core/ops');
+  stub(t, ops, 'runOp', (real) => (...a) => { fs.writeFileSync(ws.abs(MARK), JSON.stringify({ research_held: true, from: { kind: 'owner', words: 'a later hold' } })); return real(...a); });
+  assert.throws(() => RS.releaseRestoredCopy(ws), code('CONFLICT'));
+  assert.equal(RS.restoredHold(ws).from.words, 'a later hold');
+});
+
+test('a point-in-time restore never moves, replaces or brings back the marker', (t) => {
+  // A backup with no marker, and a marker now: it is not quarantined as a later file.
+  const a = preCutoffGrant(t, 'pitlater');
+  const ba = X.createBackup(a.ws, { reason: 'manual' });
+  hold(a.ws);
+  assert.ok(!X.restoreBackup(a.ws, ba.name, { pointInTime: true }).files_to_quarantine.includes(MARK));
+  X.restoreBackup(a.ws, ba.name, { pointInTime: true, confirm: true });
+  assert.ok(RS.restoredHold(a.ws), 'a marker now, none in the backup');
+  // A released marker in the backup, and a different one now.
+  const b = releasedWithBackup(t, 'pitchanged');
+  const bb = X.createBackup(b.ws, { reason: 'manual' });
+  hold(b.ws);
+  X.restoreBackup(b.ws, bb.name, { pointInTime: true, confirm: true });
+  assert.ok(RS.restoredHold(b.ws), 'the backup does not replace it');
+  // A released marker in the backup, and none now.
+  const c = releasedWithBackup(t, 'pitgone');
+  const bc = X.createBackup(c.ws, { reason: 'manual' });
+  fs.rmSync(c.ws.abs(MARK));
+  X.restoreBackup(c.ws, bc.name, { pointInTime: true, confirm: true });
+  assert.ok(RS.restoredHold(c.ws), 'the backup does not bring it back');
+});
+
+test('an overlay of an older unsealed backup, whose whole folders carry a released marker, still leaves a hold', (t) => {
+  const { ws } = releasedWithBackup(t, 'unsealed');
+  const sealed = X.createBackup(ws, { reason: 'manual' });
+  const name = `${sealed.name}-old`;
+  fs.cpSync(ws.abs(`backups/snapshots/${sealed.name}/files`), ws.abs(`backups/snapshots/${name}`), { recursive: true });
+  assert.ok(fs.existsSync(ws.abs(`backups/snapshots/${name}/${MARK}`)), 'it holds a released marker');
+  const r = X.restoreBackup(ws, name, { overlay: true, confirm: true });
+  assert.equal(r.mode, 'overlay');
+  assert.ok(RS.restoredHold(ws));
 });

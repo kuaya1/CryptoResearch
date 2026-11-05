@@ -78,7 +78,7 @@ A release that fails or dies leaves the hold. The marker is written once, whole,
 - It writes only the marker. The journal and the decisions keep the same bytes.
 - It never makes or changes an intent, and it extends no validity. An accepted order expires at its own time.
 - It does not approve anything. The engine reads the accepted work again, through every gate it always applies.
-- It checks the decision's basis. A basis that does not read, or reads as `unverified` or `unavailable`, refuses the release until the record is restored.
+- It checks the decision's basis. A basis that does not read, or reads as `unverified` or `unavailable`, refuses the release until the record is restored. A decision from before the digest ledger, or one standing on a report with no recorded SHA-256, can read `unverified` for good. If such a decision holds work in the book, the release stays blocked. There is no override, and getting past it needs a separate ruling.
 - A name that is not on the list refuses the whole release.
 
 **An opening cannot be accepted.** Sending it would carry the old intent ID with a new `created_at`, a new reference price and a new `valid_until`. If an order under that ID went after the cutoff, that is a second, different order under one immutable ID. So the only way on is the existing one: **Undo it, release, and decide again.** That is a new decision, with its own Decision Basis frozen in the same operation and a new intent ID. A live mandate is the same: arming it again is `arm-desk`, Eric's own act.

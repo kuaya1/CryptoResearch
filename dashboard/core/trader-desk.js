@@ -585,10 +585,9 @@ function assertNotRestoreHeld(ws, fence) {
 // Every write goes through here: under the workspace's lock, after any recovery, the
 // hold and the anchor are checked on the book the engine is about to read in that same
 // lock. A write through the desk's own operations waits for the lock, so it cannot come
-// between. The hold is read again after recovery: recovery can complete a hold.
+// between. The hold is read after recovery, because recovery can complete a hold.
 function underAnchor(ws, write, fence) {
   return withLock(ws, 'trader_anchor', () => {
-    assertNotRestoreHeld(ws, fence);
     assertNotBlocked(ws);
     recoverLocked(ws);
     assertNotBlocked(ws);
@@ -612,7 +611,6 @@ function bootstrapBook(ws, { cash_usd, confirm, now } = {}) {
   if (typeof cash_usd !== 'string' || dec(cash_usd) === null || dec(cash_usd) !== dec(set)) throw new OpError('INVALID', `The amount named is not the ${usd(set)} in the book's settings. Nothing was funded.`);
   if (confirm !== bootstrapWords(cash_usd)) throw new OpError('INVALID', `A first funding is confirmed in words: "${bootstrapWords(cash_usd)}". Nothing was funded.`);
   return withLock(ws, 'trader_bootstrap', () => {
-    assertNotRestoreHeld(ws, holdFenceOf(ws));
     assertNotBlocked(ws);
     recoverLocked(ws);
     assertNotBlocked(ws);
@@ -873,7 +871,7 @@ function rulingsOf(ws, ctx) {
     const base = { id: a.decision_id, project_id: a.project_id, decision_id: a.decision_id, decided_at: a.decided_at, phase: a.phase, opening_intent: opening };
     const asked = ctx.snap.intents.get(opening);
     if (!asked) {
-      if (g.in_force && !(a.phase === 'not_opened' && a.final === true)) items.push({ ...base, kind: 'opening', may_accept: false, disposition: 'Undo it. To trade it, decide again after the release: a new decision, a new basis and a new intent ID.' });
+      if (!(a.phase === 'not_opened' && a.final === true)) items.push({ ...base, kind: 'opening', may_accept: false, disposition: 'Undo it. To trade it, decide again after the release: a new decision, a new basis and a new intent ID.' });
       continue;
     }
     const kind = a.next ? a.next.kind : a.position && a.position.state === 'open' ? 'position' : LIVE.includes(asked.state) ? 'order' : null;
