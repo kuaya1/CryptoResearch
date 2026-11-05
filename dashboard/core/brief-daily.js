@@ -39,7 +39,7 @@ function attentionExtras(ws, rows, now) {
   })));
   const queue = tryRead(() => require('./tickets').pilotQueue(ws, { now }));
   const trader = tryRead(() => {
-    const v = require('./trader-desk').view(ws, { now });
+    const v = require('./trader-desk').view(ws, { now: new Date(now).toISOString() });
     const out = [];
     if (v.settlement && v.settlement.state === 'unsettled') out.push({ project_id: null, record: 'trader-book', reason: 'book_unsettled', words: `The trader simulation is not settled: ${v.settlement.words}` });
     for (const r of v.requests || []) {
