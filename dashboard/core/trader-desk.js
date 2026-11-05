@@ -60,7 +60,7 @@ const PT = require('./paper-trader');
 const { validateTradeIntent, exact: { dec, str, mulCeil, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
 const TR = require('./trader-rules');
 const fs = require('fs');
-const { OpError, withLock, OPLOG_REL } = require('./ops');
+const { OpError, withLock, recoverLocked, assertNotBlocked, OPLOG_REL } = require('./ops');
 const { sha256, appendLine } = require('./fsx');
 
 // @2 (2026-10-29, the cohesion audit's M1, M2, M4 and M7): missing hours
@@ -496,14 +496,121 @@ function lostBook(ws, now) {
   return `The operation log records this book funded at ${at}, but ${PT.JOURNAL} holds no funding: its records are lost, not new. Nothing is read or written until it is repaired.`;
 }
 
-function snapshotOf(ws, now) {
-  const r = PT.results(ws, { now });
-  if (r.funded_usd === null) {
-    const lost = lostBook(ws, now);
-    if (lost) throw new OpError('INTEGRITY', lost);
+// The book-identity anchor (trader-rules.js bookAnchorOf) is the record off the
+// disk: the operation log above shares a disk with the book and can go with it. An
+// anchored book must begin with the line the anchor names, so its loss or its
+// replacement is refused, however little else is left on the disk. A restore keeps
+// that line, so a restored book reads again. It names the book, not its progress: an
+// older copy of the same book passes here.
+// Only the first line is read, so the check costs the same however long the book is.
+function firstLineOf(ws) {
+  let fd = null;
+  try {
+    fd = fs.openSync(ws.abs(PT.JOURNAL), 'r');
+    const parts = [];
+    const chunk = Buffer.alloc(4096);
+    for (;;) {
+      const got = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (!got) break;
+      const part = Buffer.from(chunk.subarray(0, got));
+      const nl = part.indexOf(0x0a);
+      parts.push(nl < 0 ? part : part.subarray(0, nl));
+      if (nl >= 0) break;
+    }
+    return Buffer.concat(parts).toString('utf8') || null;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw new OpError('INTEGRITY', `${PT.JOURNAL} could not be read (${(err && err.code) || 'error'}). Nothing is read or written until it is repaired.`);
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
-  const list = PT.intents(ws);
-  const hours = PT.hours(ws);
+}
+function assertAnchor(ws, journalBytes) {
+  const a = TR.bookAnchorOf(ws);
+  if (a.state === 'invalid') throw new OpError('INTEGRITY', `${TR.BOOK_ANCHOR_ENV} is not a book's hash, so which book this desk holds is unknown. Nothing is read or written until it is repaired.`);
+  if (a.state !== 'established') return a;
+  // Given bytes are the exact copy being used; otherwise the file as it stands.
+  const line = journalBytes === undefined ? firstLineOf(ws) : (journalBytes === null ? null : journalBytes.toString('utf8').split('\n')[0] || null);
+  if (line === null) throw new OpError('INTEGRITY', `${TR.BOOK_ANCHOR_ENV} names an established book, but ${PT.JOURNAL} holds no records: they are lost, not new. Nothing is read or written until it is repaired.`);
+  if (TR.genesisOf(line) !== a.genesis_sha256) throw new OpError('INTEGRITY', `${PT.JOURNAL} does not begin with the line ${TR.BOOK_ANCHOR_ENV} names: it is not the established book. Nothing is read or written until it is repaired.`);
+  return a;
+}
+// What identifies the journal file as it stands: a rewrite gives a new file (atomic
+// rename), so its stamp differs even at the same size.
+function journalStamp(ws) {
+  try {
+    const st = fs.statSync(ws.abs(PT.JOURNAL), { bigint: true });
+    return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}`;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return 'absent';
+    throw new OpError('INTEGRITY', `${PT.JOURNAL} could not be read (${(err && err.code) || 'error'}). Nothing is read or written until it is repaired.`);
+  }
+}
+// A read of the book takes the journal several times, and the engine's reads take no
+// bytes from here. So an anchored read is bracketed: the same file before and after,
+// and the anchor holding on it after. A commit in between reads again; a book that
+// was replaced refuses. A file moved by hand and moved back within one read is not seen.
+function readAnchored(ws, read) {
+  const a = assertAnchor(ws);
+  if (a.state !== 'established') return read();
+  for (let tries = 0; tries < 3; tries++) {
+    const before = journalStamp(ws);
+    const value = read();
+    const after = journalStamp(ws);
+    assertAnchor(ws);
+    if (before === after) return value;
+  }
+  throw new OpError('INTEGRITY', `${PT.JOURNAL} kept changing while it was read, so the book is not shown from a mix of two. Nothing is read or written until it reads steadily.`);
+}
+// Every write goes through here: under the workspace's lock, after any recovery, the
+// anchor is checked on the book the engine is about to read in that same lock. A write
+// through the desk's own operations waits for the lock, so it cannot come between.
+function underAnchor(ws, write) {
+  return withLock(ws, 'trader_anchor', () => {
+    assertNotBlocked(ws);
+    recoverLocked(ws);
+    assertNotBlocked(ws);
+    assertAnchor(ws);
+    return write();
+  });
+}
+const INIT_WORDS = `This desk does not start a book by itself. A first funding is Eric's own command (node dashboard/cli.js trader bootstrap); if a book existed, restore it and set ${TR.BOOK_ANCHOR_ENV} to its hash.`;
+
+// The one way a real book starts: Eric's command, naming the amount his settings
+// hold, with the words typed out. Nothing routine calls it: it is on the command line
+// only, on no route and in no job. It takes nothing from the anchor, and it refuses if
+// the anchor names a book, if any record of a book is on the disk, or if the log
+// remembers one.
+const bootstrapWords = (cash) => `FUND NEW PAPER BOOK ${cash}`;
+function bootstrapBook(ws, { cash_usd, confirm, now } = {}) {
+  const n = nowOf(now);
+  const set = TR.bookOf(ws).book.cash_usd;
+  if (!set) throw new OpError('INVALID', 'The Paper Book has no funding in its settings (Preferences > Screening), so there is nothing to start it with.');
+  if (typeof cash_usd !== 'string' || dec(cash_usd) === null || dec(cash_usd) !== dec(set)) throw new OpError('INVALID', `The amount named is not the ${usd(set)} in the book's settings. Nothing was funded.`);
+  if (confirm !== bootstrapWords(cash_usd)) throw new OpError('INVALID', `A first funding is confirmed in words: "${bootstrapWords(cash_usd)}". Nothing was funded.`);
+  return withLock(ws, 'trader_bootstrap', () => {
+    assertNotBlocked(ws);
+    recoverLocked(ws);
+    assertNotBlocked(ws);
+    assertAnchor(ws);
+    if (fs.existsSync(ws.abs(PT.JOURNAL)) || fs.existsSync(ws.abs(PT.HEAD))) throw new OpError('INIT_REFUSED', `${PT.JOURNAL} or its head is already on the disk, so this is not a new book. Nothing was funded.`);
+    const lost = lostBook(ws, n.now);
+    if (lost) throw new OpError('INTEGRITY', lost);
+    const f = PT.fund(ws, { cash_usd, now: n.now });
+    const genesis = TR.genesisOf(firstLineOf(ws));
+    return { status: f.status, cash_usd: f.cash_usd, genesis_sha256: genesis, next: `Set ${TR.BOOK_ANCHOR_ENV} to this hash in the host's environment.` };
+  });
+}
+
+function snapshotOf(ws, now) {
+  const { r, list, hours } = readAnchored(ws, () => {
+    const results = PT.results(ws, { now });
+    if (results.funded_usd === null) {
+      const lost = lostBook(ws, now);
+      if (lost) throw new OpError('INTEGRITY', lost);
+    }
+    return { r: results, list: PT.intents(ws), hours: PT.hours(ws) };
+  });
   const snap = {
     results: r,
     list,
@@ -738,11 +845,16 @@ function view(ws, { now } = {}) {
   // While an hour is missing, the book's figures are what it has recorded,
   // never a settled account (a fill or a stop may be in the missing hour).
   const st = snap.settlement;
+  // What Eric reads to anchor the book: the anchor's state, and this book's own hash.
+  const anchor = TR.bookAnchorOf(ws);
+  const first = firstLineOf(ws);
+  const initWait = res.funded_usd === null && !anchor.may_auto_fund ? [INIT_WORDS] : [];
   const unknown = st.state === 'unsettled' ? [...res.unknown, `NAV, cash, the results and the drawdowns are recorded balances, not settled${st.settled_through ? ` (settled through ${st.settled_through})` : ''}: ${st.words}`] : res.unknown;
   return {
     version: VERSION,
     now: ctx.now,
-    waits: ctx.s.waits,
+    waits: [...ctx.s.waits, ...initWait],
+    book_identity: { anchor: anchor.state, genesis_sha256: first === null ? null : TR.genesisOf(first) },
     allowlist_basis: ctx.s.allowlist_basis,
     settlement: st,
     book: { cash_usd: ctx.s.book.cash_usd || null, fee_rate: ctx.s.book.fee_rate || null },
@@ -804,8 +916,12 @@ function fundOnce(ws, ctx, done, problems, snap = null) {
     if (dec(funded) !== dec(cash)) problems.push({ kind: 'fund', code: 'CONFLICT', words: `The book was funded with ${usd(funded)}; your setting of ${usd(cash)} is never applied over it.` });
     return false;
   }
+  if (!TR.bookAnchorOf(ws).may_auto_fund) {
+    problems.push({ kind: 'fund', code: 'INIT_REQUIRED', words: INIT_WORDS });
+    return false;
+  }
   try {
-    const f = PT.fund(ws, { cash_usd: cash, now: ctx.now });
+    const f = underAnchor(ws, () => PT.fund(ws, { cash_usd: cash, now: ctx.now }));
     if (f.status === 'saved') done.push({ kind: 'fund', status: 'saved', words: `Funded with ${usd(f.cash_usd)}.` });
     return f.status === 'saved';
   } catch (err) {
@@ -823,8 +939,8 @@ function step(ws, { now, project = null } = {}) {
   if (fundOnce(ws, ctx, done, problems, snap)) snap = snapshotOf(ws, ctx.now);
   // Read again only when recovery or a reconcile was attempted.
   const before = done.length + problems.length;
-  if (snap.orders.some((o) => o.state === 'RESERVED' || o.state === 'SENT')) attempt({ kind: 'recover' }, () => PT.recover(ws, { now: ctx.now }));
-  else for (const o of snap.orders.filter((x) => x.state === 'UNKNOWN')) attempt({ kind: 'reconcile', client_order_id: o.client_order_id }, () => PT.reconcile(ws, o.client_order_id, { now: ctx.now }));
+  if (snap.orders.some((o) => o.state === 'RESERVED' || o.state === 'SENT')) attempt({ kind: 'recover' }, () => underAnchor(ws, () => PT.recover(ws, { now: ctx.now })));
+  else for (const o of snap.orders.filter((x) => x.state === 'UNKNOWN')) attempt({ kind: 'reconcile', client_order_id: o.client_order_id }, () => underAnchor(ws, () => PT.reconcile(ws, o.client_order_id, { now: ctx.now })));
   if (done.length + problems.length !== before) snap = snapshotOf(ws, ctx.now);
   // Closes and cancels first: they only reduce risk. Then new orders, the
   // oldest decision first. Each pass does one thing not yet tried and reads
@@ -838,13 +954,15 @@ function step(ws, { now, project = null } = {}) {
     const a = todo.sort((x, y) => first(x) - first(y) || String(x.decided_at).localeCompare(String(y.decided_at)))[0];
     tried.add(key(a));
     const what = { kind: a.next.kind, project_id: a.project_id, decision_id: a.decision_id, receipt_id: a.receipt_id, intent_id: a.next.intent ? a.next.intent.intent_id : null, client_order_id: a.next.client_order_id || null };
-    if (a.next.kind === 'cancel') attempt(what, () => PT.cancelOrder(ws, a.next.client_order_id, { now: ctx.now }));
-    else attempt(what, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue }));
+    if (a.next.kind === 'cancel') attempt(what, () => underAnchor(ws, () => PT.cancelOrder(ws, a.next.client_order_id, { now: ctx.now })));
+    else attempt(what, () => underAnchor(ws, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue })));
     snap = snapshotOf(ws, ctx.now);
   }
   // The requests as the book stands after the last thing recorded: snap was
-  // read after it.
-  return { version: VERSION, now: ctx.now, done, problems, ...requestsOf(ws, ctx, snap) };
+  // read after it. Those reads went beyond the snapshot, so the anchor has the last word.
+  const answer = { version: VERSION, now: ctx.now, done, problems, ...requestsOf(ws, ctx, snap) };
+  assertAnchor(ws);
+  return answer;
 }
 
 // Closed hours for the book, one after another (12b hands them in), after
@@ -853,6 +971,8 @@ function step(ws, { now, project = null } = {}) {
 // an order or the book's integrity stops the rest of that pair's hours.
 function applyHours(ws, bars, { now } = {}) {
   const n = nowOf(now);
+  let anchor;
+  try { anchor = assertAnchor(ws); } catch (err) { return [{ pair: null, hour: null, status: 'refused', code: 'INTEGRITY', words: String(err.message) }]; }
   // Before anything is written: hours applied to a lost book would start a new
   // journal in its place. A book that does not read keeps its own refusal below.
   let unfunded = false;
@@ -860,6 +980,7 @@ function applyHours(ws, bars, { now } = {}) {
   let lost = null;
   if (unfunded) { try { lost = lostBook(ws, n.now); } catch (err) { lost = String(err.message); } }
   if (lost) return [{ pair: null, hour: null, status: 'refused', code: 'INTEGRITY', words: lost }];
+  if (unfunded && !anchor.may_auto_fund) return [{ pair: null, hour: null, status: 'refused', code: 'INIT_REQUIRED', words: INIT_WORDS }];
   const problems = [];
   fundOnce(ws, { ...n, s: settingsOf(ws) }, [], problems);
   const out = problems.map((p) => ({ pair: null, hour: null, status: 'refused', code: p.code, words: p.words }));
@@ -873,7 +994,7 @@ function applyHours(ws, bars, { now } = {}) {
     const held = revokeBefore(ws, pair, b && b.hour, n, out);
     if (held) { out.push({ pair, hour: b && b.hour, status: 'refused', code: 'AUTHORITY_UNKNOWN', words: held }); stoppedPairs.add(pair); continue; }
     try {
-      const r = PT.applyBar(ws, b, { now: n.now });
+      const r = underAnchor(ws, () => PT.applyBar(ws, b, { now: n.now }));
       out.push({ pair, hour: b.hour, status: r.status, events: r.events });
     } catch (err) {
       const row = { pair, hour: b && b.hour, status: 'refused', code: err.code || null, words: String(err && err.message || err).slice(0, 300) };
@@ -916,7 +1037,7 @@ function revokeBefore(ws, pair, hour, n, out) {
     const auth = T.grantAuthority(ws, d, { now: n.t, asOfMs: end });
     if (auth.ok) continue;
     try {
-      const r = PT.cancelOrder(ws, i.client_order_id, { now: n.now });
+      const r = underAnchor(ws, () => PT.cancelOrder(ws, i.client_order_id, { now: n.now }));
       out.push({ pair, hour, status: 'cancelled', client_order_id: i.client_order_id, decision_id: d.decision_id, code: auth.code, words: `Before the hour ${hour}: the paper mandate no longer covers ${i.client_order_id} (${auth.words}); its unfilled part is cancelled (${r.status}).` });
     } catch (err) {
       return `${i.client_order_id} could not be cancelled after the paper mandate's authority ended (${String(err && err.message || err).slice(0, 160)}); the hour waits so it cannot fill.`;
@@ -985,6 +1106,7 @@ function executionFor(ws, decisionId) {
   const same = (a, b) => (a === null ? b === null : b !== null && a.equals(b));
   return readConsistent(ws, () => {
     const snap = bytes();
+    assertAnchor(ws, snap[RELS.indexOf(PT.JOURNAL)]);
     const book = validatedRead(snap);
     const after = bytes();
     if (!snap.every((b, i) => same(b, after[i]))) throw new OpError('INTEGRITY', `${PT.JOURNAL} changed while it was read, so its execution is not shown from a mix of two versions. Read it again.`);
@@ -1015,4 +1137,8 @@ function executionFor(ws, decisionId) {
   });
 }
 
-module.exports = { VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, pending, step, applyHours, executionFor };
+// The desk's reads of the book as the rest of the code calls them: each whole read,
+// beyond its snapshot (the engine's book for each request), is bracketed.
+const anchoredRead = (read) => (ws, ...rest) => readAnchored(ws, () => read(ws, ...rest));
+
+module.exports = { bootstrapBook, bootstrapWords, VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests: anchoredRead(requests), view: anchoredRead(view), wanted: anchoredRead(wanted), pending: anchoredRead(pending), step, applyHours, executionFor };

@@ -14,6 +14,7 @@
 // of the notional. Neither has a default: unset, the adapter waits and
 // opens nothing, and an unknown fee is never read as 0.
 
+const crypto = require('crypto');
 const { OpError } = require('./ops');
 
 const VERSION = 'cr-trader-rules@1';
@@ -122,4 +123,26 @@ function rulesOf(ws) {
   return { version: VERSION, from: 'trader.rules', rules, unset };
 }
 
-module.exports = { VERSION, FIELDS, RULES, validatePatch, rulesOf, BOOK_FIELDS, BOOK, validateBookPatch, bookOf };
+// The book-identity anchor: Eric's record of which book this desk holds, kept in
+// the host's environment, off the disk the book, the operation log and the settings
+// share, so losing that disk cannot lose it too. It is not a secret. It names a
+// book's identity, the SHA-256 of its first journal line, which the book keeps
+// through a restore; it does not say how far along the book is, so a rollback to an
+// older copy of the same book passes. Anything but a hash is unknown and refuses.
+//
+// Nothing starts a book by itself. Routine execution (the timer, a decision, the
+// hours, the scheduled task) never funds, whatever the anchor or the environment
+// says, and a missing setting never grants it. A first funding is Eric's own command
+// (trader-desk.js bootstrapBook). The one exception is a fictional test workspace,
+// named as such on its own marker and with no sign of an online desk.
+const BOOK_ANCHOR_ENV = 'CR_TRADER_BOOK_ANCHOR';
+function bookAnchorOf(ws, env = process.env) {
+  const v = String(env[BOOK_ANCHOR_ENV] || '').trim();
+  if (/^[0-9a-f]{64}$/.test(v)) return { state: 'established', genesis_sha256: v, may_auto_fund: false };
+  if (v) return { state: 'invalid', may_auto_fund: false };
+  const fictional = Boolean(ws && ws.kind === 'test' && !ws.hosted && !env.CR_DATA_DIR);
+  return { state: 'unset', may_auto_fund: fictional };
+}
+const genesisOf = (line) => crypto.createHash('sha256').update(line).digest('hex');
+
+module.exports = { VERSION, FIELDS, RULES, validatePatch, rulesOf, BOOK_FIELDS, BOOK, validateBookPatch, bookOf, BOOK_ANCHOR_ENV, bookAnchorOf, genesisOf };
