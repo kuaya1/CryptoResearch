@@ -1141,6 +1141,27 @@ test('a release sealed but not applied when a restore takes its lock is finished
   assert.equal(JSON.parse(marker(a.ws)).from.mode, 'point_in_time');
 });
 
+test('the same for an overlay: a release sealed but not applied when it takes its lock is finished first, so it cannot land on the new hold', (t) => {
+  const a = backedThenChanged(t, 'stale-overlay');
+  let sealed = false;
+  const realOpen = fs.openSync;
+  // In the pre-restore backup's last write, after it recovered, as another process could.
+  fs.openSync = (p, ...x) => {
+    if (!sealed && path.basename(String(p)) === 'BACKUP-INFO.json') {
+      sealed = true;
+      const op = new StagedOp(a.ws, 'update_settings', 'a release that dies after its seal');
+      op.write(MARK, JSON.stringify({ schema_version: 'cr.restored-copy.v1', research_held: false, released_at: '2026-11-05T00:00:00.000Z' }));
+      op.seal();
+    }
+    return realOpen(p, ...x);
+  };
+  try { X.restoreBackup(a.ws, a.backup, { overlay: true, confirm: true }); } finally { fs.openSync = realOpen; }
+  assert.equal(sealed, true, 'the competing release was sealed');
+  recover(a.ws);
+  assert.ok(RS.restoredHold(a.ws), 'UNSAFE: a release from before the restore landed on its hold');
+  assert.equal(JSON.parse(marker(a.ws)).from.mode, 'overlay');
+});
+
 // --- The PM Cohort book: a decision opens nothing in either book while held
 
 const PM = require('../core/paper');
@@ -1178,6 +1199,24 @@ for (const action of ['approve', 'halve']) {
     assert.equal(has(ws, TD.intentIdOf(r.decision, 'open')), false);
   });
 }
+
+test('a position held by the restored copy is not counted as completed, in the repair or its preview', (t) => {
+  clean(t);
+  const { ws, pid, rid } = deskWith(t);
+  ready(ws);
+  hold(ws);
+  T.decide(ws, pid, { receipt_id: rid, action: 'approve', request_id: 'req_pm_counts' });
+  T.decide(ws, pid, { receipt_id: rid, action: 'approve', request_id: 'req_pm_counts' });
+  const preview = T.reconcileDesk(ws, { dryRun: true });
+  const repair = T.reconcileDesk(ws);
+  assert.equal(preview.counts.completed, 0, 'held is not completed, in the preview');
+  assert.equal(preview.counts.held, 1);
+  assert.match(preview.words, /^0 steps would be completed, 1 held by the restored copy/);
+  assert.equal(repair.counts.completed, 0, 'held is not completed');
+  assert.equal(repair.counts.held, 1);
+  assert.match(repair.words, /^0 steps completed, 1 held by the restored copy/);
+  assert.deepEqual(pmOpens(ws), []);
+});
 
 test('a marker that does not read holds the PM Cohort book too', (t) => {
   clean(t);
@@ -1235,6 +1274,31 @@ test('a hold sealed but not yet in place when a PM Cohort write comes: recovery 
   assert.ok(RS.restoredHold(ws), 'recovery put it in place');
   assert.equal(r.paper.status, 'held');
   assert.deepEqual(pmOpens(ws), []);
+});
+
+// Sealed after the journal step, whose own lock would otherwise have recovered it, so the PM
+// step's lock is the first to find it. Reading the marker without recovering sees no hold, and
+// the write that follows would recover it and then open the position anyway.
+test('a hold sealed after the journal step and before the PM Cohort step: that step recovers it, then refuses', (t) => {
+  clean(t);
+  const { ws, pid, rid } = deskWith(t);
+  ready(ws);
+  stub(t, notes, 'addJournal', (real) => (...x) => {
+    const out = real(...x);
+    if (!ws._sealedLate) {
+      ws._sealedLate = true;
+      assert.equal(fs.existsSync(ws.abs(MARK)), false, 'no hold in place yet');
+      const op = new StagedOp(ws, 'update_settings', 'a hold that dies after its seal');
+      op.write(MARK, JSON.stringify({ research_held: true, restored_at: new Date().toISOString() }));
+      op.seal();
+    }
+    return out;
+  });
+  const r = T.decide(ws, pid, { receipt_id: rid, action: 'approve', request_id: 'req_pm_sealed_late' }).result;
+  assert.equal(ws._sealedLate, true);
+  assert.ok(RS.restoredHold(ws), 'recovery put it in place');
+  assert.equal(r.paper.status, 'held', 'UNSAFE: the PM Cohort step did not refuse');
+  assert.deepEqual(pmOpens(ws), [], 'UNSAFE: a PM Cohort position was opened across a hold');
 });
 
 test('Undo while held takes a position off the PM Cohort book and adds none; a released copy then opens only from a new decision', (t) => {
@@ -1399,6 +1463,27 @@ test('the rulings are read steadily: a book that changes during the read is read
   let hour = top + 2 * H;
   PT.intents = ((real) => (...x) => { const v = real(...x); PT.applyBar(a.ws, bar(hour), { now: iso(hour + H + 60000) }); hour += H; return v; })(PT.intents);
   assert.throws(() => TD.rulingsNeeded(a.ws, { now: at }), (e) => e.code === 'INTEGRITY' && /kept changing/.test(e.message));
+});
+
+// The book's own steady read ends before the rulings read the PM Cohort book and assess each
+// grant. Only the read around the whole list spans those, and restored-copy status takes no lock.
+test('the rulings are read steadily as a whole: a book that changes after its own read is finished is read again', (t) => {
+  const a = liveOrder(t, { tag: 'steady-whole' });
+  a.ws.hosted = true;
+  anchorOn(a.ws);
+  hold(a.ws);
+  assert.deepEqual(TD.rulingsNeeded(a.ws).map((x) => x.kind), ['order']);
+  const top = topHour();
+  const at = iso(top + 2 * H + 60000);
+  let reads = 0;
+  stub(t, PM, 'readRecords', (real) => (...x) => {
+    reads += 1;
+    if (reads === 1) { PT.applyBar(a.ws, bar(top), { now: at }); PT.applyBar(a.ws, bar(top + H), { now: at }); }
+    return real(...x);
+  });
+  const need = TD.rulingsNeeded(a.ws, { now: at });
+  assert.ok(reads >= 2, `the list was read again (${reads})`);
+  assert.deepEqual(need.map((x) => [x.kind, x.decision_id]), [['position', a.d.decision_id]], 'what it says is the book as it now stands');
 });
 
 // --- A sell after a restore: one intent ID is one order
@@ -1660,6 +1745,20 @@ test('a position whose basis cannot be verified: release stays refused until Eri
   assert.equal(fs.existsSync(a.ws.abs(DB.digestRel(a.pid))), false, 'no digest was made for it');
   assert.equal(DB.viewOf(a.ws, a.pid, a.d.decision_id).label, 'unverified', 'and it still reads as unverified');
   assert.notEqual(held, marker(a.ws));
+});
+
+test('a ruling whose token is not a token is refused as that before anything is read, held or not', (t) => {
+  const a = liveOrder(t, { fill: true, tag: 'ruling-form' });
+  unverify(a);
+  hold(a.ws);
+  const heldNow = marker(a.ws);
+  const id = a.d.decision_id;
+  for (const raw of [`${id}:not-a-token`, `${id}:`, `${id}:${'A'.repeat(32)}`, `${id}:${'0'.repeat(31)}`, `${id}:${'0'.repeat(33)}`]) {
+    assert.throws(() => RS.releaseRestoredCopy(a.ws, { accept: [id], basisRulings: [raw], because: 'a malformed token' }), code('INVALID'), raw);
+    assert.equal(marker(a.ws), heldNow, 'the hold stands');
+  }
+  fs.rmSync(a.ws.abs(MARK));
+  assert.throws(() => RS.releaseRestoredCopy(a.ws, { basisRulings: [`${id}:not-a-token`], because: 'not held' }), code('INVALID'), 'refused, not "unchanged"');
 });
 
 test('a buy whose basis cannot be verified takes no ruling: Undo it, then rule on the cancel, and nothing fills', (t) => {
