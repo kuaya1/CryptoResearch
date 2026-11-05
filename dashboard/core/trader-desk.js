@@ -59,7 +59,8 @@
 const PT = require('./paper-trader');
 const { validateTradeIntent, exact: { dec, str, mulCeil, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
 const TR = require('./trader-rules');
-const { OpError, withLock } = require('./ops');
+const fs = require('fs');
+const { OpError, withLock, OPLOG_REL } = require('./ops');
 const { sha256, appendLine } = require('./fsx');
 
 // @2 (2026-10-29, the cohesion audit's M1, M2, M4 and M7): missing hours
@@ -464,8 +465,43 @@ function grantsOf(ws, only = null) {
 // requests and a step's assessments read it rather than the journal again,
 // and a step takes a new one after each thing it records, never reusing the
 // book from before a change. Nothing is kept between calls.
+// A book that once existed is never a new one. With its journal and head both
+// gone, paper-trader.js reads what a book reads before its first funding, so
+// the positions and orders would vanish, the brief would say nothing is wrong
+// and the next step would fund again. The operation log is the record outside
+// the book: ops.js logs a commit only after the files are written, and only
+// PT.fund writes this type. So a committed funding with no funding in the book
+// is a lost book. A funding that began and never committed is no evidence. The
+// log is read only while the book reads as unfunded, and the book is read again
+// after it, so a funding committing between the two reads is not called lost.
+// A log that is also gone cannot show this; the backups are the answer to that.
+const FUND_COMMITTED = new Set(['commit', 'commit_unverified', 'recovered_forward']);
+function fundCommittedAt(ws) {
+  let text;
+  try { text = fs.readFileSync(ws.abs(OPLOG_REL), 'utf8'); } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw new OpError('INTEGRITY', `${OPLOG_REL} could not be read (${(err && err.code) || 'error'}), so whether the unfunded book once existed is unknown. Nothing is read or written until it is repaired.`);
+  }
+  for (const line of text.split('\n')) {
+    if (!line.includes('"paper_trader.fund.')) continue;
+    let e = null;
+    try { e = JSON.parse(line); } catch (_) { continue; }
+    if (e && String(e.type).startsWith('paper_trader.fund.') && FUND_COMMITTED.has(e.phase)) return e.at || 'an unknown time';
+  }
+  return null;
+}
+function lostBook(ws, now) {
+  const at = fundCommittedAt(ws);
+  if (at === null || PT.results(ws, { now }).funded_usd !== null) return null;
+  return `The operation log records this book funded at ${at}, but ${PT.JOURNAL} holds no funding: its records are lost, not new. Nothing is read or written until it is repaired.`;
+}
+
 function snapshotOf(ws, now) {
   const r = PT.results(ws, { now });
+  if (r.funded_usd === null) {
+    const lost = lostBook(ws, now);
+    if (lost) throw new OpError('INTEGRITY', lost);
+  }
   const list = PT.intents(ws);
   const hours = PT.hours(ws);
   const snap = {
@@ -817,6 +853,13 @@ function step(ws, { now, project = null } = {}) {
 // an order or the book's integrity stops the rest of that pair's hours.
 function applyHours(ws, bars, { now } = {}) {
   const n = nowOf(now);
+  // Before anything is written: hours applied to a lost book would start a new
+  // journal in its place. A book that does not read keeps its own refusal below.
+  let unfunded = false;
+  try { unfunded = PT.results(ws, { now: n.now }).funded_usd === null; } catch (_) { /* said below */ }
+  let lost = null;
+  if (unfunded) { try { lost = lostBook(ws, n.now); } catch (err) { lost = String(err.message); } }
+  if (lost) return [{ pair: null, hour: null, status: 'refused', code: 'INTEGRITY', words: lost }];
   const problems = [];
   fundOnce(ws, { ...n, s: settingsOf(ws) }, [], problems);
   const out = problems.map((p) => ({ pair: null, hour: null, status: 'refused', code: p.code, words: p.words }));
@@ -946,7 +989,11 @@ function executionFor(ws, decisionId) {
     const after = bytes();
     if (!snap.every((b, i) => same(b, after[i]))) throw new OpError('INTEGRITY', `${PT.JOURNAL} changed while it was read, so its execution is not shown from a mix of two versions. Read it again.`);
     const journal = snap[RELS.indexOf(PT.JOURNAL)];
-    if (journal === null) return { state: 'no_book', reserved: [], fills: [], exits: [] };
+    if (journal === null) {
+      const lost = lostBook(ws, new Date().toISOString());
+      if (lost) throw new OpError('INTEGRITY', lost);
+      return { state: 'no_book', reserved: [], fills: [], exits: [] };
+    }
     const events = journal.toString('utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const held = new Map(book.map((i) => [i.intent_id, i]));
     const out = { reserved: [], fills: [], exits: [] };
