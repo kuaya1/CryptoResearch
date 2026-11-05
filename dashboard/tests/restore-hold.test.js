@@ -45,11 +45,18 @@ function find(ws, name) { const out = []; const walk = (d) => { for (const e of 
 const hold = (ws) => { fs.mkdirSync(path.dirname(ws.abs(MARK)), { recursive: true }); fs.writeFileSync(ws.abs(MARK), JSON.stringify({ schema_version: 'cr.restored-copy.v1', research_held: true, restored_at: new Date().toISOString(), from: { kind: 'test' } })); };
 const marker = (ws) => fs.readFileSync(ws.abs(MARK), 'utf8');
 // The fixtures read the real hour more than once, so a test must not cross the top of an
-// hour. None starts within this long of it; the slowest takes about 8 seconds on its own.
+// hour. None starts within this long of it; the slowest takes about 10 seconds on its own.
 const HOUR_MARGIN_MS = 30000;
+let startedHour = null;
 test.beforeEach(async () => {
   const left = H - (Date.now() % H);
   if (left < HOUR_MARGIN_MS) await new Promise((resolve) => { setTimeout(resolve, left + 50); });
+  startedHour = Math.floor(Date.now() / H);
+});
+// A test that crossed anyway, on a stalled machine, says so by name: its result, pass or
+// fail, says nothing about the code.
+test.afterEach(() => {
+  if (Math.floor(Date.now() / H) !== startedHour) throw new Error('HOUR_CROSSED: this test ran across the top of an hour, so its result is not valid.');
 });
 const topHour = () => Math.floor(Date.now() / H) * H;
 const hours = (ws) => TD.applyHours(ws, Array.from({ length: 16 }, (_, i) => bar(topHour() - (16 - i) * H)), { now: iso(Date.now()) });
