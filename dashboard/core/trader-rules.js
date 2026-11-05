@@ -123,24 +123,25 @@ function rulesOf(ws) {
   return { version: VERSION, from: 'trader.rules', rules, unset };
 }
 
-// The book's anchor: Eric's record of which book this desk holds, kept in the
-// host's environment, off the disk the book, the operation log and the settings
-// share, so losing that disk cannot lose it too. It is not a secret. Unset, an
-// online desk (ws.hosted, or CR_DATA_DIR for a command in its shell) never starts
-// a book by itself. `new` lets one first funding happen. A 64-character hash is
-// the SHA-256 of an established book's first journal line, which that book keeps
-// through any legitimate restore. Anything else is unknown and refuses. A workspace
-// on the PC with no anchor funds from its settings, as before.
+// The book-identity anchor: Eric's record of which book this desk holds, kept in
+// the host's environment, off the disk the book, the operation log and the settings
+// share, so losing that disk cannot lose it too. It is not a secret. It names a
+// book's identity, the SHA-256 of its first journal line, which the book keeps
+// through a restore; it does not say how far along the book is, so a rollback to an
+// older copy of the same book passes. Anything but a hash is unknown and refuses.
+//
+// Nothing starts a book by itself. Routine execution (the timer, a decision, the
+// hours, the scheduled task) never funds, whatever the anchor or the environment
+// says, and a missing setting never grants it. A first funding is Eric's own command
+// (trader-desk.js bootstrapBook). The one exception is a fictional test workspace,
+// named as such on its own marker and with no sign of an online desk.
 const BOOK_ANCHOR_ENV = 'CR_TRADER_BOOK_ANCHOR';
 function bookAnchorOf(ws, env = process.env) {
   const v = String(env[BOOK_ANCHOR_ENV] || '').trim();
-  if (!v) {
-    const online = Boolean((ws && ws.hosted) || env.CR_DATA_DIR);
-    return { state: online ? 'unset_online' : 'unset', may_initialize: !online };
-  }
-  if (v === 'new') return { state: 'new', may_initialize: true };
-  if (/^[0-9a-f]{64}$/.test(v)) return { state: 'established', genesis_sha256: v, may_initialize: false };
-  return { state: 'invalid', may_initialize: false };
+  if (/^[0-9a-f]{64}$/.test(v)) return { state: 'established', genesis_sha256: v, may_auto_fund: false };
+  if (v) return { state: 'invalid', may_auto_fund: false };
+  const fictional = Boolean(ws && ws.kind === 'test' && !ws.hosted && !env.CR_DATA_DIR);
+  return { state: 'unset', may_auto_fund: fictional };
 }
 const genesisOf = (line) => crypto.createHash('sha256').update(line).digest('hex');
 

@@ -200,6 +200,8 @@ Data, jobs and maintenance
   backup restore <name> --to <empty folder>          clean restore, verified (recommended)
   backup restore <name> --point-in-time [--confirm]  preview, then move later files to quarantine
   backup restore <name> --overlay --confirm          copy over current files; later files stay
+  trader bootstrap --cash-usd N --confirm "FUND NEW PAPER BOOK N"
+                                         Eric's first funding of a new Paper Book; nothing routine can do it
   offsite setup --desk https://<desk> [--to FOLDER]  pull verified copies of the online desk to this PC (daily)
   offsite pull [--to FOLDER] | offsite status | offsite verify <FILE>
   offsite drill [<FILE>] [--to <empty folder>]
@@ -1123,6 +1125,11 @@ async function run(argv) {
       fs.mkdirSync(path.dirname(out), { recursive: true });
       fs.writeFileSync(out, JSON.stringify(pkg));
       return { kind: 'complete_package', file: out, files: pkg.inventory.files, bytes: pkg.inventory.bytes, omitted: pkg.inventory.omitted, restore: `node dashboard/cli.js restore-package "${out}" --to <empty folder>` };
+    }
+    case 'trader': {
+      // Eric's own command, and the only way a real Paper Book starts (trader-desk.js).
+      if (sub !== 'bootstrap') throw Object.assign(new Error('trader bootstrap --cash-usd <amount> --confirm "FUND NEW PAPER BOOK <amount>"'), { code: 'USAGE' });
+      return require('./core/trader-desk').bootstrapBook(ws, { cash_usd: one(flags.cash_usd), confirm: one(flags.confirm) });
     }
     case 'offsite': {
       const off = require('./core/offsite');
