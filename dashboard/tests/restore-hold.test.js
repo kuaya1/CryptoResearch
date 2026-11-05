@@ -44,6 +44,13 @@ function put(ws, saved, rels) { for (const r of rels) { if (saved[r] === null) f
 function find(ws, name) { const out = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) { if (e.name !== 'backups') walk(p); } else if (e.name === name) out.push(path.relative(ws.root, p).split(path.sep).join('/')); } }; walk(ws.root); return out; }
 const hold = (ws) => { fs.mkdirSync(path.dirname(ws.abs(MARK)), { recursive: true }); fs.writeFileSync(ws.abs(MARK), JSON.stringify({ schema_version: 'cr.restored-copy.v1', research_held: true, restored_at: new Date().toISOString(), from: { kind: 'test' } })); };
 const marker = (ws) => fs.readFileSync(ws.abs(MARK), 'utf8');
+// The fixtures read the real hour more than once, so a test must not cross the top of an
+// hour. None starts within this long of it; the slowest takes about 8 seconds on its own.
+const HOUR_MARGIN_MS = 30000;
+test.beforeEach(async () => {
+  const left = H - (Date.now() % H);
+  if (left < HOUR_MARGIN_MS) await new Promise((resolve) => { setTimeout(resolve, left + 50); });
+});
 const topHour = () => Math.floor(Date.now() / H) * H;
 const hours = (ws) => TD.applyHours(ws, Array.from({ length: 16 }, (_, i) => bar(topHour() - (16 - i) * H)), { now: iso(Date.now()) });
 const anchorOn = (ws) => { process.env[VAR] = TR.genesisOf(fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8').split('\n')[0]); };
