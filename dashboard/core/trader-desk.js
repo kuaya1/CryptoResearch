@@ -496,7 +496,32 @@ function lostBook(ws, now) {
   return `The operation log records this book funded at ${at}, but ${PT.JOURNAL} holds no funding: its records are lost, not new. Nothing is read or written until it is repaired.`;
 }
 
+// The anchor (trader-rules.js bookAnchorOf) is the record off the disk: the
+// operation log above shares a disk with the book and can go with it. An anchored
+// book must still begin with the line the anchor names, so its loss or its
+// replacement is refused here, before any read or write, however little else is
+// left on the disk. A restore keeps that line, so a restored book reads again.
+function firstLineOf(ws) {
+  let text;
+  try { text = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8'); } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw new OpError('INTEGRITY', `${PT.JOURNAL} could not be read (${(err && err.code) || 'error'}). Nothing is read or written until it is repaired.`);
+  }
+  return text.split('\n')[0] || null;
+}
+function assertAnchor(ws) {
+  const a = TR.bookAnchorOf(ws);
+  if (a.state === 'invalid') throw new OpError('INTEGRITY', `${TR.BOOK_ANCHOR_ENV} is neither "new" nor a book's hash, so which book this desk holds is unknown. Nothing is read or written until it is repaired.`);
+  if (a.state !== 'established') return a;
+  const line = firstLineOf(ws);
+  if (line === null) throw new OpError('INTEGRITY', `${TR.BOOK_ANCHOR_ENV} names an established book, but ${PT.JOURNAL} holds no records: they are lost, not new. Nothing is read or written until it is repaired.`);
+  if (TR.genesisOf(line) !== a.genesis_sha256) throw new OpError('INTEGRITY', `${PT.JOURNAL} does not begin with the line ${TR.BOOK_ANCHOR_ENV} names: it is not the established book. Nothing is read or written until it is repaired.`);
+  return a;
+}
+const INIT_WORDS = `This desk does not start a book by itself: set ${TR.BOOK_ANCHOR_ENV} to "new" for a first funding, or restore the established book and set it to that book's hash.`;
+
 function snapshotOf(ws, now) {
+  assertAnchor(ws);
   const r = PT.results(ws, { now });
   if (r.funded_usd === null) {
     const lost = lostBook(ws, now);
@@ -738,11 +763,16 @@ function view(ws, { now } = {}) {
   // While an hour is missing, the book's figures are what it has recorded,
   // never a settled account (a fill or a stop may be in the missing hour).
   const st = snap.settlement;
+  // What Eric reads to anchor the book: the anchor's state, and this book's own hash.
+  const anchor = TR.bookAnchorOf(ws);
+  const first = firstLineOf(ws);
+  const initWait = res.funded_usd === null && !anchor.may_initialize ? [INIT_WORDS] : [];
   const unknown = st.state === 'unsettled' ? [...res.unknown, `NAV, cash, the results and the drawdowns are recorded balances, not settled${st.settled_through ? ` (settled through ${st.settled_through})` : ''}: ${st.words}`] : res.unknown;
   return {
     version: VERSION,
     now: ctx.now,
-    waits: ctx.s.waits,
+    waits: [...ctx.s.waits, ...initWait],
+    continuity: { anchor: anchor.state, genesis_sha256: first === null ? null : TR.genesisOf(first) },
     allowlist_basis: ctx.s.allowlist_basis,
     settlement: st,
     book: { cash_usd: ctx.s.book.cash_usd || null, fee_rate: ctx.s.book.fee_rate || null },
@@ -804,6 +834,10 @@ function fundOnce(ws, ctx, done, problems, snap = null) {
     if (dec(funded) !== dec(cash)) problems.push({ kind: 'fund', code: 'CONFLICT', words: `The book was funded with ${usd(funded)}; your setting of ${usd(cash)} is never applied over it.` });
     return false;
   }
+  if (!TR.bookAnchorOf(ws).may_initialize) {
+    problems.push({ kind: 'fund', code: 'INIT_REQUIRED', words: INIT_WORDS });
+    return false;
+  }
   try {
     const f = PT.fund(ws, { cash_usd: cash, now: ctx.now });
     if (f.status === 'saved') done.push({ kind: 'fund', status: 'saved', words: `Funded with ${usd(f.cash_usd)}.` });
@@ -853,6 +887,8 @@ function step(ws, { now, project = null } = {}) {
 // an order or the book's integrity stops the rest of that pair's hours.
 function applyHours(ws, bars, { now } = {}) {
   const n = nowOf(now);
+  let anchor;
+  try { anchor = assertAnchor(ws); } catch (err) { return [{ pair: null, hour: null, status: 'refused', code: 'INTEGRITY', words: String(err.message) }]; }
   // Before anything is written: hours applied to a lost book would start a new
   // journal in its place. A book that does not read keeps its own refusal below.
   let unfunded = false;
@@ -860,6 +896,7 @@ function applyHours(ws, bars, { now } = {}) {
   let lost = null;
   if (unfunded) { try { lost = lostBook(ws, n.now); } catch (err) { lost = String(err.message); } }
   if (lost) return [{ pair: null, hour: null, status: 'refused', code: 'INTEGRITY', words: lost }];
+  if (unfunded && !anchor.may_initialize) return [{ pair: null, hour: null, status: 'refused', code: 'INIT_REQUIRED', words: INIT_WORDS }];
   const problems = [];
   fundOnce(ws, { ...n, s: settingsOf(ws) }, [], problems);
   const out = problems.map((p) => ({ pair: null, hour: null, status: 'refused', code: p.code, words: p.words }));
@@ -984,6 +1021,7 @@ function executionFor(ws, decisionId) {
   });
   const same = (a, b) => (a === null ? b === null : b !== null && a.equals(b));
   return readConsistent(ws, () => {
+    assertAnchor(ws);
     const snap = bytes();
     const book = validatedRead(snap);
     const after = bytes();

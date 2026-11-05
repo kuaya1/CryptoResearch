@@ -9,6 +9,9 @@
 //                        Environment page; never in the code or the browser)
 //   PORT                 set by Render
 //   RENDER_EXTERNAL_HOSTNAME or CR_ALLOWED_HOSTS   the host names the app answers to
+// Also read, and not required to start: CR_TRADER_BOOK_ANCHOR, Eric's record of which
+// Paper Book this desk holds, off the disk (core/trader-rules.js bookAnchorOf). Unset,
+// this desk reads a funded book but never starts one.
 // Research keys come from the environment too (OPENAI_API_KEY, GEMINI_API_KEY,
 // ANTHROPIC_API_KEY, and COINGECKO_API_KEY for prices); they are never written
 // to the disk, logs, exports or the page.
