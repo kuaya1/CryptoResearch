@@ -675,6 +675,14 @@ function unsafeInventoryError(what, rejected) {
 // restore that dies at any point leaves its own hold, with no last step to reach.
 const RESTORED_REL = 'config/restored-copy.json';
 const isRestoredMarker = (rel) => String(rel).split(path.sep).join('/').normalize('NFC').toLowerCase() === RESTORED_REL;
+// Where a copy's filter says a path is. Which form a copy passes depends on the Node
+// version (\\?\C:\... from Node 20 on Windows), so both sides are put in one form. A
+// path that still is not inside stops the copy, because the filter could not judge it.
+function relInside(dir, p) {
+  const rel = path.relative(path.toNamespacedPath(dir), path.toNamespacedPath(p));
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new OpError('INTEGRITY', `${p} is not inside ${dir}, so this restore cannot tell whether to copy it. The copy stopped, and the restore hold stands.`);
+  return rel;
+}
 function markRestoredCopy(dest, from) {
   const doc = {
     schema_version: 'cr.restored-copy.v1',
@@ -1077,7 +1085,7 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
       for (const item of PACKAGE_INCLUDE) {
         const from = path.join(dir, item);
         if (!exists(from)) continue;
-        fs.cpSync(from, path.join(ws.root, item), { recursive: true, force: true, dereference: false, filter: (src) => !fs.lstatSync(src).isSymbolicLink() && !isRestoredMarker(path.relative(dir, src)) });
+        fs.cpSync(from, path.join(ws.root, item), { recursive: true, force: true, dereference: false, filter: (src) => !isRestoredMarker(relInside(dir, src)) && !fs.lstatSync(src).isSymbolicLink() });
         restored++;
       }
     }

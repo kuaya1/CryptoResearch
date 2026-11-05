@@ -33,7 +33,7 @@ It is the restored-copy marker, `config/restored-copy.json`, and its one release
 
 A restore into a new folder that dies leaves a held, partial folder. Delete it and restore again. An overlay leaves later files in place, so a venue file newer than the backup refuses as INTEGRITY until it is dealt with. Prefer point-in-time. An older unsealed backup cannot be checked file by file, and only an overlay takes one.
 
-These are tested by killing a real process on fictional records, on this PC. No restore has been killed on the Render disk.
+These are tested by killing a real process on fictional records, on this PC, on Node 24.21.0 (the pinned version) and on Node 20.20.2, which spells long Windows paths differently to an older copy's filter. No restore has been killed on the Render disk.
 
 ## Not detected
 

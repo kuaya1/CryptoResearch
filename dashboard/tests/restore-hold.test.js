@@ -995,6 +995,31 @@ test('the supplied audit case: the copy of config fails in process after it wrot
   holdsAfter(ws);
 });
 
+// Node 20 on Windows hands a copy's filter its children as \\\\?\\C:\\..., and Node 24 does not.
+// The form is forced here so the pinned Node runs the same case.
+test('the marker is kept out of an older backup copy under the long Windows path form too', (t) => {
+  const { ws } = releasedWithBackup(t, 'lgform');
+  const sealed = X.createBackup(ws, { reason: 'manual' });
+  const name = legacyOf(ws, sealed.name);
+  const asked = [];
+  stub(t, fs, 'cpSync', (real) => (src, dest, options) => real(src, dest, { ...options, filter: (a, b) => { asked.push(path.basename(a)); return options.filter(path.toNamespacedPath(a), b); } }));
+  X.restoreBackup(ws, name, { overlay: true, confirm: true });
+  assert.ok(asked.includes('restored-copy.json'), 'the filter was asked about the marker');
+  assert.ok(RS.restoredHold(ws), 'UNSAFE: the backup released marker replaced the hold');
+  assert.equal(JSON.parse(marker(ws)).from.mode, 'overlay', 'and the hold is the one this restore wrote');
+  holdsAfter(ws);
+});
+
+test('a path the older backup copy cannot place inside its backup stops the copy, and the hold stands', (t) => {
+  const { ws } = releasedWithBackup(t, 'lgoutside');
+  const sealed = X.createBackup(ws, { reason: 'manual' });
+  const name = legacyOf(ws, sealed.name);
+  stub(t, fs, 'cpSync', () => (src, dest, options) => { options.filter(ws.abs('workspace.json'), dest); });
+  assert.throws(() => X.restoreBackup(ws, name, { overlay: true, confirm: true }), (e) => e.code === 'INTEGRITY' && /not inside/.test(e.message));
+  assert.equal(JSON.parse(marker(ws)).from.mode, 'overlay');
+  holdsAfter(ws);
+});
+
 for (const [mode, opts] of [['overlay', { overlay: true, confirm: true }], ['point-in-time', { pointInTime: true, confirm: true }]]) {
   test(`a sealed ${mode} restore killed mid-copy: still held, by the hold it wrote first`, (t) => {
     const a = backedThenChanged(t, `seal${mode.slice(0, 3)}`);
