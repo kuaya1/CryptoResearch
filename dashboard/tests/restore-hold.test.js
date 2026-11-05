@@ -697,6 +697,8 @@ test('every write of the book carries the fence of the read it came from, by con
   const sites = src.filter((l) => /underAnchor\(ws, \(\) => PT\./.test(l));
   assert.equal(sites.length, 7);
   for (const l of sites) assert.match(l, /, (ctx|n)\.fence\)/, l);
+  // The list the status command shows is the same steady read as every other read.
+  assert.match(src.join('\n'), /rulingsNeeded: anchoredRead\(rulingsNeeded\)/);
 });
 
 test('a marker that changed after the read refuses the fund, the order, the cancel and the hour', (t) => {
