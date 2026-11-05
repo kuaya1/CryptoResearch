@@ -1348,7 +1348,7 @@ async function run(argv) {
       if (sub === 'status') {
         if (!cur) return { restored_copy: false, message: 'This workspace is not a restored copy.' };
         const out = { restored_copy: true, research_held: cur.research_held !== false, ...cur };
-        if (out.research_held) { try { out.rulings_needed = require('./core/trader-desk').rulingsNeeded(ws); } catch (err) { out.rulings_needed = null; out.rulings_unreadable = err.message; } }
+        if (out.research_held) { try { out.rulings_needed = require('./core/trader-desk').rulingsNeeded(ws).map((x) => (x.decision_id ? { ...x, basis: research.basisRulingOf(ws, x) } : x)); } catch (err) { out.rulings_needed = null; out.rulings_unreadable = err.message; } }
         return out;
       }
       if (sub === 'hold') {
@@ -1357,9 +1357,9 @@ async function run(argv) {
       }
       if (sub === 'release') {
         if (cur && cur.research_held !== false && !flags.confirm) throw Object.assign(new Error('Releasing lets this copy send its queued research jobs and collect accepted requests by their ID, within the limits, and resumes the Paper Book. Read restored-copy status first. Re-run with --confirm.'), { code: 'CONFIRM' });
-        return research.releaseRestoredCopy(ws, { accept: [].concat(flags.accept || []).filter((x) => typeof x === 'string') });
+        return research.releaseRestoredCopy(ws, { accept: [].concat(flags.accept || []).filter((x) => typeof x === 'string'), basisRulings: [].concat(flags.basis_ruling || []), because: one(flags.because) || null });
       }
-      throw Object.assign(new Error('restored-copy status|hold --confirm --from <what was restored>|release --confirm [--accept <decision_id>]...'), { code: 'USAGE' });
+      throw Object.assign(new Error('restored-copy status|hold --confirm --from <what was restored>|release --confirm [--accept <decision_id>]... [--basis-ruling <decision_id>:<ruling_token>... --because <words>]'), { code: 'USAGE' });
     }
     case 'backup': {
       const ex = require('./core/exporter');

@@ -578,6 +578,17 @@ function restoreHoldOf(ws) {
 function holdFenceOf(ws) {
   try { return fs.readFileSync(ws.abs(RESTORED_REL), 'utf8'); } catch (err) { return err.code === 'ENOENT' ? '' : `unreadable:${err.code}`; }
 }
+// A released copy's marker names its timeline. A sell is a new order made now, so a sell
+// after a release takes an ID from that release: the same number in the timeline the
+// restore lost may have gone with another body, and one ID is one order. It is read from
+// the fence's own bytes, so the ID and the check of the marker come from one read. A
+// workspace that was never restored has none, and keeps the plain numbering.
+function releaseEpochOf(fence) {
+  let m = null;
+  try { m = JSON.parse(fence); } catch (_) { return null; }
+  return m && typeof m === 'object' && m.research_held === false ? sha256(fence).slice(0, 16) : null;
+}
+const closePurpose = (n, epoch) => `close-${n}${epoch ? `@${epoch}` : ''}`;
 function assertNotRestoreHeld(ws, fence) {
   if (restoreHoldOf(ws)) throw new OpError('RESTORE_HELD', HOLD_WORDS);
   if (holdFenceOf(ws) !== fence) throw new OpError('RESTORE_HELD', 'The restored-copy hold changed after this read, so nothing is written from it. The next read decides again.');
@@ -799,7 +810,9 @@ function assess(ws, ctx, g, snap) {
   // A sell for the position: the latest attempt, or the next one.
   let n = 0;
   let last = null;
-  while (n < CLOSE_ATTEMPTS_MAX && snap.intents.has(intentIdOf(d, `close-${n + 1}`))) { n += 1; last = snap.intents.get(intentIdOf(d, `close-${n}`)); }
+  while (n < CLOSE_ATTEMPTS_MAX && snap.intents.has(intentIdOf(d, closePurpose(n + 1, ctx.epoch)))) { n += 1; last = snap.intents.get(intentIdOf(d, closePurpose(n, ctx.epoch))); }
+  // A sell from before this release is still this position's sell.
+  if (!last || !LIVE.includes(last.state)) last = snap.list.find((i) => i.side === 'CLOSE_LONG' && i.position_id === posId && LIVE.includes(i.state)) || last;
   if (last && LIVE.includes(last.state)) return out('closing', `${reason.words} A sell order is ${stateWords(last)}.`, null, { ...closing, close: { ...closing.close, intent_id: last.intent_id, state: last.state } });
   if (n >= CLOSE_ATTEMPTS_MAX) return out('closing', `${reason.words} ${CLOSE_ATTEMPTS_MAX} sell orders ended unfilled or were refused; the position stays open under its stop and target.`, null, closing);
   const bk = PT.book(ws, asked.pair, { now: ctx.now, venue: ctx.s.venue });
@@ -812,7 +825,7 @@ function assess(ws, ctx, g, snap) {
   ].filter(Boolean);
   if (waits.length) return out('closing', `${reason.words} The sell waits: ${waits.join(' ')}`, null, closing);
   const intent = {
-    version: INTENT_VERSION, intent_id: intentIdOf(d, `close-${n + 1}`), thesis_id: d.receipt_id, project_id: pid, receipt_id: d.receipt_id, decision_id: reason.decision_id,
+    version: INTENT_VERSION, intent_id: intentIdOf(d, closePurpose(n + 1, ctx.epoch)), thesis_id: d.receipt_id, project_id: pid, receipt_id: d.receipt_id, decision_id: reason.decision_id,
     pair: asked.pair, side: 'CLOSE_LONG', position_id: posId, order_type: 'LIMIT',
     created_at: ctx.now, reference_price: bk.price, reference_at: bk.price_at,
     entry_price: closeLimit(bk.price), stop_loss_price: pos.stop_loss_price, take_profit_price: pos.take_profit_price, risk_ceiling_usd: '0',
@@ -830,7 +843,7 @@ function contextOf(ws, now, project) {
   const hold = restoreHoldOf(ws);
   const { projects, grants } = grantsOf(ws, project);
   const snap = snapshotOf(ws, n.now);
-  return { ...n, fence, hold, s: settingsOf(ws, { grants, projects, snap }), projects, grants, snap };
+  return { ...n, fence, epoch: releaseEpochOf(fence), hold, s: settingsOf(ws, { grants, projects, snap }), projects, grants, snap };
 }
 
 // A request as a read shows it while the copy is held: nothing it says is about to
@@ -859,26 +872,35 @@ function requestsOf(ws, ctx, snap) {
 // - mandate: an armed paper mandate would grant again at once. Turn it off; arming it
 //   again after the release is Eric's own arm-desk.
 // - unmatched_order, broken_project: the records do not match. Put back a matched set.
+// - pm_cohort: a grant in force with nothing else waiting, whose PM Cohort position is not
+//   on record. The hold kept it from opening, or the copy lost it, and the repair would
+//   open it after the release. It can be accepted, or undone.
+// reduces_only says the work can no longer add to a position, which is what a ruling on
+// a basis that cannot be verified needs (research.js).
 function rulingsOf(ws, ctx) {
   const T = require('./tickets');
   const items = [];
   const owned = new Set();
+  const pmOpened = new Set(require('./paper').readRecords(ws).filter((l) => l.event === 'open').map((l) => l.decision_id));
   for (const g of ctx.grants) {
     const a = assess(ws, ctx, g, ctx.snap);
     const opening = intentIdOf(g.decision, 'open');
     owned.add(opening);
-    for (let n = 1; n <= CLOSE_ATTEMPTS_MAX; n++) owned.add(intentIdOf(g.decision, `close-${n}`));
     const base = { id: a.decision_id, project_id: a.project_id, decision_id: a.decision_id, decided_at: a.decided_at, phase: a.phase, opening_intent: opening };
     const asked = ctx.snap.intents.get(opening);
+    const pmMissing = g.in_force && T.paperWanted(g.decision) && Number(g.decision.pm_approved_risk_usd) > 0 && !pmOpened.has(g.decision.decision_id);
+    const pmItem = { ...base, kind: 'pm_cohort', may_accept: true, reduces_only: false, disposition: 'Its PM Cohort position is not on record, and the repair would open it after the release, priced at the decision. Accept it, or Undo it.' };
     if (!asked) {
-      if (!(a.phase === 'not_opened' && a.final === true)) items.push({ ...base, kind: 'opening', may_accept: false, disposition: 'Undo it. To trade it, decide again after the release: a new decision, a new basis and a new intent ID.' });
+      if (!(a.phase === 'not_opened' && a.final === true)) items.push({ ...base, kind: 'opening', may_accept: false, reduces_only: false, disposition: 'Undo it. To trade it, decide again after the release: a new decision, a new basis and a new intent ID.' });
+      else if (pmMissing) items.push(pmItem);
       continue;
     }
     const kind = a.next ? a.next.kind : a.position && a.position.state === 'open' ? 'position' : LIVE.includes(asked.state) ? 'order' : null;
-    if (kind) items.push({ ...base, kind, may_accept: true, disposition: `Accept it by ID, after checking it. The ${kind} carries on under its own decision; nothing in the book is rewritten.` });
+    if (kind) items.push({ ...base, kind, may_accept: true, reduces_only: !pmMissing && (a.phase === 'closing' || kind === 'cancel' || !LIVE.includes(asked.state)), ...(pmMissing ? { pm_cohort_missing: true } : {}), disposition: `Accept it by ID, after checking it. The ${kind} carries on under its own decision; nothing in the book is rewritten.${pmMissing ? ' Its PM Cohort position is not on record either, and the repair would open it after the release.' : ''}` });
+    else if (pmMissing) items.push(pmItem);
   }
   for (const i of ctx.snap.list) {
-    if (owned.has(i.intent_id)) continue;
+    if (owned.has(i.intent_id) || (i.side === 'CLOSE_LONG' && owned.has(String(i.position_id).replace(/^pos-/, '')))) continue;
     if (LIVE.includes(i.state) || ctx.snap.open.has(`pos-${i.intent_id}`)) items.push({ id: i.intent_id, kind: 'unmatched_order', may_accept: false, opening_intent: i.intent_id, disposition: 'The book holds an order no decision here names, so these records are not a matched set. Put back a matched set.' });
   }
   for (const p of require('./projects').listProjects(ws)) {
@@ -889,6 +911,7 @@ function rulingsOf(ws, ctx) {
   if (m.on || m.held) items.push({ id: `mandate-${m.generation}`, kind: 'mandate', may_accept: false, generation: m.generation, expires_at: m.expires_at, disposition: 'Turn it off (arm-desk off-only, or the desk control). Arm it again after the release if you want it.' });
   return items;
 }
+const closeNumbers = () => Array.from({ length: CLOSE_ATTEMPTS_MAX }, (_, i) => i + 1);
 function rulingsNeeded(ws, { now } = {}) {
   return rulingsOf(ws, contextOf(ws, now, null));
 }
@@ -912,7 +935,11 @@ function view(ws, { now } = {}) {
   for (const r of reqs) {
     const d = { decision_id: r.decision_id, decided_at: r.decided_at };
     owner.set(intentIdOf(d, 'open'), { r, purpose: 'open' });
-    for (let n = 1; n <= CLOSE_ATTEMPTS_MAX; n++) owner.set(intentIdOf(d, `close-${n}`), { r, purpose: 'close' });
+    for (const n of closeNumbers()) for (const epoch of [null, ctx.epoch]) owner.set(intentIdOf(d, closePurpose(n, epoch)), { r, purpose: 'close' });
+  }
+  for (const i of snap.list) {
+    const o = i.side === 'CLOSE_LONG' ? owner.get(String(i.position_id).replace(/^pos-/, '')) : null;
+    if (o && !owner.has(i.intent_id)) owner.set(i.intent_id, { r: o.r, purpose: 'close' });
   }
   const whose = (intentId) => {
     const o = owner.get(intentId);
@@ -1230,4 +1257,4 @@ function executionFor(ws, decisionId) {
 // beyond its snapshot (the engine's book for each request), is bracketed.
 const anchoredRead = (read) => (ws, ...rest) => readAnchored(ws, () => read(ws, ...rest));
 
-module.exports = { rulingsNeeded: anchoredRead(rulingsNeeded), HOLD_WORDS, bootstrapBook, bootstrapWords, VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests: anchoredRead(requests), view: anchoredRead(view), wanted: anchoredRead(wanted), pending: anchoredRead(pending), step, applyHours, executionFor };
+module.exports = { rulingsNeeded: anchoredRead(rulingsNeeded), holdFenceOf, restoreHoldOf, closePurpose, releaseEpochOf, HOLD_WORDS, bootstrapBook, bootstrapWords, VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests: anchoredRead(requests), view: anchoredRead(view), wanted: anchoredRead(wanted), pending: anchoredRead(pending), step, applyHours, executionFor };

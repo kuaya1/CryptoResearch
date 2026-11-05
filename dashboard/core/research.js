@@ -213,7 +213,33 @@ function holdRestoredCopy(ws, { from = null } = {}) {
 // gate. An opening cannot be accepted, and neither can a mandate. It all happens under
 // the workspace lock, so a decision cannot land between the ruling and the release, and
 // the marker is written once, whole: a release that fails or dies leaves the hold.
-function releaseRestoredCopy(ws, { accept = [] } = {}) {
+//
+// A basis that reads unverified can be ruled on, and only that. The ruling names one
+// decision and the token of its records as read (restored-copy status), gives a reason,
+// and is taken only for work that can no longer add to a position: a buy still live is
+// undone first. It does not call the basis verified, makes no digest and rewrites nothing.
+// The basis still reads unverified afterward, and the ruling is kept in the marker. A
+// basis that does not match its records, or is otherwise unreadable, has no ruling: restore it.
+function basisRulingOf(ws, item) {
+  const basis = require('./decision-basis');
+  let v;
+  try { v = basis.viewOf(ws, item.project_id, item.decision_id); } catch (err) { return { label: 'unreadable', words: String(err && err.message || err).slice(0, 300) }; }
+  if (v.label !== 'unverified') return { label: v.label, ...(v.words ? { words: v.words } : {}) };
+  return { label: v.label, words: v.words, ...(item.reduces_only ? { ruling_token: basis.rulingTokenOf(v) } : { ruling: 'This work can still add to a position. Undo the decision first, then rule on what is left.' }) };
+}
+function parseBasisRulings(list) {
+  const out = new Map();
+  for (const raw of list) {
+    const m = typeof raw === 'string' ? /^([A-Za-z0-9_-]+):([0-9a-f]{32})$/.exec(raw) : null;
+    if (!m) throw new OpError('INVALID', 'A basis ruling names one decision and its token: <decision_id>:<ruling_token>, from restored-copy status. Nothing was released.');
+    out.set(m[1], m[2]);
+  }
+  return out;
+}
+function releaseRestoredCopy(ws, { accept = [], basisRulings = [], because = null } = {}) {
+  const ruled = parseBasisRulings(basisRulings);
+  const reason = typeof because === 'string' ? because.trim().slice(0, 500) : '';
+  if (ruled.size && !reason) throw new OpError('INVALID', 'A basis ruling says why (--because <words>). Nothing was released.');
   const first = readJson(ws.abs(RESTORED_REL), NO_MARKER);
   if (first === NO_MARKER) return { status: 'unchanged', message: 'This workspace is not a restored copy; nothing is held.' };
   if (!first || typeof first !== 'object' || Array.isArray(first)) throw new OpError('INVALID', 'The restored-copy marker does not read, so this copy stays held. Write it again with restored-copy hold, then rule and release. Nothing was released.');
@@ -231,13 +257,28 @@ function releaseRestoredCopy(ws, { accept = [] } = {}) {
     const left = items.filter((x) => !named.has(x.id));
     if (left.length) throw new OpError('RULING_REQUIRED', `Rule on each of these first: ${left.map((x) => `${x.id} (${x.kind}). ${x.disposition}`).join(' ')} Nothing was released.`);
     accepted = items.map((x) => ({ decision_id: x.decision_id, kind: x.kind, phase: x.phase, project_id: x.project_id }));
-    // A decision that does not stand on its own record is not accepted.
+    // A decision that does not stand on its own record is not accepted without a ruling
+    // on that record, and a record that does not read has none.
     const basis = require('./decision-basis');
+    const rulings = [];
+    const strayRulings = [...ruled.keys()].filter((id) => !accepted.some((a) => a.decision_id === id));
+    if (strayRulings.length) throw new OpError('INVALID', `A basis ruling names work not accepted here: ${strayRulings.join(', ')}. Nothing was released.`);
     for (const a of accepted) {
       const v = basis.viewOf(ws, a.project_id, a.decision_id);
-      if (!['decision_time', 'reconstructed'].includes(v.label)) throw new OpError('RULING_REQUIRED', `The basis of ${a.decision_id} reads as ${v.label}: ${v.words || 'it cannot be accepted'}. Nothing was released.`);
+      if (['decision_time', 'reconstructed'].includes(v.label)) {
+        if (ruled.has(a.decision_id)) throw new OpError('INVALID', `The basis of ${a.decision_id} reads as ${v.label}, so there is nothing to rule on. Nothing was released.`);
+        continue;
+      }
+      const words = `The basis of ${a.decision_id} reads as ${v.label}: ${v.words || 'it cannot be accepted'}.`;
+      if (v.label !== 'unverified') throw new OpError('RULING_REQUIRED', `${words} Nothing was released.`);
+      const item = items.find((x) => x.decision_id === a.decision_id);
+      if (!item.reduces_only) throw new OpError('RULING_REQUIRED', `${words} This work can still add to a position, so no ruling is taken: Undo the decision, then rule on what is left. Nothing was released.`);
+      if (!ruled.has(a.decision_id)) throw new OpError('RULING_REQUIRED', `${words} Read restored-copy status, and if you stand behind this work without it, name it: --basis-ruling <decision_id>:<ruling_token> --because <words>. Nothing was released.`);
+      const token = basis.rulingTokenOf(v);
+      if (ruled.get(a.decision_id) !== token) throw new OpError('RULING_REQUIRED', `The ruling on ${a.decision_id} names records other than the ones here now. Read restored-copy status again. Nothing was released.`);
+      rulings.push({ decision_id: a.decision_id, kind: a.kind, label: v.label, token, because: reason, ruled_by: ws.actor || null, meaning: 'Eric let this work carry on without a verified basis. The basis is not verified by this.' });
     }
-    op.writeJson(RESTORED_REL, { ...cur, research_held: false, released_at: new Date().toISOString(), accepted });
+    op.writeJson(RESTORED_REL, { ...cur, research_held: false, released_at: new Date().toISOString(), accepted, ...(rulings.length ? { basis_rulings: rulings } : {}) });
   });
   return { status: 'saved', verified: out.verified, research_held: false, accepted, message: 'Research released in this restored copy. Uncertain attempts are still never resent. The Paper Book resumes: hours held back now apply in order, so stops and targets in the gap settle.' };
 }
@@ -2803,6 +2844,7 @@ const saveCoworkDraft = (ws, projectId, runId, opts) => saveAssistantDraft(ws, p
 module.exports = {
   RESTORED_REL,
   restoredHold,
+  basisRulingOf,
   releaseRestoredCopy,
   holdRestoredCopy,
   RUN_ID_RE,

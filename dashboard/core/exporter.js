@@ -631,11 +631,13 @@ function emptyOrMissing(dest) {
   return st.isDirectory() && !st.isSymbolicLink() && listDir(dest).length === 0;
 }
 
-function writeAllOrNothing(dest, items) {
+function writeAllOrNothing(dest, items, from) {
   if (!emptyOrMissing(dest)) throw new OpError('INVALID', `${dest} is not an empty folder. Restore into a new, empty folder.`);
   const createdDest = !exists(dest);
+  let marker;
   try {
     mkdirp(dest);
+    marker = markRestoredCopy(dest, from);
     for (const it of items) {
       const abs = path.join(dest, ...it.rel.split('/'));
       if (!within(dest, abs)) throw new OpError('UNSAFE_PATH', `${it.rel} resolves outside ${dest}; nothing was kept.`);
@@ -644,13 +646,15 @@ function writeAllOrNothing(dest, items) {
       writeDurable(abs, buf);
     }
   } catch (err) {
+    // The hold goes last, so what a failed clean-up leaves behind is still held.
     try {
+      for (const name of listDir(dest).sort((a, b) => Number(a === 'config') - Number(b === 'config'))) rmrf(path.join(dest, name));
       if (createdDest) rmrf(dest);
-      else for (const name of listDir(dest)) rmrf(path.join(dest, name));
     } catch (_) { /* reported below */ }
     if (exists(dest) && (createdDest || listDir(dest).length)) err.message += ` Cleaning up ${dest} did not complete; delete that folder before trying again.`;
     throw err;
   }
+  return marker;
 }
 
 function unsafeInventoryError(what, rejected) {
@@ -664,9 +668,13 @@ function unsafeInventoryError(what, rejected) {
 // provider is asked for anything there, neither a new request nor the answer
 // to one already sent, until Eric releases it (node dashboard/cli.js
 // restored-copy release --confirm). A drill or an inspection of a backup
-// never sends or collects a paid request. Written after the files are
-// verified, so it is never part of what was compared.
+// never sends or collects a paid request.
+//
+// Every restore writes this before it copies a file, and no marker in a backup or a
+// package is ever copied, under any spelling a disk could take for this one. So a
+// restore that dies at any point leaves its own hold, with no last step to reach.
 const RESTORED_REL = 'config/restored-copy.json';
+const isRestoredMarker = (rel) => String(rel).split(path.sep).join('/').normalize('NFC').toLowerCase() === RESTORED_REL;
 function markRestoredCopy(dest, from) {
   const doc = {
     schema_version: 'cr.restored-copy.v1',
@@ -698,10 +706,10 @@ function restorePackage(pkg, destDir) {
       bad.push({ path: f.path, error: 'content does not match its hash in the package' });
       return;
     }
-    items.push({ rel: inv.paths[i], sha256: f.sha256, read: () => buf });
+    if (!isRestoredMarker(inv.paths[i])) items.push({ rel: inv.paths[i], sha256: f.sha256, read: () => buf });
   });
   if (bad.length) throw new OpError('INVALID', `The package has ${bad.length} damaged entr${bad.length === 1 ? 'y' : 'ies'}, so nothing was restored. First: "${bad[0].path}": ${bad[0].error}.`, { rejected: bad });
-  writeAllOrNothing(dest, items);
+  const marker = writeAllOrNothing(dest, items, { kind: 'package', created_at: pkg.created_at || null, served_at: pkg.desk ? pkg.desk.served_at || null : null, desk_revision: pkg.desk && pkg.desk.revision ? pkg.desk.revision.short || pkg.desk.revision.commit || null : null, files: pkg.files.length });
   const verify = items.filter((it) => {
     try {
       return sha256(fs.readFileSync(path.join(dest, ...it.rel.split('/')))) !== it.sha256;
@@ -716,7 +724,6 @@ function restorePackage(pkg, destDir) {
   } catch (err) {
     reconcile = [`could not open restored folder: ${err.message}`];
   }
-  const marker = markRestoredCopy(dest, { kind: 'package', created_at: pkg.created_at || null, served_at: pkg.desk ? pkg.desk.served_at || null : null, desk_revision: pkg.desk && pkg.desk.revision ? pkg.desk.revision.short || pkg.desk.revision.commit || null : null, files: pkg.files.length });
   return {
     restored_copy: { file: RESTORED_REL, research_held: marker.research_held },
     status: !verify.length && reconcile && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems',
@@ -1015,8 +1022,8 @@ function restoreBackupTo(ws, name, destDir) {
   if (!inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
   const cr = crRejected(m.items.map((x) => x && x.path));
   if (cr.length) throw unsafeInventoryError(`Backup ${name}`, cr);
-  const items = m.items.map((it, i) => ({ rel: inv.paths[i], sha256: it.sha256, read: () => fs.readFileSync(path.join(filesRoot, ...inv.paths[i].split('/'))) }));
-  writeAllOrNothing(dest, items);
+  const items = m.items.map((it, i) => ({ rel: inv.paths[i], sha256: it.sha256, read: () => fs.readFileSync(path.join(filesRoot, ...inv.paths[i].split('/'))) })).filter((it) => !isRestoredMarker(it.rel));
+  const marker = writeAllOrNothing(dest, items, { kind: 'backup', name, created_at: m.created_at, files: m.items.length });
   const mismatched = items.filter((it) => {
     try {
       return sha256(fs.readFileSync(path.join(dest, ...it.rel.split('/')))) !== it.sha256;
@@ -1031,7 +1038,6 @@ function restoreBackupTo(ws, name, destDir) {
   } catch (err) {
     reconcile = [`could not open restored folder: ${err.message}`];
   }
-  const marker = markRestoredCopy(dest, { kind: 'backup', name, created_at: m.created_at, files: m.items.length });
   const report = { mode: 'clean', restored_from: name, created_at: m.created_at, dest, files: m.items.length, mismatched_after_copy: mismatched, reconciliation: reconcile.length ? reconcile : 'record totals match the backup', status: !mismatched.length && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems', records_verified_when_taken: m.consistency ? m.consistency.verified : null, restored_copy: { file: RESTORED_REL, research_held: marker.research_held } };
   writeDurable(path.join(dest, 'RESTORE-REPORT.json'), jsonText(report));
   logOp(ws, { phase: 'restore_clean', from: name, dest, status: report.status });
@@ -1051,6 +1057,8 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
   if (inv && !inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
   const pre = createBackup(ws, { reason: 'pre-restore' });
   return withLock(ws, 'restore', () => {
+    // A release sealed before this lock is finished now, so it cannot land on the hold.
+    recoverLocked(ws);
     // A hold first, and the backup's own marker is never copied over it: a restore
     // that dies part way leaves a hold.
     markRestoredCopy(ws.root, { kind: 'backup', name, mode: 'overlay' });
@@ -1058,7 +1066,7 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
     if (m) {
       m.items.forEach((it, i) => {
         const rel = inv.paths[i];
-        if (/^dashboard\//.test(rel) || /\.cmd$/.test(rel) || rel === RESTORED_REL) return; // records only; code is not overlaid
+        if (/^dashboard\//.test(rel) || /\.cmd$/.test(rel) || isRestoredMarker(rel)) return; // records only; code is not overlaid
         const buf = fs.readFileSync(path.join(filesRoot, ...rel.split('/')));
         if (sha256(buf) !== it.sha256) throw new OpError('INVALID', `${rel} in backup ${name} changed after it was verified; stopped. The pre-restore backup ${pre.name} has the state before this restore.`);
         writeDurable(ws.abs(rel), buf);
@@ -1069,11 +1077,10 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
       for (const item of PACKAGE_INCLUDE) {
         const from = path.join(dir, item);
         if (!exists(from)) continue;
-        fs.cpSync(from, path.join(ws.root, item), { recursive: true, force: true, dereference: false, filter: (src) => !fs.lstatSync(src).isSymbolicLink() });
+        fs.cpSync(from, path.join(ws.root, item), { recursive: true, force: true, dereference: false, filter: (src) => !fs.lstatSync(src).isSymbolicLink() && !isRestoredMarker(path.relative(dir, src)) });
         restored++;
       }
     }
-    markRestoredCopy(ws.root, { kind: 'backup', name, mode: 'overlay' }); // an older unsealed backup copied whole folders
     logOp(ws, { phase: 'restore_overlay', from: name, pre_restore_backup: pre.name, restored });
     return { mode: 'overlay', restored_from: name, pre_restore_backup: pre.name, items: restored, note: 'Overlay restore: files created after the backup were left in place. This is not point-in-time recovery.' };
   }, { timeoutMs: 60000 });
@@ -1095,13 +1102,14 @@ function restoreBackupPointInTime(ws, name, { confirm = false } = {}) {
   // Captures made after the backup stay where the runner looks for them: one
   // whose attempt the restored records do not know is kept for inspection and
   // never imported automatically (captures.js).
-  const later = current.filter((rel) => !inBackup.has(rel) && !rel.startsWith('.cr/') && rel !== RESTORED_REL);
-  const changed = current.filter((rel) => inBackup.has(rel) && rel !== RESTORED_REL && sha256(fs.readFileSync(ws.abs(rel))) !== inBackup.get(rel).sha256);
-  const missingNow = [...inBackup.keys()].filter((rel) => !current.includes(rel) && rel !== RESTORED_REL);
+  const later = current.filter((rel) => !inBackup.has(rel) && !rel.startsWith('.cr/') && !isRestoredMarker(rel));
+  const changed = current.filter((rel) => inBackup.has(rel) && !isRestoredMarker(rel) && sha256(fs.readFileSync(ws.abs(rel))) !== inBackup.get(rel).sha256);
+  const missingNow = [...inBackup.keys()].filter((rel) => !current.includes(rel) && !isRestoredMarker(rel));
   const preview = { mode: 'point_in_time', backup: name, backup_created_at: m.created_at, files_to_quarantine: later, files_to_replace: changed, files_to_restore: missingNow };
   if (!confirm) return { ...preview, status: 'preview', note: 'Nothing changed. Re-run with --point-in-time --confirm to apply. Quarantined files are moved, not deleted.' };
   const pre = createBackup(ws, { reason: 'pre-restore' });
   return withLock(ws, 'restore', () => {
+    recoverLocked(ws); // a release sealed before this lock is finished now, so it cannot land on the hold
     markRestoredCopy(ws.root, { kind: 'backup', name, mode: 'point_in_time' }); // first: a restore that dies part way leaves a hold
     const qdir = `backups/quarantine/${fileTs()}`;
     for (const rel of later) {
