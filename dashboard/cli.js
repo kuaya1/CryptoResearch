@@ -214,7 +214,7 @@ Data, jobs and maintenance
   scout leads run | scout leads receipt <receipt_id>
                                          One eligibility turn (CoinGecko listing + GoPlus screen,
                                          at most 5 leads, 10 requests, 20 s); one receipt
-  restored-copy status | restored-copy release --confirm
+  restored-copy status | restored-copy hold --confirm --from <what was restored> | restored-copy release --confirm [--accept <decision_id>]...
                                          a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
                                          (or "desk_backup_key" in ~/.cryptoresearch/secrets.json)
@@ -1342,13 +1342,24 @@ async function run(argv) {
       // requests be collected by their ID, within the limits.
       const research = require('./core/research');
       const rel = research.RESTORED_REL;
-      const cur = research.restoredHold(ws) || require('./core/fsx').readJson(ws.abs(rel), null);
-      if (sub === 'status') return cur ? { restored_copy: true, research_held: cur.research_held !== false, ...cur } : { restored_copy: false, message: 'This workspace is not a restored copy.' };
-      if (sub === 'release') {
-        if (cur && cur.research_held !== false && !flags.confirm) throw Object.assign(new Error('Releasing lets this copy send its queued research jobs and collect accepted requests by their ID, within the limits. Re-run with --confirm.'), { code: 'CONFIRM' });
-        return research.releaseRestoredCopy(ws);
+      let cur;
+      // A marker that does not read holds, and hold can still write it again.
+      try { cur = research.restoredHold(ws) || require('./core/fsx').readJson(ws.abs(rel), null); } catch (err) { if (sub !== 'hold') throw err; cur = { unreadable: true }; }
+      if (sub === 'status') {
+        if (!cur) return { restored_copy: false, message: 'This workspace is not a restored copy.' };
+        const out = { restored_copy: true, research_held: cur.research_held !== false, ...cur };
+        if (out.research_held) { try { out.rulings_needed = require('./core/trader-desk').rulingsNeeded(ws); } catch (err) { out.rulings_needed = null; out.rulings_unreadable = err.message; } }
+        return out;
       }
-      throw Object.assign(new Error('restored-copy status|release --confirm'), { code: 'USAGE' });
+      if (sub === 'hold') {
+        if (!flags.confirm) throw Object.assign(new Error('Holding stops research and every write of the Paper Book in this workspace until it is released. Re-run with --confirm --from <what was restored>.'), { code: 'CONFIRM' });
+        return research.holdRestoredCopy(ws, { from: one(flags.from) });
+      }
+      if (sub === 'release') {
+        if (cur && cur.research_held !== false && !flags.confirm) throw Object.assign(new Error('Releasing lets this copy send its queued research jobs and collect accepted requests by their ID, within the limits, and resumes the Paper Book. Read restored-copy status first. Re-run with --confirm.'), { code: 'CONFIRM' });
+        return research.releaseRestoredCopy(ws, { accept: [].concat(flags.accept || []).filter((x) => typeof x === 'string') });
+      }
+      throw Object.assign(new Error('restored-copy status|hold --confirm --from <what was restored>|release --confirm [--accept <decision_id>]...'), { code: 'USAGE' });
     }
     case 'backup': {
       const ex = require('./core/exporter');

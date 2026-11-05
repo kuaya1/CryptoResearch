@@ -61,6 +61,7 @@ const { validateTradeIntent, exact: { dec, str, mulCeil, isoMs }, INTENT_VERSION
 const TR = require('./trader-rules');
 const fs = require('fs');
 const { OpError, withLock, recoverLocked, assertNotBlocked, OPLOG_REL } = require('./ops');
+const RESTORED_REL = 'config/restored-copy.json';
 const { sha256, appendLine } = require('./fsx');
 
 // @2 (2026-10-29, the cohesion audit's M1, M2, M4 and M7): missing hours
@@ -562,14 +563,35 @@ function readAnchored(ws, read) {
   }
   throw new OpError('INTEGRITY', `${PT.JOURNAL} kept changing while it was read, so the book is not shown from a mix of two. Nothing is read or written until it reads steadily.`);
 }
+// A restored copy on hold (config/restored-copy.json, research.js restoredHold): the
+// book funds nothing, sends no order and applies no hour until Eric rules on what would
+// run and releases it. Its reads stay open so he can. Unreadable is held. The hold does
+// not name its own restore: a disk put back with no marker cannot be told from this one
+// (docs/engineering/PAPER_BOOK_RESTORE.md).
+const HOLD_WORDS = 'This is a restored copy on hold: the book funds nothing, sends no order and applies no hour until Eric rules on what would run and releases it (restored-copy status, then restored-copy release --confirm).';
+function restoreHoldOf(ws) {
+  try { return require('./research').restoredHold(ws); } catch (_) { return { unreadable: true }; }
+}
+// The marker as this read found it. A write made from that read refuses if the marker
+// has changed since, so a decision read before a hold or a release is never carried
+// across it. Taken before anything else is read.
+function holdFenceOf(ws) {
+  try { return fs.readFileSync(ws.abs(RESTORED_REL), 'utf8'); } catch (err) { return err.code === 'ENOENT' ? '' : `unreadable:${err.code}`; }
+}
+function assertNotRestoreHeld(ws, fence) {
+  if (restoreHoldOf(ws)) throw new OpError('RESTORE_HELD', HOLD_WORDS);
+  if (holdFenceOf(ws) !== fence) throw new OpError('RESTORE_HELD', 'The restored-copy hold changed after this read, so nothing is written from it. The next read decides again.');
+}
 // Every write goes through here: under the workspace's lock, after any recovery, the
-// anchor is checked on the book the engine is about to read in that same lock. A write
-// through the desk's own operations waits for the lock, so it cannot come between.
-function underAnchor(ws, write) {
+// hold and the anchor are checked on the book the engine is about to read in that same
+// lock. A write through the desk's own operations waits for the lock, so it cannot come
+// between. The hold is read after recovery, because recovery can complete a hold.
+function underAnchor(ws, write, fence) {
   return withLock(ws, 'trader_anchor', () => {
     assertNotBlocked(ws);
     recoverLocked(ws);
     assertNotBlocked(ws);
+    assertNotRestoreHeld(ws, fence);
     assertAnchor(ws);
     return write();
   });
@@ -592,6 +614,7 @@ function bootstrapBook(ws, { cash_usd, confirm, now } = {}) {
     assertNotBlocked(ws);
     recoverLocked(ws);
     assertNotBlocked(ws);
+    assertNotRestoreHeld(ws, holdFenceOf(ws));
     assertAnchor(ws);
     if (fs.existsSync(ws.abs(PT.JOURNAL)) || fs.existsSync(ws.abs(PT.HEAD))) throw new OpError('INIT_REFUSED', `${PT.JOURNAL} or its head is already on the disk, so this is not a new book. Nothing was funded.`);
     const lost = lostBook(ws, n.now);
@@ -803,10 +826,17 @@ function assess(ws, ctx, g, snap) {
 // effective allowlist reads both.
 function contextOf(ws, now, project) {
   const n = nowOf(now);
+  const fence = holdFenceOf(ws);
+  const hold = restoreHoldOf(ws);
   const { projects, grants } = grantsOf(ws, project);
   const snap = snapshotOf(ws, n.now);
-  return { ...n, s: settingsOf(ws, { grants, projects, snap }), projects, grants, snap };
+  return { ...n, fence, hold, s: settingsOf(ws, { grants, projects, snap }), projects, grants, snap };
 }
+
+// A request as a read shows it while the copy is held: nothing it says is about to
+// happen is happening.
+const heldRead = (ctx, a) => (ctx.hold && a.next ? { ...a, phase: a.phase === 'ready' ? 'waiting' : a.phase, words: `On hold, nothing is sent: ${a.words}` } : a);
+const waitsOf = (ctx) => (ctx.hold ? [HOLD_WORDS, ...ctx.s.waits] : ctx.s.waits);
 
 // Every request Eric's decisions make of the trader, as the book stands now.
 // Reads only.
@@ -815,7 +845,56 @@ function requests(ws, { now, project = null } = {}) {
   return requestsOf(ws, ctx, ctx.snap);
 }
 function requestsOf(ws, ctx, snap) {
-  return { version: VERSION, now: ctx.now, waits: ctx.s.waits, settlement: snap.settlement, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
+  return { version: VERSION, now: ctx.now, waits: waitsOf(ctx), settlement: snap.settlement, requests: ctx.grants.map((g) => { const a = { ...heldRead(ctx, assess(ws, ctx, g, snap)) }; delete a.next; return a; }) };
+}
+
+// What a release would set going, for Eric to rule on first. Reads only. Throws when a
+// history or the book does not read: unknown is not none.
+// - opening: a grant in force whose opening order this book does not hold, unless it can
+//   never pass. It may never have gone, or may have gone after the cutoff and been lost;
+//   the records cannot say which. An order made from it would carry the old ID with a new
+//   life, so it cannot be accepted: Undo it, then decide again after the release.
+// - order, position, cancel, close: work the book already holds under a decision. It can
+//   be accepted, which writes nothing into the book and gives no new authority.
+// - mandate: an armed paper mandate would grant again at once. Turn it off; arming it
+//   again after the release is Eric's own arm-desk.
+// - unmatched_order, broken_project: the records do not match. Put back a matched set.
+function rulingsOf(ws, ctx) {
+  const T = require('./tickets');
+  const items = [];
+  const owned = new Set();
+  for (const g of ctx.grants) {
+    const a = assess(ws, ctx, g, ctx.snap);
+    const opening = intentIdOf(g.decision, 'open');
+    owned.add(opening);
+    for (let n = 1; n <= CLOSE_ATTEMPTS_MAX; n++) owned.add(intentIdOf(g.decision, `close-${n}`));
+    const base = { id: a.decision_id, project_id: a.project_id, decision_id: a.decision_id, decided_at: a.decided_at, phase: a.phase, opening_intent: opening };
+    const asked = ctx.snap.intents.get(opening);
+    if (!asked) {
+      if (!(a.phase === 'not_opened' && a.final === true)) items.push({ ...base, kind: 'opening', may_accept: false, disposition: 'Undo it. To trade it, decide again after the release: a new decision, a new basis and a new intent ID.' });
+      continue;
+    }
+    const kind = a.next ? a.next.kind : a.position && a.position.state === 'open' ? 'position' : LIVE.includes(asked.state) ? 'order' : null;
+    if (kind) items.push({ ...base, kind, may_accept: true, disposition: `Accept it by ID, after checking it. The ${kind} carries on under its own decision; nothing in the book is rewritten.` });
+  }
+  for (const i of ctx.snap.list) {
+    if (owned.has(i.intent_id)) continue;
+    if (LIVE.includes(i.state) || ctx.snap.open.has(`pos-${i.intent_id}`)) items.push({ id: i.intent_id, kind: 'unmatched_order', may_accept: false, opening_intent: i.intent_id, disposition: 'The book holds an order no decision here names, so these records are not a matched set. Put back a matched set.' });
+  }
+  for (const p of require('./projects').listProjects(ws)) {
+    const lines = T.readDecisionsStrict(ws, p.project_id);
+    if (p.broken && lines.some((d) => (d.action === 'approve' || d.action === 'halve') && d.effects && d.effects.trader === 'open')) items.push({ id: p.project_id, kind: 'broken_project', may_accept: false, project_id: p.project_id, disposition: 'This project does not read, and it holds a grant. Repair it or put back a matched set.' });
+  }
+  const m = T.mandateOf(ws, ctx.t);
+  if (m.on || m.held) items.push({ id: `mandate-${m.generation}`, kind: 'mandate', may_accept: false, generation: m.generation, expires_at: m.expires_at, disposition: 'Turn it off (arm-desk off-only, or the desk control). Arm it again after the release if you want it.' });
+  return items;
+}
+function rulingsNeeded(ws, { now } = {}) {
+  return rulingsOf(ws, contextOf(ws, now, null));
+}
+function holdView(ws, ctx) {
+  const base = { held: true, words: HOLD_WORDS, restored_at: ctx.hold.restored_at || null, from: ctx.hold.from || null, unreadable: ctx.hold.unreadable === true };
+  try { return { ...base, rulings_needed: rulingsOf(ws, ctx) }; } catch (err) { return { ...base, rulings_needed: null, rulings_unreadable: String(err && err.message || err).slice(0, 300) }; }
 }
 
 // The book as Outcomes > Paper Book reads it (slot 12c): Eric's settings and
@@ -827,7 +906,7 @@ function view(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   const snap = ctx.snap;
   const res = snap.results;
-  const reqs = ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; });
+  const reqs = ctx.grants.map((g) => { const a = { ...heldRead(ctx, assess(ws, ctx, g, snap)) }; delete a.next; return a; });
   // Every intent a decision makes, its buy and each sell attempt, to its request.
   const owner = new Map();
   for (const r of reqs) {
@@ -853,7 +932,8 @@ function view(ws, { now } = {}) {
   return {
     version: VERSION,
     now: ctx.now,
-    waits: [...ctx.s.waits, ...initWait],
+    waits: [...waitsOf(ctx), ...initWait],
+    ...(ctx.hold ? { restore_hold: holdView(ws, ctx) } : {}),
     book_identity: { anchor: anchor.state, genesis_sha256: first === null ? null : TR.genesisOf(first) },
     allowlist_basis: ctx.s.allowlist_basis,
     settlement: st,
@@ -921,7 +1001,7 @@ function fundOnce(ws, ctx, done, problems, snap = null) {
     return false;
   }
   try {
-    const f = underAnchor(ws, () => PT.fund(ws, { cash_usd: cash, now: ctx.now }));
+    const f = underAnchor(ws, () => PT.fund(ws, { cash_usd: cash, now: ctx.now }), ctx.fence);
     if (f.status === 'saved') done.push({ kind: 'fund', status: 'saved', words: `Funded with ${usd(f.cash_usd)}.` });
     return f.status === 'saved';
   } catch (err) {
@@ -934,13 +1014,19 @@ function step(ws, { now, project = null } = {}) {
   const ctx = contextOf(ws, now, project);
   const done = [];
   const problems = [];
+  // Held when this read began: nothing is attempted, so nothing read now can be
+  // carried past a release.
+  if (ctx.hold) {
+    problems.push({ kind: 'hold', code: 'RESTORE_HELD', words: HOLD_WORDS });
+    return { version: VERSION, now: ctx.now, done, problems, ...requestsOf(ws, ctx, ctx.snap) };
+  }
   const attempt = (what, fn) => { try { const r = fn(); done.push({ ...what, status: r.status, state: r.state || null, words: r.words || null, refusals: r.refusals || null }); return r; } catch (err) { problems.push({ ...what, code: err.code || null, words: String(err && err.message || err).slice(0, 300) }); return null; } };
   let snap = ctx.snap;
   if (fundOnce(ws, ctx, done, problems, snap)) snap = snapshotOf(ws, ctx.now);
   // Read again only when recovery or a reconcile was attempted.
   const before = done.length + problems.length;
-  if (snap.orders.some((o) => o.state === 'RESERVED' || o.state === 'SENT')) attempt({ kind: 'recover' }, () => underAnchor(ws, () => PT.recover(ws, { now: ctx.now })));
-  else for (const o of snap.orders.filter((x) => x.state === 'UNKNOWN')) attempt({ kind: 'reconcile', client_order_id: o.client_order_id }, () => underAnchor(ws, () => PT.reconcile(ws, o.client_order_id, { now: ctx.now })));
+  if (snap.orders.some((o) => o.state === 'RESERVED' || o.state === 'SENT')) attempt({ kind: 'recover' }, () => underAnchor(ws, () => PT.recover(ws, { now: ctx.now }), ctx.fence));
+  else for (const o of snap.orders.filter((x) => x.state === 'UNKNOWN')) attempt({ kind: 'reconcile', client_order_id: o.client_order_id }, () => underAnchor(ws, () => PT.reconcile(ws, o.client_order_id, { now: ctx.now }), ctx.fence));
   if (done.length + problems.length !== before) snap = snapshotOf(ws, ctx.now);
   // Closes and cancels first: they only reduce risk. Then new orders, the
   // oldest decision first. Each pass does one thing not yet tried and reads
@@ -954,8 +1040,8 @@ function step(ws, { now, project = null } = {}) {
     const a = todo.sort((x, y) => first(x) - first(y) || String(x.decided_at).localeCompare(String(y.decided_at)))[0];
     tried.add(key(a));
     const what = { kind: a.next.kind, project_id: a.project_id, decision_id: a.decision_id, receipt_id: a.receipt_id, intent_id: a.next.intent ? a.next.intent.intent_id : null, client_order_id: a.next.client_order_id || null };
-    if (a.next.kind === 'cancel') attempt(what, () => underAnchor(ws, () => PT.cancelOrder(ws, a.next.client_order_id, { now: ctx.now })));
-    else attempt(what, () => underAnchor(ws, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue })));
+    if (a.next.kind === 'cancel') attempt(what, () => underAnchor(ws, () => PT.cancelOrder(ws, a.next.client_order_id, { now: ctx.now }), ctx.fence));
+    else attempt(what, () => underAnchor(ws, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue }), ctx.fence));
     snap = snapshotOf(ws, ctx.now);
   }
   // The requests as the book stands after the last thing recorded: snap was
@@ -970,7 +1056,10 @@ function step(ws, { now, project = null } = {}) {
 // gap, a changed hour or one before the last; the first refusal of a gap,
 // an order or the book's integrity stops the rest of that pair's hours.
 function applyHours(ws, bars, { now } = {}) {
-  const n = nowOf(now);
+  const n = { ...nowOf(now), fence: holdFenceOf(ws) };
+  // A held copy applies no hour, so a stop or a target in these hours is not settled
+  // until the release, when they apply in order. The hours are not lost to the book.
+  if (restoreHoldOf(ws)) return [{ pair: null, hour: null, status: 'refused', code: 'RESTORE_HELD', words: HOLD_WORDS }];
   let anchor;
   try { anchor = assertAnchor(ws); } catch (err) { return [{ pair: null, hour: null, status: 'refused', code: 'INTEGRITY', words: String(err.message) }]; }
   // Before anything is written: hours applied to a lost book would start a new
@@ -994,7 +1083,7 @@ function applyHours(ws, bars, { now } = {}) {
     const held = revokeBefore(ws, pair, b && b.hour, n, out);
     if (held) { out.push({ pair, hour: b && b.hour, status: 'refused', code: 'AUTHORITY_UNKNOWN', words: held }); stoppedPairs.add(pair); continue; }
     try {
-      const r = underAnchor(ws, () => PT.applyBar(ws, b, { now: n.now }));
+      const r = underAnchor(ws, () => PT.applyBar(ws, b, { now: n.now }), n.fence);
       out.push({ pair, hour: b.hour, status: r.status, events: r.events });
     } catch (err) {
       const row = { pair, hour: b && b.hour, status: 'refused', code: err.code || null, words: String(err && err.message || err).slice(0, 300) };
@@ -1037,7 +1126,7 @@ function revokeBefore(ws, pair, hour, n, out) {
     const auth = T.grantAuthority(ws, d, { now: n.t, asOfMs: end });
     if (auth.ok) continue;
     try {
-      const r = underAnchor(ws, () => PT.cancelOrder(ws, i.client_order_id, { now: n.now }));
+      const r = underAnchor(ws, () => PT.cancelOrder(ws, i.client_order_id, { now: n.now }), n.fence);
       out.push({ pair, hour, status: 'cancelled', client_order_id: i.client_order_id, decision_id: d.decision_id, code: auth.code, words: `Before the hour ${hour}: the paper mandate no longer covers ${i.client_order_id} (${auth.words}); its unfilled part is cancelled (${r.status}).` });
     } catch (err) {
       return `${i.client_order_id} could not be cancelled after the paper mandate's authority ended (${String(err && err.message || err).slice(0, 160)}); the hour waits so it cannot fill.`;
@@ -1141,4 +1230,4 @@ function executionFor(ws, decisionId) {
 // beyond its snapshot (the engine's book for each request), is bracketed.
 const anchoredRead = (read) => (ws, ...rest) => readAnchored(ws, () => read(ws, ...rest));
 
-module.exports = { bootstrapBook, bootstrapWords, VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests: anchoredRead(requests), view: anchoredRead(view), wanted: anchoredRead(wanted), pending: anchoredRead(pending), step, applyHours, executionFor };
+module.exports = { rulingsNeeded: anchoredRead(rulingsNeeded), HOLD_WORDS, bootstrapBook, bootstrapWords, VERSION, JOURNAL, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, allowlistOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests: anchoredRead(requests), view: anchoredRead(view), wanted: anchoredRead(wanted), pending: anchoredRead(pending), step, applyHours, executionFor };
