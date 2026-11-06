@@ -48,7 +48,7 @@ flowchart TD
 - **Liveness observes; it never acts.** A poll sighting, a run's outcome class and a heartbeat say whether the runner is alive. None of them retries, releases a claim or changes authority.
 - **The one accepted exception (Q1).** A runner that loses its connection before `complete` leaves its claim `dispatched`. The next run reads it as `reconcile` (exit 3), and Eric reconciles it by hand on Desk Controls. Nothing re-dispatches it, times it out or resubmits it.
 
-## Where each box stands (as of 2026-11-03)
+## Where each box stands (as of 2026-11-06)
 
 Four different things, never read as one another. Merged is not deployed, and deployed is not operating.
 
@@ -68,9 +68,36 @@ Four different things, never read as one another. Merged is not deployed, and de
   - the runner's unattended mode and revision guard (blueprint PR 1), #163 `94cede6`;
   - honest job and housekeeping status (blueprint PR 2), #164 `21a11fa`;
   - this sheet's host legend and the canon sync (blueprint PR 3), #165 `fbfb640`;
-  - Ops-1 defined, suspended: the Render Cron Job's specification and its preflight (blueprint PR 4), #166 `5a8e75b`.
-- **Proposed** (not on `main` until Eric merges): the combined blueprint of 2026-11-02 (#134, closed unmerged).
-- **Deployed: the `/healthz` revision, read at a stated time.** Deployed means the commit on the `revision` line of the online desk's `/healthz`, read back at a stated UTC time, and nothing else: a merge, a Render dashboard or a doctor report is not a readback. Last read: `fbfb640` (#165) at 16:22Z on 2026-11-03. A later merge is not deployed until it is read back the same way.
-- **Operating proof: none yet.** The Ops-1 service is not created. No unattended run on the runner host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation.
+  - Ops-1 defined, suspended: the Render Cron Job's specification and its preflight (blueprint PR 4), #166 `5a8e75b`;
+  - the R0 receipt, #167 `363b536`; the System Atlas, #168 `eb4e0b4`, brought onto the v17 tokens, #172 `9fda7d4`;
+  - the proof verifier, prove-autonomy: its foundation, #169 `1909597`; its readers for B1, B2, B3 and cutover, #171 `9f6d9aa`; forms and a seal for Eric's evidence, #180 `0013682`;
+  - Stage 1.5: GitHub credentials out of the runner's child processes (B1), #173 `1589e0a`; the nine protected files in Invariant 3 (B2), #174 `e672f11`; a PM Cohort record that does not read is refused (B3), #175 `b80f29a`; gross, fees, net and signal against fill (C1), #176 `2e90c49`; GoPlus flags in packets (C2), #177 `d4e2a51`; one real project to the Explorer (C3), #178 `e996ed4`;
+  - fixes: a skipped decision line is warned about, #179 `a9b4496`; the Windows record-lock race, #181 `a08a482`;
+  - stabilization: the single-project revision guard, #182 `a687c2a`; candle status honesty, #183 `3ce579c`; the daily brief's trader clock, #184 `14133bb`; a lost book is never a new one, #185 `a4d91e3`; the book-identity anchor, #186 `1ff60f7`; the restore hold, #187 `362b005`; its acceptance fixes, #188 `f094662`;
+  - this sheet's roadmap, the workspace map and the spec workflow, #189 (this pull request).
+- **Proposed** (not on `main` until Eric merges): the combined blueprint of 2026-11-02 (#134, closed unmerged); the `NEXT_STAGE_*` documents and the roadmap edits to `DESK_STATE.md` in `Documents\CryptoResearch` (local only, no pull request), which are not authority; adopting a protected-file baseline (no pull request).
+- **Deployed: the `/healthz` revision, read at a stated time.** Deployed means the commit on the `revision` line of the online desk's `/healthz`, read back at a stated UTC time, and nothing else: a merge, a Render dashboard or a doctor report is not a readback. Last read: `f094662` (#188) at 02:53Z on 2026-11-06. A later merge is not deployed until it is read back the same way.
+- **Operating proof: none yet.** The Ops-1 service is not created. No unattended run on the runner host, no heartbeat configured and observed, and none of the bounded paper milestones B0–B3 is recorded. Fictional fills and passing tests prove code paths, not operation. The R0 receipt (#167) describes the runner at `5a8e75b`. Code has changed since, so R0 must be repeated (`docs/engineering/AUTONOMY_PROOF_CLI.md`, `baseline_current`).
 
 **Owner questions: answered.** Eric's answers to Q1–Q5 are §3 of `docs/engineering/AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` (#162), and they supersede the proposals in `OWNER_DECISIONS_2026-11-02.md`: Q1 one Render Cron Job (Ops-1) after the PC's supervised proof, one scheduler at a time; Q2 Healthchecks.io, `--max-agents=1`, STALE at 120 minutes; Q3 grouped by decider, researcher model version and execution policy, counts and rows only, no rate before 50 closed positions in a group; Q4 option B, the execution stamp stays `not_recorded` and the protected files untouched; Q5 B0–B3 only after PRs 1–4 are merged and deployed, on NMR if its contract hold has cleared at B0, else a clean-contract candidate already on the desk, by its stored identity, and never a forced fill. Still his and still open: the Law 1 credential. The buy-and-hold baseline comparison is deferred to Stage 2 by his ruling. A5, the PM Cohort's false-empty read, is closed in code by the protected change B3: a record that does not read is an `INTEGRITY` refusal, never a shorter book. Each closed Trader Sim position now states its gross, fees, net and signal against fill in the attribution view (C1), row by row, with no total and no rate. New research and ticket packets now carry GoPlus's contract flags from the saved screen (C2, `packet_mode` `include`): an unanswered check stays unknown, a missing, old or failed screen says so, and nothing is labeled safe. One real project can now go to the Research Explorer, only by the preview's hash from his own terminal (C3); sending the whole desk stays refused, and this work sent no real record.
+
+## The latest merge and deployment
+
+These are two facts with two kinds of evidence.
+
+- **Merge of #188.** Eric merged it at 02:38:37Z on 2026-11-06. The merge commit is `f094662` and the pull request's head was `c42e529`. Evidence: GitHub's record of #188, and `git ls-remote` read `main` at `f094662`. The required `test` check passed on the head (run 42150702698) and on `main` after the merge (run 42151628041): 2116 tests, 2109 pass, 0 fail, 7 skipped. Five skips need a full clone and two need a switch to run.
+- **Deployment of #188.** `/healthz` read `revision f0946622e6432fcaf2d8a44b657f681678837103 (main)`, `started 2026-11-06T02:39:17.254Z`, at 02:53Z on 2026-11-06. It answered 502 while the service restarted, last at 02:39:32Z, and first read the new revision at 02:39:48Z. Supporting, not the readback: Render's deploy `dep-dbmjrbuc6qcc73b6s4u0` (trigger `new_commit`, status `live`, finished 02:39:24Z), and no error or warning log lines from 02:38:30Z to 02:40:14Z.
+- **A merge to `main` deploys.** Render started this deploy 3 seconds after the merge, with no other step. #186 and #187 show the same `new_commit` trigger. Merging is also the decision to deploy unless that setting changes.
+- **What neither shows.** Neither shows that the restore hold has worked on real records. The Render restore steps have never run.
+
+## Roadmap: what comes next, in order
+
+Stabilization stays ahead of autonomy. Live states carry the time they were read. Where no fresh read exists, the last one is dated and the current state is unverified.
+
+1. **Stabilization fixes, #182–#188.** Merged and deployed, not operationally verified. Evidence: above.
+2. **Book-identity anchor: installing `CR_TRADER_BOOK_ANCHOR` on Render.** Code merged (#186). The install is Eric's. **Current state unverified:** last read `unset`, signed in to the live desk, at 03:21Z on 2026-11-05. Procedure, local only: `book-continuity-20261105T011105Z\ACTIVATION-PROCEDURE.md` in the evidence folder.
+3. **Protected-file baseline.** Proposed, not adopted, and Eric's decision. Proposal, local only: `pre-r0-verification-20261105T004312Z\BASELINE-ADOPTION-PROPOSAL.md` in the evidence folder. Nothing on this sheet adopts it.
+4. **Repeat R0.** Not started. Deferred by Eric on 2026-11-05, and running it is his decision. Any later code merge restarts it. Evidence: blueprint §5–6. The runner read `3ce579c` (#183) at 02:53Z on 2026-11-06, behind `main`, so its revision guard refuses it. `CryptoResearch pilot-all` read Disabled at the same time.
+5. **B0, B1, B2, B3.** Not started, behind R0. No receipt is on `main`. Gates G1–G4: blueprint §5.
+6. **Ops-1 cutover.** Defined, not created, behind B3: `docs/engineering/OPS1_RENDER_CRON.md`.
+7. **Law 1 credential.** Open, and Eric's (under "Owner questions" above). The buy-and-hold baseline is deferred to Stage 2 by his ruling.

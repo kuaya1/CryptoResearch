@@ -1,36 +1,106 @@
 # Workspace map
 
-Everything here is plain files. The dashboard, the CLI, the request queue and the scheduled task change them only through `dashboard/core` (lock → validate → stage → atomic move → verify by reading back → operation log). Anything marked **derived** can be deleted and rebuilt with `node dashboard/cli.js index rebuild`.
+This page says where everything is and which file answers which question.
+
+## Start here
+
+| Question | The file that answers it |
+|---|---|
+| What is this, and how do I use it? | `README.md` |
+| What are the rules nobody overrides? | `docs/CONSTITUTION.md` |
+| What must an agent follow? | `CLAUDE.md` and `COWORK-INSTRUCTIONS.md` |
+| How does a change get made and accepted? | `docs/engineering/SPEC_WORKFLOW.md` |
+| What is merged, deployed, proven, and next? | `docs/ONE-SHEET.md` |
+| What is the trading desk's contract, and how did it get here? | `DESK_STATE.md`, dated history |
+| How do I recover the Paper Book after a restore? | `docs/engineering/PAPER_BOOK_RESTORE.md`, and `README.md` "Backups, recovery, exports" |
+| What are the operating proof steps? | `docs/engineering/AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` §6 and `docs/engineering/AUTONOMY_PROOF_CLI.md` |
+
+`atlas/` is a static visual map. It is pinned to the commit it names, so it is not a current status source.
+
+## Where the code lives
+
+Checked against the code at `f094662`.
+
+| Responsibility | Where | Notes |
+|---|---|---|
+| **Starting the desk on the PC** | `Open Dashboard.cmd` → `dashboard/cli.js serve` → `dashboard/server.js` | Binds to 127.0.0.1 only |
+| **Starting the online desk** | `server.js` → `dashboard/hosted.js` | Render's start command. It refuses to start without its settings. `dashboard/frontdoor.js` handles everything a request meets before sign-in |
+| **Commands** | `dashboard/cli.js` | Commands act on the folder `CR_WORKSPACE` names, or else the checkout the code is in |
+| **Browser app source** | `dashboard/web/` | React and Vite. See `dashboard/web/README.md` |
+| **The served build** | `dashboard/public/app/` | Built from `dashboard/web/` with `npm --prefix dashboard/web run build` and committed. The server needs no npm packages |
+| **Accounting and risk (protected)** | `dashboard/core/trade-risk.js`, `paper.js`, `paper-trader.js`, `decimal.js` | The nine protected files are listed in `docs/CONSTITUTION.md` Invariant 3 |
+| **The trader's adapter** | `dashboard/core/trader-desk.js` | The only code outside the tests that requires `paper-trader.js`. It may not require `paper.js`: `dashboard/tests/trader-boundary.test.js` |
+| **The PM Cohort book's readers** | `paper.js`, read by `tickets.js`, `brief-daily.js`, `exporter.js`, `cli.js` and `server.js` | A separate book from the trader's |
+| **Research and orchestration** | `dashboard/core/research.js`, `tickets.js`, `jobs.js`, `pilot-*.js`, `dashboard/scripts/pilot.js` | |
+| **Integrations** | `dashboard/mcp.js`, `oauth.js`, `mcp-wire.js`, `dashboard/core/market.js`, `alchemy.js`, `scout.js`, `explorer.js` | |
+| **Scheduled tasks** | `dashboard/scripts/scheduled-run.cmd` (Hourly), `pilot-task.ps1` (`pilot-all`) | Where they run is on `docs/ONE-SHEET.md` |
+| **Prompts, rubrics, schemas** | `templates/` | See `templates/README.md` for the version in use |
+| **Tests** | `dashboard/tests/` | `node dashboard/cli.js test`, and `npm --prefix dashboard/web run check` for the browser app. CI is `.github/workflows/test.yml` |
+
+## Procedures and evidence
+
+| What | Where | In Git? |
+|---|---|---|
+| Operating procedures and specs | `docs/engineering/` | Yes |
+| Merged receipts of operating steps | `docs/engineering/`, such as `OPERATING_PROOF_R0_2026-11-03.md` | Yes |
+| Reviewed audit reports, dated | `audits/<date>-<name>/` | Only the reports `.gitignore` lists |
+| Raw evidence: logs, bundles, per-run results | `Documents\CryptoResearch-evidence\<name>\` on this PC | No, local only |
+
+Local only, so a fresh checkout does not have them: the records, `archive/`, `CryptoResearch-Mission-and-Architecture-v1.md`, `DESIGN_AND_IA_BLUEPRINT.md`, `UI_MASTER_PLAYBOOK.md`, and most `audits/` evidence. Those files were in `Documents\CryptoResearch` when read on 2026-11-06. A citation of one of them is a pointer to local material, not to something in Git.
+
+## Checkouts and records
+
+These are four different things. Mixing them up is how the wrong code gets edited or a real record gets written.
+
+| What | Where | What it holds | What may touch it |
+|---|---|---|---|
+| **Development checkout** | A new folder for each task, such as `Documents\CryptoResearch-<task>`, made from a named revision | Code and docs at that revision, and no records | That task's edits, on its own branch. Never reused for another task |
+| **Test data** | Temporary `"kind": "test"` workspaces in the system temp folder (`node dashboard/cli.js test`), and the fictional `"kind": "demo"` workspace | Fictional records only | Tests and diagnostics. First check that `CR_WORKSPACE` and `CR_DATA_DIR` name no real records. Skip a diagnostic that writes to the folder it checks unless that folder is fictional: `doctor` writes `.cr/doctor.probe` |
+| **Runner checkout** | `Documents\CryptoResearch-runner`, detached and clean at merged code | The code the two Windows tasks run | Never built in. Moved only as Eric's own runner step (`docs/engineering/AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` §6, R0) |
+| **Production records** | `Documents\CryptoResearch` on this PC, marked by its `workspace.json`, and the Render disk (`CR_DATA_DIR`) for the online desk | Real research, holdings, the books, logs and backups | Only `node dashboard/cli.js` and the desk itself. Never a place to build |
+
+`Documents\CryptoResearch` is also a Git checkout, and it is not a development checkout. As read at 02:50Z on 2026-11-06, it is on `codex/2026-11-02-borrowed-tools-x-grades` at `aa5ad1d` with uncommitted work, which stays as it is. So `Open Dashboard.cmd` and any command started from that folder run that code, not `main`. `\CryptoResearch\Hourly` runs the runner checkout's code against these records, because its wrapper (`%USERPROFILE%\.cryptoresearch\hourly-main.cmd`) sets `CR_WORKSPACE`.
+
+## The layout of a real workspace
+
+This is the layout of `Documents\CryptoResearch` and, online, of the Render disk. Tracked code and docs appear in it as well as records; `.gitignore` decides which is which. Everything here is plain files. The dashboard, the CLI, the request queue and the scheduled task change them only through `dashboard/core` (lock → validate → stage → atomic move → verify by reading back → operation log). Anything marked **derived** can be deleted and rebuilt with `node dashboard/cli.js index rebuild`.
 
 ```
 CryptoResearch/
 ├── workspace.json              Marks this folder as the REAL workspace (id, timezone, home PC). Do not delete.
-├── package.json                Pins Node 24.21.0 for this folder only (Volta); no npm dependencies
+├── package.json                Pins Node 24.21.0 for this folder only (Volta); the server needs no npm packages
 ├── README.md                   How to use it
 ├── COWORK-INSTRUCTIONS.md      Durable instructions for Claude / Cowork sessions (commands, request schemas)
-├── CLAUDE.md                   Short pointer Claude Code loads automatically; points to COWORK-INSTRUCTIONS.md
+├── CLAUDE.md                   The rules Claude Code loads automatically; opens by pointing to COWORK-INSTRUCTIONS.md
+├── CONVERSATIONS.md            Conversation titles, handoffs and what counts as Eric's approval
+├── DESK_STATE.md               The trading desk's contract and dated history
+├── OVERNIGHT_LOG.md            The log of one overnight run (2026-10-29)
 ├── WORKSPACE-MAP.md            This file
 ├── Open Dashboard.cmd          One-click launcher (127.0.0.1:4729)
 ├── Open Demo Dashboard.cmd     Fictional demo workspace (127.0.0.1:4739)
-├── archive/                    Unique files kept from retired copies (2026-10-02-consolidation: zip, manifest, README)
-├── audits/                     Audit reports and their status (findings, migration, validation, screenshots)
+├── archive/                    Local only. Unique files kept from retired copies (2026-10-02-consolidation: zip, manifest, README)
+├── audits/                     Dated audit reports; only the reports .gitignore lists are in Git
+├── docs/                       CONSTITUTION.md, ONE-SHEET.md, engineering/ (procedures, specs, receipts), history/
+├── atlas/                      The System Atlas: a static map and PDF, pinned to the commit it names
+├── .github/                    CI (workflows/test.yml), the scout schedule, and copies of the rulesets
+├── .claude/                    The pilot's sub-agents and commands
 ├── supabase/migrations/        SQL of the optional Research Explorer database (schema only: no data, no keys);
 │                               applied versions are named <timestamp>_<name>.sql; never edit an applied one
 ├── config/
 │   ├── settings.json           Only your overrides (thresholds, refresh, labels, research models and budget)
 │   └── ui-state.json           Dashboard view preferences (columns, sort, filters); not a record
 ├── templates/                  Versioned. Never edit a published version in place; publish a new @N
-│   ├── research-prompt.v5.md       Canonical research prompt (cr-research-prompt@5: one decision question, summary first,
-│   │                               six research sections, sector focus from the scoring profile); v1-v4 kept for old runs
-│   ├── grading-appendix.v5.md      Appendix with the JSON contract (cr.report.v2): thirteen category grades with confidence,
-│   │                               code_review, chart_cycle, independent_judgment, scenarios with unknowns allowed (v1-v4 kept)
-│   ├── execution/                  Execution notes for one model (chatgpt.v1.md = cr-execution-chatgpt@1): how it works
+│   ├── research-prompt.v6.md       Research prompt for new runs (cr-research-prompt@6: @5 with three tests every model answers;
+│   │                               templates/README.md has the detail); v1-v5 kept for old runs
+│   ├── grading-appendix.v6.md      Appendix with the JSON contract (cr.report.v2): thirteen category grades with confidence,
+│   │                               code_review, chart_cycle, independent_judgment, scenarios with unknowns allowed (v1-v5 kept)
+│   ├── execution/                  Execution notes for one model (chatgpt.v2.md = cr-execution-chatgpt@2): how it works
 │   │                               through the unchanged prompt; frozen per job next to prompt.md (execution.<model>.md)
 │   ├── appendix/                   Standalone appendix per scoring profile, for your own prompts
 │   ├── rubrics/                    cr-grading@1 (weights, labels, risk panel) + scoring profiles: @2 (thirteen category
 │   │                               grades, used by new research) and @1 (kept for the reports that declare it)
 │   │   └── RUBRIC-LOCK.json        SHA-256 pin per rubric/profile version; unpinned or altered = no app grade
-│   ├── schemas/                    JSON Schemas: report (v2 for cr-research-prompt@5, v1 for earlier reports), project,
+│   ├── schemas/                    JSON Schemas: report (v2 from cr-research-prompt@5 on, v1 for earlier reports), project,
 │   │                               transaction, request, journal, events
 │   └── source-prompts/             Your original prompts (Huma Finance Run 2 is saved here)
 ├── inbox/
@@ -116,8 +186,9 @@ CryptoResearch/
 │   └── offsite/                    Verified copies of the online desk pulled by this PC (offsite pull),
 │                                   with OFFSITE-INDEX.json; or the folder set with offsite setup --to
 ├── server.js                   Render's start command for the online desk (runs dashboard/hosted.js)
-├── dashboard/                  App code (Node 24 LTS pinned; Node 20+ works; no dependencies, no build step)
-│   ├── cli.js  server.js  hosted.js  oauth.js  mcp.js  core/  public/  scripts/  tests/  fixtures/
+├── dashboard/                  App code (Node 24 LTS pinned; Node 20+ works). The server has no npm dependencies; the
+│   │                           browser app in web/ does, and its build is committed to public/app/
+│   ├── cli.js  server.js  hosted.js  frontdoor.js  oauth.js  mcp.js  mcp-wire.js  core/  web/  public/  scripts/  tests/  fixtures/
 │   ├── index/index.json        DERIVED cache of the dashboard view
 │   └── demo-workspace/         DERIVED fictional demo (rebuild: node dashboard/cli.js demo build)
 └── .cr/                        Internals: write lock, leases/, staging, generation.json, blocked.json,

@@ -4,7 +4,7 @@ This folder is Eric's CryptoResearch workspace: a private crypto watchlist, rese
 
 Eric dictates most requests. Read for intent, ignore filler, and when he restarts a sentence, the last version is the real one. A spoken project name or ticker is a lead, not an identity. For example, "Huma" usually means Huma Finance, but Humanity (H) also matches. Resolve the identity as described in section 3.
 
-Why this desk exists, and its limits, are in [CryptoResearch-Mission-and-Architecture-v1.md](CryptoResearch-Mission-and-Architecture-v1.md). In short: Eric picks the projects; Claude, GPT and Gemini assess them independently; his own judgment stays separate; research, watchlist and holdings never mix; nothing trades. His style is **position trading**: he usually holds **3 to 4 months**, with a **4-month planning ceiling** (a longer hold is an explicit long-term exception), read against Bitcoin's trend and whether altcoins participate.
+Why this desk exists, and its limits, are in [docs/CONSTITUTION.md](docs/CONSTITUTION.md) and the North Star in [DESK_STATE.md](DESK_STATE.md). The original mission document, `CryptoResearch-Mission-and-Architecture-v1.md`, is local only: it is on Eric's PC and not in Git. In short: Eric picks the projects; Claude, GPT and Gemini assess them independently; his own judgment stays separate; research, watchlist and holdings never mix; nothing trades. His style is **position trading**: he usually holds **3 to 4 months**, with a **4-month planning ceiling** (a longer hold is an explicit long-term exception), read against Bitcoin's trend and whether altcoins participate.
 
 All commands below run from this folder: `node dashboard/cli.js <command> … --json`. On Windows PowerShell, continue long lines with a backtick instead of `\`.
 
