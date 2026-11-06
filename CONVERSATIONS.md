@@ -41,7 +41,7 @@ There is still only one.
 - Make the handoff below the first message. Its approved scope is Eric's own words or `DESK_STATE.md` item numbers.
 
 **Work**
-- Follow `CLAUDE.md`: edit in this folder and run the tests.
+- Follow `CLAUDE.md`: work in one clean checkout made for this task from a named revision, and run the tests.
 - Commit and push only when Eric asks.
 
 **Close**

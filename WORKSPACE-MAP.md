@@ -1,5 +1,18 @@
 # Workspace map
 
+## Checkouts and records
+
+These are four different things. Mixing them up is how the wrong code gets edited or a real record gets written.
+
+| What | Where | What it holds | What may touch it |
+|---|---|---|---|
+| **Development checkout** | A new folder for each task, such as `Documents\CryptoResearch-<task>`, made from a named revision | Code and docs at that revision, and no records | That task's edits, on its own branch. Never reused for another task |
+| **Test data** | Temporary `"kind": "test"` workspaces in the system temp folder (`node dashboard/cli.js test`), and the fictional `"kind": "demo"` workspace | Fictional records only | Tests and diagnostics. First check that `CR_WORKSPACE` and `CR_DATA_DIR` name no real records. Skip a diagnostic that writes to the folder it checks unless that folder is fictional: `doctor` writes `.cr/doctor.probe` |
+| **Runner checkout** | `Documents\CryptoResearch-runner`, detached and clean at merged code | The code the two Windows tasks run | Never built in. Moved only as Eric's own runner step (`docs/engineering/AUTONOMY_COMPLETION_BLUEPRINT_2026-11-03.md` §6, R0) |
+| **Production records** | `Documents\CryptoResearch` on this PC, marked by its `workspace.json`, and the Render disk (`CR_DATA_DIR`) for the online desk | Real research, holdings, the books, logs and backups | Only `node dashboard/cli.js` and the desk itself. Never a place to build |
+
+`Documents\CryptoResearch` is also a Git checkout, and it is not a development checkout. As read at 02:50Z on 2026-11-06, it is on `codex/2026-11-02-borrowed-tools-x-grades` at `aa5ad1d` with uncommitted work, which stays as it is. So `Open Dashboard.cmd` and any command started from that folder run that code, not `main`. `\CryptoResearch\Hourly` runs the runner checkout's code against these records, because its wrapper (`%USERPROFILE%\.cryptoresearch\hourly-main.cmd`) sets `CR_WORKSPACE`.
+
 Everything here is plain files. The dashboard, the CLI, the request queue and the scheduled task change them only through `dashboard/core` (lock → validate → stage → atomic move → verify by reading back → operation log). Anything marked **derived** can be deleted and rebuilt with `node dashboard/cli.js index rebuild`.
 
 ```
