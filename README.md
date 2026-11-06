@@ -1,6 +1,6 @@
 # CryptoResearch
 
-Your private crypto watchlist, research record and portfolio log. It lives in this folder on your PC, and a local dashboard displays it. Why it exists and what it will not do: [CryptoResearch-Mission-and-Architecture-v1.md](CryptoResearch-Mission-and-Architecture-v1.md).
+Your private crypto watchlist, research record and portfolio log. It lives in this folder on your PC, and a local dashboard displays it. Why it exists and what it will not do: [docs/CONSTITUTION.md](docs/CONSTITUTION.md) and the North Star in [DESK_STATE.md](DESK_STATE.md). The original mission document, `CryptoResearch-Mission-and-Architecture-v1.md`, is local only: it is on your PC and not in Git.
 
 - **The files are the record.** Reports, scores, notes and transactions are plain Markdown and JSON in this folder. The dashboard reads and writes them through one validated, journaled path; it keeps no hidden database.
 - **One way in for every change.** Dashboard forms, the command line Cowork runs, the request queue and the inbox folders all use the same code.
@@ -280,7 +280,7 @@ An optional page (**Explorer** in the nav) that compares one category grade acro
 
 ## Files
 
-See [WORKSPACE-MAP.md](WORKSPACE-MAP.md) for every folder and file convention, and `audits/` for audit reports and their status.
+Start at [WORKSPACE-MAP.md](WORKSPACE-MAP.md): where everything lives, which file answers which question, and every folder and file convention. [docs/ONE-SHEET.md](docs/ONE-SHEET.md) has current status and what comes next. `audits/` holds dated audit reports.
 
 ## Limits
 

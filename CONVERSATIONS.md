@@ -2,7 +2,7 @@
 
 Eric's title system, 2026-10-25. It covers Claude conversations about this desk: desktop and cloud sessions, Cowork and claude.ai chats.
 
-**The repository is the record.** Approved goals and the backlog are in `DESK_STATE.md` and `audits/2026-10-24-30-day-blueprint/README.md`. The evidence is in commits, PRs, CI runs, audit write-ups and the desk's own receipts. A conversation is a place to work. It shares no history with any other conversation, and nothing said in one counts as decided until it is written here.
+**The repository is the record.** Approved goals are in `DESK_STATE.md`. Current status and what comes next are on `docs/ONE-SHEET.md`. The backlog was retired on 2026-10-28 and is frozen in `docs/history/autonomous-build-backlog.md`, and `audits/2026-10-24-30-day-blueprint/README.md` is dated history. The evidence is in commits, PRs, CI runs, audit write-ups and the desk's own receipts. A conversation is a place to work. It shares no history with any other conversation, and nothing said in one counts as decided until it is written here.
 
 ## Titles
 
@@ -38,7 +38,7 @@ There is still only one.
 
 **Start**
 - Open a fresh conversation titled `BUILD — <outcome>`.
-- Make the handoff below the first message. Its approved scope is Eric's own words or `DESK_STATE.md` item numbers.
+- Make the handoff below the first message. Its approved scope is Eric's own words or the `DESK_STATE.md` section that records them.
 
 **Work**
 - Follow `CLAUDE.md`: work in one clean checkout made for this task from a named revision, and run the tests.
@@ -72,7 +72,7 @@ There is still only one.
 
 ```
 Goal:
-Approved scope:      Eric's words or DESK_STATE.md item numbers, nothing else
+Approved scope:      Eric's words or the DESK_STATE.md section that records them, nothing else
 Revision / PR:
 Verified evidence:   commands run and their results, CI runs, desk receipts
 Unresolved:
