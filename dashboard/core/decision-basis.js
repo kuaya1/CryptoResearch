@@ -597,4 +597,10 @@ function viewOf(ws, pid, decisionId) {
   };
 }
 
-module.exports = { BASIS_VERSION, UNAVAILABLE_VERSION, DIGEST_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, digestRel, buildBasis, unavailableBasis, stageRecord, stopsProject, identityProblems, describe, stateOf, ledgerOf, verifiedRecord, viewOf, executionOf };
+// What Eric's ruling on a basis that reads unverified is bound to: these exact records, as
+// read. It says nothing of whether the basis is true, and is never a digest of record.
+function rulingTokenOf(view) {
+  return sha256(JSON.stringify({ label: view.label, words: view.words || null, decision: view.decision, basis: view.basis })).slice(0, 32);
+}
+
+module.exports = { rulingTokenOf, BASIS_VERSION, UNAVAILABLE_VERSION, DIGEST_VERSION, VIEW_VERSION, SPREAD_KIND, basisRel, digestRel, buildBasis, unavailableBasis, stageRecord, stopsProject, identityProblems, describe, stateOf, ledgerOf, verifiedRecord, viewOf, executionOf };

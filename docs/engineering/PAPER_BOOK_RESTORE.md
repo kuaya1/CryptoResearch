@@ -15,7 +15,9 @@ It is the restored-copy marker, `config/restored-copy.json`, and its one release
 - recovery and reconciliation of an order caught mid-send
 - every hour applied to the book, so **stops and targets pause**
 
-**These stay open:** every read, and decisions. A decision made while held is recorded, sends nothing, and is on the list for the release.
+**A decision made while held adds nothing to either book.** It is recorded and on the list for the release. It sends no order and opens no PM Cohort position; the PM Cohort answer reads `held`, and so does the repair (`tickets reconcile`).
+
+**These stay open:** every read, and decisions, including Undo. Undo voids a PM Cohort position while held, because it takes exposure off and it is the ruling a release asks for.
 
 **Reads say it.** `GET /api/paper/trader` carries `restore_hold`, with what is waiting in `rulings_needed`. `waits` opens with the hold. A request that would act reads "On hold, nothing is sent", and never `ready`. A marker that does not read holds.
 
@@ -23,13 +25,15 @@ It is the restored-copy marker, `config/restored-copy.json`, and its one release
 
 | Route | Hold | Tested |
 |---|---|---|
-| `backup restore <name> --to <empty folder>` | Written by the restore | Yes |
-| `offsite drill`, and a package restored into a new folder | Written by the restore | Yes |
-| `backup restore <name> --overlay --confirm` | Written first and last. A marker in the backup never replaces it. A restore that dies part way leaves it | Yes |
-| `backup restore <name> --point-in-time --confirm` | Written first. A marker in the backup never replaces it. A restore that dies part way leaves it | Yes |
+| `backup restore <name> --to <empty folder>` | Written first, before any file. A marker in the backup is never copied | Yes, including a killed process |
+| `offsite drill`, and a package restored into a new folder | Written first, before any file. A marker in the package is never copied | Yes: the drill itself, and `restorePackage`, including a killed process |
+| `backup restore <name> --overlay --confirm`, sealed or an older unsealed backup | Written first. A marker in the backup is never copied, so there is no last step to reach. A restore that dies part way leaves it | Yes, including a killed process at each stage of an unsealed copy |
+| `backup restore <name> --point-in-time --confirm` | Written first. A marker in the backup is never copied. A restore that dies part way leaves it | Yes, including a killed process |
 | **A Render disk restore, or files copied by hand** | **None.** The on-disk marker cannot survive a restore of the disk it sits on. See below | No: procedure only |
 
-An overlay leaves later files in place, so a venue file newer than the backup refuses as INTEGRITY until it is dealt with. Prefer point-in-time.
+A restore into a new folder that dies leaves a held, partial folder. Delete it and restore again. An overlay leaves later files in place, so a venue file newer than the backup refuses as INTEGRITY until it is dealt with. Prefer point-in-time. An older unsealed backup cannot be checked file by file, and only an overlay takes one.
+
+These are tested by killing a real process on fictional records, on this PC, on Node 24.21.0 (the pinned version) and on Node 20.20.2, which spells long Windows paths differently to an older copy's filter. No restore has been killed on the Render disk.
 
 ## Not detected
 
@@ -52,7 +56,7 @@ A release cannot be made during step 2 to 5: `rulingsNeeded` refuses under a non
 
 ## Reconcile, then release
 
-`node dashboard/cli.js restored-copy status` lists every ruling. The release refuses until each is made, reading the records again under the workspace lock. So a decision recorded a moment earlier is caught, and nothing can land between the check and the release.
+`node dashboard/cli.js restored-copy status` lists every ruling. The release refuses until each is made, reading the records again under the workspace lock. So a decision recorded a moment earlier is caught, and nothing can land between the check and the release. `status` itself is a read outside that lock. With the anchor established it is read again if the book changes under it, and refused if the book keeps changing. **With no anchor set it reads once,** so read it again before you rely on it. The release is not affected.
 
 | On the list | What it is | Your ruling | Can `--accept` it? |
 |---|---|---|---|
@@ -61,9 +65,10 @@ A release cannot be made during step 2 to 5: `rulingsNeeded` refuses under a non
 | `position` | A position open at the cutoff, with its stop and target | Check it against the gap, below, then accept it | Yes |
 | `cancel`, `close` | The next thing the book would do under a decision already on record | Check it, then accept it | Yes |
 | `mandate` | A paper mandate still armed, which would grant again at once | **Turn it off** (`arm-desk --mandate-off`, or the desk control). Arm it again after the release if you want it | **No** |
+| `pm_cohort` | A grant in force with nothing else waiting, whose PM Cohort position is not on record. The repair would open it after the release, priced at the decision | Accept it, or Undo it | Yes |
 | `unmatched_order`, `broken_project` | The records do not match | Put back a matched set, or repair the project | **No** |
 
-A grant that can never pass (a mandate grant whose authority is revoked, a horizon that has ended) is not listed. A history or a book that does not read refuses the release: unknown is not none.
+A grant that can never pass (a mandate grant whose authority is revoked, a horizon that has ended) is not listed, unless its PM Cohort position is what waits. An item with `pm_cohort_missing` has the same gap beside other work. A history, a book or a PM Cohort book that does not read refuses the release: unknown is not none.
 
 ```
 node dashboard/cli.js restored-copy release --confirm --accept <decision_id> --accept <decision_id>
@@ -78,12 +83,33 @@ A release that fails or dies leaves the hold. The marker is written once, whole,
 - It writes only the marker. The journal and the decisions keep the same bytes.
 - It never makes or changes an intent, and it extends no validity. An accepted order expires at its own time.
 - It does not approve anything. The engine reads the accepted work again, through every gate it always applies.
-- It checks the decision's basis. A basis that does not read, or reads as `unverified` or `unavailable`, refuses the release until the record is restored. A decision from before the digest ledger, or one standing on a report with no recorded SHA-256, can read `unverified` for good. If such a decision holds work in the book, the release stays blocked. There is no override, and getting past it needs a separate ruling.
+- It checks the decision's basis. A basis that does not read, or reads as `unavailable`, refuses the release until the record is restored. One that reads `unverified` refuses it until you rule on it, below.
 - A name that is not on the list refuses the whole release.
 
 **An opening cannot be accepted.** Sending it would carry the old intent ID with a new `created_at`, a new reference price and a new `valid_until`. If an order under that ID went after the cutoff, that is a second, different order under one immutable ID. So the only way on is the existing one: **Undo it, release, and decide again.** That is a new decision, with its own Decision Basis frozen in the same operation and a new intent ID. A live mandate is the same: arming it again is `arm-desk`, Eric's own act.
 
-**One limit to accept.** A `close` is a new sell, numbered by the sells the restored book holds. If `close-1` went after the cutoff and was lost, the next sell reuses that ID. The book holds only the new one, and it only reduces risk, so this is allowed. Check for it when you accept a close.
+**A sell after a release has its own ID.** A sell is a new order made now, so it may differ from whatever went in the lost timeline: a different price, a different time, a different quantity. Its ID comes from the decision, the attempt and this release's marker, so no sell reuses an ID the lost timeline may have sent. A workspace never restored keeps the plain numbering.
+
+Each release starts its own count of sell attempts, so the limit of attempts is per release. A sell from an earlier release that is still live stays that position's sell, and no second one goes.
+
+Within one book the engine holds the rest: the same body again changes nothing, another body under an ID is refused as CONFLICT, a second live sell is refused, a sell of a closed position is refused, and a sell fills whole, for what the position holds. A venue record surviving from the lost timeline refuses the book as INTEGRITY.
+
+### A basis that cannot be verified
+
+A decision from before the digest ledger, or one standing on a report with no recorded SHA-256, can read `unverified` for good, and no record can be restored to fix it. You can rule on it. **The ruling does not verify anything.**
+
+`restored-copy status` shows each item's `basis`, with a `ruling_token` when a ruling can be taken. Then:
+
+```
+node dashboard/cli.js restored-copy release --confirm --accept <decision_id> --basis-ruling <decision_id>:<ruling_token> --because "<why you stand behind this work without it>"
+```
+
+- **One decision at a time.** There is no wildcard and no way to rule on everything. Each needs its own `--accept`, its own `--basis-ruling` and a reason.
+- **These exact records.** The token is taken from the decision and its basis as read. If either changes, the ruling refuses.
+- **Only work that can no longer add to a position:** an open position whose buy has ended, a cancel, a close. A live buy, an opening or a missing PM Cohort position takes no ruling. Undo the decision, then rule on what is left. An opening with nothing behind it needs no ruling once undone.
+- **Only `unverified`.** A basis that does not match its records is INTEGRITY, ruling or no ruling. Restore it. `unavailable` is refused too, and a basis that stands has nothing to rule on.
+- **Nothing is rewritten.** The decision, the basis and the journal keep their bytes, no digest is made, and the basis still reads `unverified` afterward. The ruling is kept in the marker, as `basis_rulings`, with your reason. Copy it into your record outside the desk, because a later hold replaces the marker.
+- **On the command line only.** No route takes it.
 
 ## Stop-losses pause while held
 
@@ -107,4 +133,12 @@ Orders and fills after the cutoff are gone from the book and are not rebuilt. Do
 
 ## Not covered: the PM Cohort book
 
-**The PM Cohort paper book (`core/paper.js`) is a separate book, and this hold does not reach it.** `paper.js` is protected. A decision recorded during the hold can still open its position, and a test records that it does. It has no orders, no venue and no market effect, and it is restored from the same copy. Reconcile it by hand. Changing this needs a protected-file exception, which has not been proposed.
+The PM Cohort paper book (`core/paper.js`) is a separate book and `paper.js` is protected, so the guard is in its one caller, `tickets.js` `paperBook`, under the workspace lock. **No position opens while held, and none opens across a marker that changed after the decision began.** No protected file changed.
+
+**What the hold still does not do for it:**
+
+- Undo voids while held, by design. Everything else this book records is its own, written only here.
+- It has no anchor or chain of its own. It is restored from the same copy, and whatever it held after the cutoff is gone. A decision on record whose position was lost is listed for the release, and the repair opens it afterward, priced at the decision. It opens nothing a decision does not name, and rebuilds no void it never saw.
+- Like the rest of the hold, the guard reads the marker. A disk put back with no marker is not held here either.
+
+Reconcile it by hand against your record of the cutoff.

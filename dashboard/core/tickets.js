@@ -28,7 +28,7 @@
 // money or calls a model or a paid provider.
 
 const fs = require('fs');
-const { runOp, withLock, OpError } = require('./ops');
+const { runOp, withLock, recoverLocked, OpError } = require('./ops');
 const { readJson, listDir, sha256, jsonText } = require('./fsx');
 const { compactTs, randomId, isProjectId } = require('./ids');
 
@@ -1877,6 +1877,9 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
   const text = note === null || note === undefined ? null : String(note).replace(/\r\n/g, '\n').trim().slice(0, 1000) || null;
   const reqId = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
   const rel = decisionsRel(pid);
+  // The restored-copy marker as this decision found it, before anything is read: its
+  // PM Cohort position is not opened across a hold or a release (paperBook).
+  const fence = require('./trader-desk').holdFenceOf(ws);
   const held = action === 'pass' ? heldOf(ws, pid, Date.now()) === true : false;
   let proj = null;
   const project = () => proj || (proj = require('./projects').getProject(ws, pid));
@@ -2027,7 +2030,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null, basis: DB.describe(basis, full) };
   });
   const res = out.result || {};
-  if (res.live) Object.assign(res, effectsOf(ws, pid, rid, res.decision, res.undone));
+  if (res.live) Object.assign(res, effectsOf(ws, pid, rid, res.decision, res.undone, fence));
   return out;
 }
 
@@ -2036,7 +2039,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
 // of the same request (or the same decision again) completes what a failure
 // left undone and duplicates nothing. A failure here is told, never allowed
 // to lose or block the decision.
-function effectsOf(ws, pid, rid, d, undone) {
+function effectsOf(ws, pid, rid, d, undone, fence = null) {
   const out = {};
   const projects = require('./projects');
   const step = (fn) => { try { return fn(); } catch (err) { return { status: 'failed', error: String(err && err.message || err).slice(0, 200) }; } };
@@ -2052,7 +2055,7 @@ function effectsOf(ws, pid, rid, d, undone) {
   // The PM Cohort book only where the decision asks it (effects.paper); a
   // line written before effects existed keeps the action-based rule.
   const asked = d.effects && typeof d.effects === 'object' ? d.effects.paper === 'open' || d.effects.paper === 'void' : true;
-  out.paper = asked ? paperBook(ws, pid, rid, d, undone) : null;
+  out.paper = asked ? paperBook(ws, pid, rid, d, undone, fence) : null;
   out.trader = traderBook(ws, pid, d);
   return out;
 }
@@ -2084,13 +2087,24 @@ function traderBook(ws, pid, d) {
 }
 
 // A decision that grants risk opens a paper position (core/paper.js, kept
-// apart from the portfolio); Undo voids it.
-function paperBook(ws, pid, rid, d, undone) {
+// apart from the portfolio); Undo voids it. A restored copy on hold opens none: the check
+// and the open share the workspace lock, after any recovery, because recovery can complete
+// a hold. A position is also not opened across a marker that changed since the decision
+// began. Undo still voids while held: it takes exposure off, and it is the ruling a
+// release asks for. The decision stays on record and the release lists what it held back.
+function paperBook(ws, pid, rid, d, undone, fence = null) {
   try {
     const paper = require('./paper');
     if (d.action === 'approve' || d.action === 'halve') {
       const receipt = readJson(ws.abs(receiptRel(pid, rid)), null);
-      return receipt ? paper.openForDecision(ws, require('./projects').getProject(ws, pid), { ...receipt, project_id: pid }, d) : { status: 'skipped' };
+      if (!receipt) return { status: 'skipped' };
+      return withLock(ws, `paper open ${pid}`, () => {
+        recoverLocked(ws);
+        const TD = require('./trader-desk');
+        if (TD.restoreHoldOf(ws)) return { status: 'held', code: 'RESTORE_HELD', words: 'This is a restored copy on hold: the PM Cohort position is not opened. The decision is on record and on the list for the release.' };
+        if (fence !== null && TD.holdFenceOf(ws) !== fence) return { status: 'held', code: 'RESTORE_HELD', words: 'The restored-copy hold changed after this decision began, so the PM Cohort position is not opened from it. The repair can complete it.' };
+        return paper.openForDecision(ws, require('./projects').getProject(ws, pid), { ...receipt, project_id: pid }, d);
+      });
     }
     if (d.action === 'undo' && undone && (undone.action === 'approve' || undone.action === 'halve')) return paper.voidForDecision(ws, undone.decision_id, `The ${undone.action} decision on ${rid} was undone.`);
     return null;
@@ -2206,7 +2220,7 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
         const opened = openFor(inForce.decision_id);
         // A position saved with no entry price is complete, qualified; never opened again.
         if (opened) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...(opened.entry && opened.entry.status === 'no_entry_price' ? { qualified: 'no_entry_price' } : {}) });
-        else if (dryRun) out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', status: 'would_open' });
+        else if (dryRun) out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', status: require('./trader-desk').restoreHoldOf(ws) ? 'held' : 'would_open' });
         else out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...openStillInForce(ws, pid, rid, inForce) });
       }
       if (inForce.action === 'pass' && inForce.archive === 'archived') {
@@ -2251,16 +2265,17 @@ function reconcileDesk(ws, { dryRun = false } = {}) {
   const order = (a, b) => a.project_id.localeCompare(b.project_id) || a.decision_id.localeCompare(b.decision_id) || a.step.localeCompare(b.step);
   const completed = r.completed.slice().sort(order);
   const failed = completed.filter((x) => x.status === 'failed');
+  const held = completed.filter((x) => x.status === 'held');
   return {
     format: RECONCILE_FORMAT,
     dry_run: r.dry_run,
     completed,
     already_complete: r.already_complete.slice().sort(order),
     named: r.named.slice().sort(order),
-    counts: { completed: completed.length - failed.length, failed: failed.length, already_complete: r.already_complete.length, named: r.named.length },
+    counts: { completed: completed.length - failed.length - held.length, failed: failed.length, already_complete: r.already_complete.length, named: r.named.length, ...(held.length ? { held: held.length } : {}) },
     words: dryRun
-      ? `${completed.length} step${completed.length === 1 ? '' : 's'} would be completed; ${r.named.length} named for you.`
-      : `${completed.length - failed.length} step${completed.length - failed.length === 1 ? '' : 's'} completed${failed.length ? `, ${failed.length} failed` : ''}; ${r.named.length} named for you (an archive is never done here).`,
+      ? `${completed.length - held.length} step${completed.length - held.length === 1 ? '' : 's'} would be completed${held.length ? `, ${held.length} held by the restored copy` : ''}; ${r.named.length} named for you.`
+      : `${completed.length - failed.length - held.length} step${completed.length - failed.length - held.length === 1 ? '' : 's'} completed${failed.length ? `, ${failed.length} failed` : ''}${held.length ? `, ${held.length} held by the restored copy` : ''}; ${r.named.length} named for you (an archive is never done here).`,
   };
 }
 
@@ -2387,6 +2402,12 @@ function paperStateOf(ws, decision) {
   } catch (_) {
     return 'unreadable';
   }
+}
+// The decisions with a PM Cohort position on record, for the desk's adapter, which does not
+// reach that book itself (trader-boundary.test.js). A book that does not read throws: unknown
+// is not none.
+function paperOpenedIds(ws) {
+  return new Set(require('./paper').readRecords(ws).filter((l) => l.event === 'open').map((l) => l.decision_id));
 }
 
 function statusOf(decision, invalidation) {
@@ -3429,6 +3450,8 @@ module.exports = {
   decide,
   reconcileEffects,
   reconcileDesk,
+  paperWanted,
+  paperOpenedIds,
   RECONCILE_FORMAT,
   invalidationOf,
   view,
