@@ -152,7 +152,7 @@ const closeLimit = (price) => str((dec(price) * (BPS - BigInt(SLIPPAGE_BPS)) + B
 // cash among them (paper-trader.js reserveIntent: the order's cash and fee at
 // its limit, committed when it is reserved), in words.
 const UPPER = ['risk_cap', 'drawdown', 'gate_cap', 'pm_cap', 'notional_cap', 'exit_cap', 'cash'];
-const BINDING_WORDS = { risk_cap: 'the risk per trade', drawdown: 'the 24-hour drawdown ceiling', gate_cap: 'the gate\'s suggested risk', pm_cap: 'your approved risk', notional_cap: 'the notional cap', exit_cap: 'the exit measurement\'s size', cash: 'the free cash' };
+const BINDING_WORDS = { risk_cap: 'the risk per trade', drawdown: 'the 24-hour drawdown ceiling', gate_cap: 'the gate\'s suggested risk', pm_cap: 'your approved risk', notional_cap: 'the notional cap', exit_cap: 'the exit measurement\'s size', cash: 'the free cash', quote: 'the largest saved exit quote the contract gate can prove' };
 
 // An opening intent checked as the book will check it (cr-trade-risk@2 over
 // the same book, and the book's cash), with its risk ceiling the largest at
@@ -192,6 +192,35 @@ function fit(intent, bk, rules, venue) {
   // What binds: the limits the next step of risk breaks.
   const binding = [...new Set(check(lo + 1n).refusals.filter((x) => UPPER.includes(x.rule)).map((x) => x.rule))];
   return { ok: true, intent: best.it, sizing: best.sizing, binding, refusals: [] };
+}
+
+// CG-14 holds the risk-sized order (enforce): the largest quantity, at or
+// under it, that a saved concentrated-pool quote was asked for exactly and
+// whose exit the guard proves, re-fitted by the engine at the risk that buys
+// exactly that many (so every limit, fee, minimum and the cash are checked
+// again), or why none can be (audit 2026-11-08). Reads records; no network.
+function snapToQuote(ws, project, { f, plan, bk, s, now, guardAt }) {
+  let sizes;
+  try { sizes = require('./tickets').contractQuotedSizes(ws, project, { now, lot: LOT }); } catch (err) {
+    return { ok: false, words: `The saved exit quotes could not be read (${String(err && err.message || err).slice(0, 160)}).` };
+  }
+  const want = dec(f.sizing.quantity);
+  const entry = dec(plan.entry);
+  const under = sizes.filter((x) => dec(x.quantity) !== null && dec(x.quantity) <= want);
+  if (!under.length) return { ok: false, words: sizes.length ? `Every saved exit quote is for more than the ${f.sizing.quantity} the risk allows, so the order is not sized to one.` : 'No saved exit quote is proven for a whole number of lots, so the order is not sized down to one.' };
+  let first = null;
+  for (const c of under) {
+    const q = dec(c.quantity);
+    const h = guardAt({ quantity: str(q), notional_usd: str(mulCeil(q, entry)) });
+    if (h) { first = first || { c, h }; continue; }
+    const risk = mulCeil(q, dec(f.sizing.per_unit_loss_usd));
+    const f2 = fit({ ...f.intent, risk_ceiling_usd: str(risk) }, bk, s.rules, s.venue);
+    const at = `${q < want ? 'Sized down to' : 'At'} ${str(q)}, the quantity of the $${c.reference_usd} reference quote`;
+    if (!f2.ok) return { ok: false, words: `${at}, the book would refuse it: ${f2.refusals.map((x) => x.words).join(' ')}` };
+    if (f2.sizing.quantity !== str(q)) return { ok: false, words: `${at}, the book sizes ${f2.sizing.quantity} instead, so it is not asked.` };
+    return { ok: true, fit: { ...f2, binding: [...new Set([...f.binding, 'quote'])] }, snapped: { from_quantity: f.sizing.quantity, quantity: str(q), reference_usd: c.reference_usd, pool: c.pool, quote_input: c.recorded ? 'recorded' : 'rebuilt' } };
+  }
+  return { ok: false, words: `${dec(first.c.quantity) < want ? 'Sized down to' : 'At'} ${first.c.quantity}, the quantity of the $${first.c.reference_usd} reference quote, the exit is still not proven: ${first.h.words}` };
 }
 
 // The recorded missing hours, and why they cannot be read when they cannot.
@@ -737,9 +766,9 @@ function assess(ws, ctx, g, snap) {
     // Checked as the book will check it, before its one ID is spent (M2), and
     // sized to the largest order every limit allows, never above Eric's
     // approved risk (M4). Anything the book would refuse waits, in words.
-    const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
+    let f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
     if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals, exit_as_of: bk.exit ? bk.exit.as_of : null });
-    const sz = f.sizing;
+    let sz = f.sizing;
     // A paper mandate grant (decided_by mandate:…) reads the contract again
     // at opening, in every gate mode: a verdict that is gone or blocks, or an
     // identity changed or a sell tax spiked since the save, opens nothing; a
@@ -762,11 +791,26 @@ function assess(ws, ctx, g, snap) {
     // The contract gate, when Eric enforces it (tickets.js contractOpenGuard):
     // the same contract, current evidence, and the exit at this fitted
     // notional (CG-14), not only at the reference tranche. Openings only.
-    let guard = null;
-    try { guard = require('./tickets').contractOpenGuard(ws, g.project, rc.receipt, { now: ctx.t, notionalUsd: sz.notional_usd, priceUsd: plan.entry }); } catch (err) { guard = { hold: true, final: false, words: `The contract gate could not be read (${String(err && err.message || err).slice(0, 160)}); the order waits.` }; }
+    // When CG-14 alone holds the risk-sized order, it is sized down to the
+    // largest quantity a saved quote proves an exit for (snapToQuote), then
+    // the whole guard is read again for that final quantity.
+    const guardAt = (s) => {
+      try { return require('./tickets').contractOpenGuard(ws, g.project, rc.receipt, { now: ctx.t, notionalUsd: s.notional_usd, priceUsd: plan.entry, quantity: s.quantity }); } catch (err) { return { hold: true, final: false, words: `The contract gate could not be read (${String(err && err.message || err).slice(0, 160)}); the order waits.` }; }
+    };
+    let guard = guardAt(sz);
+    let snapped = null;
+    if (guard && guard.hold && guard.rule_id === 'CG-14') {
+      const sn = snapToQuote(ws, g.project, { f, plan, bk, s: ctx.s, now: ctx.t, guardAt });
+      if (sn.ok) {
+        f = sn.fit;
+        sz = f.sizing;
+        snapped = sn.snapped;
+        guard = guardAt(sz);
+      } else guard = { ...guard, words: `${guard.words} ${sn.words}` };
+    }
     if (guard && guard.hold) return out(guard.final ? 'not_opened' : 'waiting', guard.words, null, { pair: pr.pair, final: Boolean(guard.final), contract: { rule_id: guard.rule_id || null, ...(guard.fitted ? { fitted: guard.fitted } : {}) }, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
-    return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding } });
+    return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding, ...(snapped ? { snapped } : {}) } });
   }
 
   // A refused intent has no order, so its pair is named from the project.

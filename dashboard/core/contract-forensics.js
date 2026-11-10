@@ -919,19 +919,27 @@ async function authorityProbes(session, rd, { token, obs, holder, decimals, owne
 
 // Concentrated-pool quotes through the allowlisted QuoterV2 at the pinned
 // block, at each exit size; never for a taxed token (the pool checks it
-// received the full input, so a tax makes the swap revert).
+// received the full input, so a tax makes the swap revert). The dollar
+// sizes are reference sizes: each is asked for the whole number of the
+// trader's lots under it (trader-desk.js LOT at the token's decimals), and
+// the exact base units sent are kept in `quoted_in`, so an order of that
+// quantity can be matched to its quote unit for unit (audit 2026-11-08).
 async function quotePools(session, rd, { token, pools, decimals, priceUsd, taxBps, sizes, ctx }) {
   const gate = require('./contract-gate');
+  const step = gate.lotStep(require('./trader-desk').LOT, decimals);
   for (const p of pools.filter((x) => x.counted && x.mechanism === 'concentrated')) {
     if (taxBps !== null && taxBps > 0) { Object.assign(p, { counted: false, excluded: `A token with a ${taxBps / 100}% transfer tax cannot settle in a concentrated pool.` }); continue; }
     const f = ctx.factories.find((x) => x.factory === p.factory);
     p.quoted = {};
+    p.quoted_in = {};
     for (const s of sizes) {
-      const q = Number.isInteger(decimals) && priceUsd !== null ? gate.tokensFor(s, priceUsd, decimals) : null;
-      if (q === null) continue;
+      const raw = Number.isInteger(decimals) && priceUsd !== null ? gate.tokensFor(s, priceUsd, decimals) : null;
+      const q = raw === null || step === null ? null : (raw / step) * step;
+      if (q === null || q === 0n) continue;
       const data = callData('quoteExactInputSingle((address,address,uint256,uint24,uint160))', word(token), word(p.quote_asset), encUint(q), encUint(p.fee_tier), encUint(0));
       const v = await rd.view(f.quoter, data);
       p.quoted[String(s)] = v ? decUint(`0x${wordAt(v, 0)}`).toString() : null;
+      p.quoted_in[String(s)] = q.toString();
     }
   }
 }

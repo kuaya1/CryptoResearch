@@ -591,7 +591,7 @@ test('enforce: the trader waits while the fitted notional\'s exit is over the li
   assert.equal(a.contract.rule_id, 'CG-14');
   // The reference tranche alone passes: $500 on chain is within 5%.
   const proj = projects.getProject(s.ws, s.pid);
-  assert.equal(T.contractOpenGuard(s.ws, proj, r, { notionalUsd: '500', priceUsd: '0.85' }), null);
+  assert.equal(T.contractOpenGuard(s.ws, proj, r, { notionalUsd: '500', priceUsd: '0.85', quantity: '588.235294' }), null);
   // Observe: the same grant is asked of the book as before.
   s.ws.settings.tickets.contract_gate.mode = 'observe';
   assert.equal(TD.requests(s.ws, {}).requests.find((x) => x.decision_id === d.decision_id).phase, 'ready');
