@@ -21,10 +21,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// Where the fixtures may live. Each test's workspace is its own directory,
+// made by helpers.tempWorkspace under os.tmpdir(). An audit run supplies its
+// disposable folder in CR_AUDIT_SAFE_ROOT: an absolute path that must hold
+// os.tmpdir(). Any other run (CI included) checks the fixtures against the
+// system temp folder. Containment is by path segment, so a sibling sharing
+// the root's name prefix is outside it.
 const SAFE = process.env.CR_AUDIT_SAFE_ROOT;
-assert.ok(SAFE && path.isAbsolute(SAFE), 'CR_AUDIT_SAFE_ROOT must name the disposable folder');
-const under = (p) => path.resolve(p).toLowerCase().startsWith(path.resolve(SAFE).toLowerCase());
-assert.ok(under(os.tmpdir()), `os.tmpdir() ${os.tmpdir()} is not under ${SAFE}`);
+if (SAFE !== undefined) assert.ok(typeof SAFE === 'string' && SAFE !== '' && path.isAbsolute(SAFE), 'CR_AUDIT_SAFE_ROOT must name the disposable folder');
+const ROOT = path.resolve(SAFE === undefined ? os.tmpdir() : SAFE);
+const under = (p) => {
+  const rel = path.relative(ROOT, path.resolve(p));
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+};
+assert.ok(under(path.join(ROOT, 'w')) && !under(ROOT) && !under(`${ROOT}-sibling`) && !under(path.join(`${ROOT}x`, 'w')), 'containment is by path segment, not by name prefix');
+if (SAFE !== undefined) assert.ok(under(os.tmpdir()), `os.tmpdir() ${os.tmpdir()} is not under ${SAFE}`);
 assert.ok(!process.env.CR_DATA_DIR && !process.env.CR_WORKSPACE, 'no real desk path may be set');
 
 const G = require('../core/contract-gate');
