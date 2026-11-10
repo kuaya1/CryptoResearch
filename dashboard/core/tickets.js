@@ -1141,7 +1141,7 @@ function contractCheckOf(ws, project, receipt, now) {
 // contract, current evidence, and the exit at the fitted notional (CG-14).
 // `final` when no later step can open it. Null when nothing holds the order.
 // Only an opening is checked: a close, a trim or a settlement never is.
-function contractOpenGuard(ws, project, receipt, { now = Date.now(), notionalUsd, priceUsd } = {}) {
+function contractOpenGuard(ws, project, receipt, { now = Date.now(), notionalUsd, priceUsd, quantity } = {}) {
   if (contractGateMode(ws) !== 'enforce') return null;
   const cg = receipt && receipt.desk && receipt.desk.contract_gate;
   if (!cg) return require('./contract-forensics').subjectsOf(project).length ? { hold: true, final: true, rule_id: 'CONTRACT_UNATTESTED', words: 'The ticket carries no contract attestation and the contract gate is enforced: no order is made from it.' } : null;
@@ -1152,9 +1152,29 @@ function contractOpenGuard(ws, project, receipt, { now = Date.now(), notionalUsd
   const fee = ws.settings && ws.settings.contracts && ws.settings.contracts.network_fee_ceiling_usd;
   const feeCeil = fee && typeof fee === 'object' ? fee[idNow.exit_observation.subject.chain_id] : null;
   const limit = receipt.desk.sizing && receipt.desk.sizing.max_exit_cost_pct;
-  const fx = require('./contract-gate').fittedExit(idNow.exit_observation, { notionalUsd, priceUsd, networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: limit });
+  // The desk's price freshness limit as settings resolve it (workspace.js
+  // DEFAULT_SETTINGS under Eric's overrides), with no fallback here: missing
+  // or invalid, the guard holds; above 90 minutes, the guard caps it (round 6).
+  const fr = ws.settings && ws.settings.freshness;
+  const priceStaleMinutes = fr && typeof fr === 'object' ? fr.price_stale_minutes : undefined;
+  const fx = require('./contract-gate').fittedExit(idNow.exit_observation, { notionalUsd, priceUsd, quantity, networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: limit, priceStaleMinutes });
   if (!fx.ok) return { hold: true, final: false, rule_id: 'CG-14', fitted: fx, words: `${fx.words} The order waits until the fitted size is within the proven exit.` };
   return null;
+}
+
+// The order quantities CG-14 can prove an exit for (the trader's sizing step,
+// audit 2026-11-08): each provable concentrated-pool quote of the current
+// observation whose quantity is a whole number of `lot`, largest first, as a
+// token quantity. Reads records only; empty when there is no observation.
+function contractQuotedSizes(ws, project, { now = Date.now(), lot } = {}) {
+  const G = require('./contract-gate');
+  const idNow = contractIdentityNow(ws, project, now);
+  const o = idNow && idNow.exit_observation;
+  const dec = o && o.token ? o.token.decimals : null;
+  const step = G.lotStep(lot, dec);
+  if (!o || step === null) return [];
+  return G.quotedQuantities(o).filter((x) => x.base % step === 0n).sort((a, b) => (a.base < b.base ? 1 : a.base > b.base ? -1 : 0))
+    .map((x) => ({ quantity: G.tokensText(x.base, dec), base: x.base.toString(), pool: x.pool, reference_usd: x.label, recorded: x.recorded }));
 }
 
 function cancelTicket(ws, pid, tid, reason = null) {
@@ -3385,6 +3405,7 @@ module.exports = {
   TAX_SPIKE_BPS,
   contractIdentityNow,
   contractOpenGuard,
+  contractQuotedSizes,
   contractVerdictNow,
   contractCheckOf,
   exitsOf,
