@@ -2,7 +2,8 @@
 // Checking an opening receipt (core/opening-receipt.js verify), and where
 // that check is read: the decision's execution (CLI `tickets basis`), the
 // signed-in trader view (GET /api/paper/trader) and the B1 operating proof's
-// lineage gate (core/autonomy-proof.js), which reads that view as captured.
+// lineage gate (core/autonomy-proof.js), which reads that view and the
+// decision's execution as captured.
 // FICTIONAL chain, pools, quoter, desk and prices (opening-receipt-fixture.js);
 // temporary workspaces only; a local server on 127.0.0.1; no other network.
 //
@@ -266,10 +267,17 @@ test('OV5: reading the receipt: the signed-in trader view (GET /api/paper/trader
   assert.deepEqual([row.state, row.quantity, row.side], ['ACKED', AT_500, 'OPEN_LONG']);
   // B1's lineage gate, on that answer exactly as the desk gave it.
   const lineage = { project_id: s.pid, run_id: 'run_fict', report_id: 'rep_fict', receipt_id: receipt.receipt_id, generation: 1, decision_id: d.decision_id, intent_id: line.intent_id, client_order_id: line.client_order_id, sent_at: line.at };
-  const judge = (view, l = lineage) => A.READERS.b1.lineage.judge({ 'lineage.json': l, 'trader-after-ack.json': view }, { project: null });
+  const judge = (view, l = lineage, b = clone(basis)) => A.READERS.b1.lineage.judge({ 'lineage.json': l, 'trader-after-ack.json': view, 'basis-after-ack.json': b }, { project: null });
   const ok = judge(clone(r.json));
   assert.equal(ok.result, 'PASS', ok.words);
-  assert.match(ok.words, /The opening receipt is bound to the reservation/);
+  assert.match(ok.words, /The desk's check reads the order's opening receipt bound\./);
+  assert.ok(ok.words.includes(`The reservation the book holds carries its receipt: an enforced CG-14 pass for exactly ${AT_500} tokens`), ok.words);
+  // The persisted reservation is the source of record: without it, nothing is proven; against another, it fails.
+  assert.equal(judge(clone(r.json), lineage, null).result, 'UNVERIFIED', 'no basis captured');
+  const other = clone(basis); other.execution.reserved[0].contract_guard.quantity.final = '71.022726';
+  assert.equal(judge(clone(r.json), lineage, other).result, 'FAIL', 'a receipt for another quantity');
+  const none = clone(basis); none.execution.reserved = [];
+  assert.equal(judge(clone(r.json), lineage, none).result, 'FAIL', 'no reservation in the book');
   // The same capture with the receipt's reading changed one way at a time.
   for (const [name, change, want] of [
     ['a mismatch', (o) => { o.opening_receipt.status = 'mismatch'; }, 'FAIL'],

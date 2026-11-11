@@ -599,7 +599,7 @@ Every other field is v2's, as above.
   - when the order was sized down to a saved quote, that quote's pool, reference rung and observation, apart from the pool that proved the exit.
 - **What it does not repeat.** The project, ticket and decision are the intent's own fields; the grant and the reserved quantity are the line's; pools, quotes and the quote asset's value are the observation's.
 - **Checked** (`verify`): the receipt against the reservation, the named observation by its hash, and the guard's reading made again from that observation with the receipt's own inputs. It reads `bound`, `not_checked` (the gate was observed only), `missing` (an order reserved before the receipt existed), `unreadable`, `mismatch` (each difference named) or `unverifiable`.
-- **Where it is read.** `tickets basis <id> <decision_id>` (`execution.reserved[].contract_guard` and `.opening_receipt`), the trader view's order rows (`GET /api/paper/trader`, `orders[].opening_receipt`), and B1's lineage gate, which reads that view as captured.
+- **Where it is read.** `tickets basis <id> <decision_id>` (`execution.reserved[].contract_guard` and `.opening_receipt`), the trader view's order rows (`GET /api/paper/trader`, `orders[].opening_receipt`), and B1's lineage gate, which reads that view and the `tickets basis` reservation as captured at the acknowledgement (`basis-after-ack.json`) and requires the two to agree with the receipt on the reservation (`docs/engineering/AUTONOMY_PROOF_CLI.md`, B1).
 - **Under enforce** an order whose receipt cannot be made is not asked: it waits, in words. Should the book reserve another quantity than the guard proved, the step says so (`RECEIPT_MISMATCH`) and the check reads `mismatch`; nothing is cancelled.
 
 ### Paper Book `cr-paper@2`

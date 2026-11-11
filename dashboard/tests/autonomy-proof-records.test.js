@@ -10,6 +10,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const A = require('../core/autonomy-proof');
+const OR = require('../core/opening-receipt');
+const G = require('../core/contract-gate');
 const { tempWorkspace } = require('./helpers');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -36,8 +38,25 @@ function complete(step, base = SHA) {
     projects: [{ project_id: PID, dispatch: { state: 'released', reconcile: false, attempt_id: 'att1', claim_state: 'released', run_id: 'run1' }, reports: { claude: { report_id: 'rep1' } } }],
     ...over,
   });
+  // The order's opening receipt (cr.opening-guard.v1) as the book wrote it on
+  // the reservation line, and that reservation as `tickets basis` shows it
+  // (decision-basis.js executionOf: execution.reserved[], contract_guard).
+  const guard = {
+    version: OR.VERSION, gate_mode: 'enforce', checked_at: iso(1 / 3), result: 'pass', rule_id: 'CG-14', gate: { version: G.GATE_VERSION, exit: G.EXIT_VERSION },
+    observation: { observation_id: 'co_0123456789abcdef', sha256: 'b'.repeat(64), chain_id: '1', block_number: 100, block_hash: `0x${'c'.repeat(64)}`, block_time: iso(0) },
+    quantity: { unit: 'token', risk_sized: '10', final: '10', sized_by: 'risk', decimals: 18, final_base_units: '10000000000000000000' },
+    exit: { pool: `0x${'d'.repeat(40)}`, cost_pct: '2.5', value_usd: '20', value_basis: 'entry', notional_usd: '20', entry_usd: '2' },
+    limits: { exit_cost_pct: 5, network_fee_usd: '1', price_stale_minutes: 90 }, price_check: { state: 'ok', limit_minutes: 90, gap_ms: 0, as_of: iso(0) }, size: null,
+  };
+  const checked = { version: OR.CHECK_VERSION, status: 'bound', words: 'The receipt is bound to this reservation.', differences: [] };
+  const reserved1 = {
+    at: iso(1 / 3), intent_id: INT1, intent_sha256: 'a'.repeat(64), side: 'OPEN_LONG', entry_price: '2', client_order_id: COID1, position_id: 'pos-one', quantity: '10', notional_usd: '20',
+    grant: { thesis_id: 'tk1', project_id: PID, receipt_id: 'tk1', decision_id: DEC1, action: 'approve', suggested_risk_usd: '500', pm_approved_risk_usd: '500' },
+    contract_guard: guard, opening_receipt: checked,
+  };
+  const basis1 = { format: 'cr-decision-view@1', label: 'decision_time', digest: 'verified', decision: { decision_id: DEC1 }, originals: [], execution: { label: 'execution_time', state: 'recorded', reserved: [reserved1], fills: [], exits: [] } };
   // The order's opening receipt as the trader view's order row carries it (core/opening-receipt.js summaryOf).
-  const receipt = { version: 'cr-opening-guard-check@1', status: 'bound', words: 'The receipt is bound to this reservation.', differences: [], decision_id: DEC1, intent_id: INT1, intent_sha256: 'a'.repeat(64), reserved_quantity: '10', result: 'pass', gate_mode: 'enforce' };
+  const receipt = OR.summaryOf({ ...checked, reservation: { decision_id: DEC1, grant: { by_mandate: true }, intent_id: INT1, intent_sha256: 'a'.repeat(64), quantity: '10' }, record: guard });
   const order = (over = {}) => ({ client_order_id: COID1, intent_id: INT1, side: 'OPEN_LONG', decision_id: DEC1, state: 'ACKED', filled: '0', quantity: '10', opening_receipt: { ...receipt }, ...over });
   const trader = (over = {}) => ({ now: iso(1), orders: [order()], requests: [{ decision_id: DEC1, receipt_id: 'tk1' }], results: { open_positions: [], closed_positions: [] }, candles: { accounting_unknown: null, last_run_at: iso(1) }, ...over });
   const line = (over = {}) => ({ format: 'cr-pilot-all@1', dry_run: false, max_agents: 1, polled: [], exit: 0, error: null, revision: { runner: base, desk: base, source: 'git', clean: true }, ...over });
@@ -68,6 +87,7 @@ function complete(step, base = SHA) {
     case 'b1': return {
       'lineage.json': lineage1, 'run-log.json': line(), 'desk-controls-after.json': controls({ at: iso(3) }),
       'trader-after-ack.json': trader({ now: iso(0.5), candles: { accounting_unknown: null, last_run_at: iso(0.2) } }),
+      'basis-after-ack.json': basis1,
       'trader-after-window.json': trader({ now: iso(3), orders: [order({ state: 'CANCELLED' })], candles: { accounting_unknown: null, last_run_at: iso(3) } }),
       'window.json': { enabled_at: iso(-1), disabled_at: iso(2.5), candidate_project_id: PID, other_projects_ran: false },
       'tasks-after.json': { observed_at: iso(2.6), pilot: { state: 'Disabled', instances: 0 } },
@@ -218,6 +238,56 @@ const CONTRADICTIONS = [
   ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.intent_id = 'intent-other'; }, 'b1:lineage'],
   ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.gate_mode = 'observe'; }, 'b1:lineage'],
   ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.result = 'not_checked'; }, 'b1:lineage'],
+  // A row that reads bound is borne out by the persisted reservation (basis-after-ack.json, `tickets basis --json`):
+  // the row's figures must be the receipt's on that reservation, figure by figure.
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.differences = ['exit.pool']; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.cost_pct = '9.1'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.limit_pct = 50; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.exit_pool = `0x${'e'.repeat(40)}`; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.observation_id = 'co_fedcba9876543210'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.observation_sha256 = 'e'.repeat(64); }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.block_number = 101; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.valuation = 'cr-contract-exit@9'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.intent_sha256 = 'f'.repeat(64); }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.quantity.final = '9'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.size = { pool: `0x${'e'.repeat(40)}`, reference_usd: '500', quote_input: 'recorded', observation_id: 'co_0123456789abcdef' }; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { const o = v.orders[0]; o.quantity = '9'; o.opening_receipt.reserved_quantity = '9'; o.opening_receipt.quantity = { ...o.opening_receipt.quantity, final: '9', risk_sized: '9', final_base_units: '9000000000000000000' }; }, 'b1:lineage'],
+  // The reservation itself: its identifiers, its grant, the desk's check of it, and the receipt written on it.
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].quantity = '9'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].client_order_id = 'cr2-other'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved.push(clone(v.execution.reserved[0])); }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].side = 'CLOSE_LONG'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].intent_id = 'intent-other'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].intent_sha256 = 'e'.repeat(64); }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].grant.decision_id = 'td_other'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].grant.receipt_id = 'tk_other'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].grant.project_id = 'another-project'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].grant.action = 'veto'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].opening_receipt.status = 'mismatch'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard = null; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { delete v.execution.reserved[0].contract_guard.price_check; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.gate_mode = 'observe'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { const g = v.execution.reserved[0].contract_guard; v.execution.reserved[0].contract_guard = { version: g.version, gate_mode: 'observe', checked_at: g.checked_at, result: 'not_checked', why: 'gate_not_enforced', quantity: { unit: 'token', risk_sized: '10', final: '10', sized_by: 'risk' }, size: null }; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.observation.observation_id = 'co_fedcba9876543210'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.observation.sha256 = 'e'.repeat(64); }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.exit.pool = `0x${'e'.repeat(40)}`; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.quantity.final_base_units = '10000000000000000001'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.quantity.risk_sized = '9'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].entry_price = '2.5'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].contract_guard.exit.notional_usd = '21'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].at = iso(0.2); }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution = { label: 'execution_time', state: 'integrity', code: 'INTEGRITY', words: 'refused', reserved: null, fills: null, exits: null }; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.decision.decision_id = 'td_other'; }, 'b1:lineage'],
+  // The reservation's own desk check, its notional, and records the producer never repeats (review 2026-11-11, F1-F3).
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].opening_receipt.differences = [{ field: 'exit.pool' }]; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].notional_usd = '1'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].notional_usd = '20.000000000000000001'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].notional_usd = 'twenty'; }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved.push({ ...clone(v.execution.reserved[0]), client_order_id: 'cr2-twin', position_id: 'pos-twin', quantity: '70' }); }, 'b1:lineage'],
+  ['b1', 'basis-after-ack.json', (v) => { v.execution.reserved.unshift({ ...clone(v.execution.reserved[0]), client_order_id: 'cr2-twin', intent_id: 'intent-twin', position_id: 'pos-twin' }); }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { const o = clone(v.orders[0]); o.opening_receipt.observation_id = 'co_fedcba9876543210'; v.orders.push(o); }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders.push({ ...clone(v.orders[0]), client_order_id: 'cr2-twin' }); }, 'b1:lineage'],
+  ['b1', 'trader-after-window.json', (v) => { v.orders.push({ ...clone(v.orders[0]), state: 'ACKED' }); }, 'b1:cancellation'],
   ['b1', 'lineage.json', (v) => { v.control_applied_at = iso(2.5); }, 'b1:cancellation'],
   ['b1', 'trader-after-window.json', (v) => { v.orders[0].state = 'FILLED'; v.orders[0].filled = '10'; }, 'b1:cancellation'],
   ['b1', 'trader-after-window.json', (v) => { v.results.open_positions = [{ position_id: 'p', decision_id: DEC1 }]; }, 'b1:cancellation'],
@@ -259,7 +329,35 @@ test('a record that contradicts a gate is FAIL and names that gate', async (t) =
 test('B1 lineage: the order\'s opening receipt must be on the capture and checked; absent or uncheckable is UNVERIFIED, never PASS', async (t) => {
   const whole = await prove('b1', evidence(t));
   assert.equal(check(whole, 'b1:lineage').result, 'PASS');
-  assert.match(check(whole, 'b1:lineage').reason, /The opening receipt is bound to the reservation/);
+  assert.match(check(whole, 'b1:lineage').reason, /The desk's check reads the order's opening receipt bound\./);
+  assert.match(check(whole, 'b1:lineage').reason, /The reservation the book holds carries its receipt: an enforced CG-14 pass for exactly 10 tokens, the exit proven at an unrounded 2\.5% within 5%, and the row agrees with it figure by figure\./);
+  // The persisted reservation not captured, or captured without the parts B1 reads: never PASS, and not a contradiction.
+  const noBasis = await prove('b1', evidence(t, { b1: { drop: ['basis-after-ack.json'] } }));
+  assert.equal(check(noBasis, 'b1:lineage').result, 'UNVERIFIED');
+  assert.match(check(noBasis, 'b1:lineage').reason, /Not bound in the manifest: basis-after-ack\.json\./);
+  for (const [name, change, why] of [
+    ['a basis that shows no receipt field (a desk before the receipt existed)', (v) => { delete v.execution.reserved[0].contract_guard; }, /does not show the receipt written on the reservation/],
+    ['a reservation with no time', (v) => { delete v.execution.reserved[0].at; }, /The reservation's time is not on record/],
+    ['a reservation with no grant', (v) => { delete v.execution.reserved[0].grant; }, /The grant the book read is not on record/],
+    ['a basis with no execution', (v) => { delete v.execution; }, /The basis capture carries no execution/],
+  ]) {
+    const r = await prove('b1', evidence(t, edit('b1', 'basis-after-ack.json', change)));
+    assert.equal(check(r, 'b1:lineage').result, 'UNVERIFIED', name);
+    assert.match(check(r, 'b1:lineage').reason, why, name);
+  }
+  const bare = await prove('b1', evidence(t, edit('b1', 'trader-after-ack.json', (v) => { const r = v.orders[0].opening_receipt; for (const k of ['quantity', 'size', 'observation_id', 'observation_sha256', 'exit_pool', 'cost_pct', 'limit_pct', 'valuation', 'differences']) delete r[k]; })));
+  assert.equal(check(bare, 'b1:lineage').result, 'UNVERIFIED', 'a bound row with its figures removed');
+  assert.match(check(bare, 'b1:lineage').reason, /the pool the row says proved the exit is not on record/);
+  // The unrounded cost against the limit the receipt records, exactly: at the limit is within it; one part in 10^18 over is not.
+  const at = (cost) => ({ b1: { edit: {
+    'trader-after-ack.json': (() => { const v = clone(complete('b1')['trader-after-ack.json']); v.orders[0].opening_receipt.cost_pct = cost; return v; })(),
+    'basis-after-ack.json': (() => { const v = clone(complete('b1')['basis-after-ack.json']); v.execution.reserved[0].contract_guard.exit.cost_pct = cost; return v; })(),
+  } } });
+  assert.equal(check(await prove('b1', evidence(t, at('5'))), 'b1:lineage').result, 'PASS', 'at the limit');
+  assert.equal(check(await prove('b1', evidence(t, at('4.999999999999999999'))), 'b1:lineage').result, 'PASS', 'just under');
+  const over = await prove('b1', evidence(t, at('5.000000000000000001')));
+  assert.equal(check(over, 'b1:lineage').result, 'FAIL', 'just over, in both records alike');
+  assert.match(check(over, 'b1:lineage').reason, /The receipt's unrounded exit cost 5\.000000000000000001% is over the 5% limit it records\./);
   for (const [name, change, why] of [
     ['a capture from a desk before the receipt existed', (v) => { delete v.orders[0].opening_receipt; }, /carries no reading of the order's opening receipt/],
     ['a null reading', (v) => { v.orders[0].opening_receipt = null; }, /carries no reading of the order's opening receipt/],
@@ -277,6 +375,42 @@ test('B1 lineage: the order\'s opening receipt must be on the capture and checke
   const bad = await prove('b1', evidence(t, edit('b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'mismatch'; v.orders[0].opening_receipt.words = 'The receipt is for 71.022727; the book reserved 71.'; })));
   assert.equal(check(bad, 'b1:lineage').result, 'FAIL');
   assert.match(check(bad, 'b1:lineage').reason, /opening receipt reads mismatch: The receipt is for 71\.022727; the book reserved 71/);
+});
+
+test('B1 lineage: the reservation\'s own check and notional, and one record per order; several distinct orders stay valid', async (t) => {
+  const whole = await prove('b1', evidence(t));
+  assert.match(check(whole, 'b1:lineage').reason, /The desk's check of the reservation lists no difference\./);
+  assert.match(check(whole, 'b1:lineage').reason, /The book reserved the notional the receipt was measured at, 20\./);
+  // The book's notional against the receipt's, exactly: the same figure written with trailing zeros is the same figure.
+  assert.equal(check(await prove('b1', evidence(t, edit('b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].notional_usd = '20.000000000000000000'; }))), 'b1:lineage').result, 'PASS');
+  const lost = await prove('b1', evidence(t, edit('b1', 'basis-after-ack.json', (v) => { delete v.execution.reserved[0].notional_usd; })));
+  assert.equal(check(lost, 'b1:lineage').result, 'UNVERIFIED', 'no notional on the reservation');
+  assert.match(check(lost, 'b1:lineage').reason, /The notional the book reserved is not on record\./);
+  const unlisted = await prove('b1', evidence(t, edit('b1', 'basis-after-ack.json', (v) => { delete v.execution.reserved[0].opening_receipt.differences; })));
+  assert.equal(check(unlisted, 'b1:lineage').result, 'UNVERIFIED', 'a desk check that lists no differences field');
+  assert.match(check(unlisted, 'b1:lineage').reason, /The desk's check of the reservation does not list its differences\./);
+  const listed = await prove('b1', evidence(t, edit('b1', 'basis-after-ack.json', (v) => { v.execution.reserved[0].opening_receipt.differences = [{ field: 'exit.pool' }]; })));
+  assert.match(check(listed, 'b1:lineage').reason, /The desk's check of the reservation lists 1 difference\(s\)\./);
+  // Repeats the producer never writes: ambiguous, FAIL, wherever the repeat sits.
+  for (const [name, file, change, why] of [
+    ['this order\'s row twice, the copy after it', 'trader-after-ack.json', (v) => { v.orders.push(clone(v.orders[0])); }, /The trader view lists this order 2 times/],
+    ['this order\'s row twice, the copy before it', 'trader-after-ack.json', (v) => { v.orders.unshift(clone(v.orders[0])); }, /The trader view lists this order 2 times/],
+    ['another row with this order\'s intent', 'trader-after-ack.json', (v) => { v.orders.push({ ...clone(v.orders[0]), client_order_id: 'cr2-twin' }); }, /Another row in the trader view carries this order's intent/],
+    ['another reservation with this intent\'s ID', 'basis-after-ack.json', (v) => { v.execution.reserved.push({ ...clone(v.execution.reserved[0]), client_order_id: 'cr2-twin', intent_sha256: 'e'.repeat(64), quantity: '70' }); }, /Another reservation in the decision's execution carries this order's intent/],
+    ['another reservation with this intent\'s SHA-256', 'basis-after-ack.json', (v) => { v.execution.reserved.unshift({ ...clone(v.execution.reserved[0]), client_order_id: 'cr2-twin', intent_id: 'intent-twin' }); }, /Another reservation in the decision's execution carries this order's intent/],
+  ]) {
+    const r = await prove('b1', evidence(t, edit('b1', file, change)));
+    assert.equal(check(r, 'b1:lineage').result, 'FAIL', name);
+    assert.match(check(r, 'b1:lineage').reason, why, name);
+  }
+  // Several distinct orders, as a desk with other openings and a close shows them: still PASS.
+  const other = (v, i) => ({ ...clone(v), client_order_id: `cr2-other${i}`, intent_id: `intent-other${i}`, intent_sha256: String(i).repeat(64), position_id: `pos-other${i}` });
+  const many = { b1: { edit: {
+    'trader-after-ack.json': (() => { const v = clone(complete('b1')['trader-after-ack.json']); v.orders = [other(v.orders[0], 1), v.orders[0], { ...other(v.orders[0], 2), side: 'CLOSE_LONG', opening_receipt: null }]; return v; })(),
+    'basis-after-ack.json': (() => { const v = clone(complete('b1')['basis-after-ack.json']); const r = v.execution.reserved[0]; v.execution.reserved = [other(r, 1), r, { ...other(r, 2), side: 'CLOSE_LONG', contract_guard: null, opening_receipt: null }]; return v; })(),
+  } } };
+  const r = await prove('b1', evidence(t, many));
+  assert.equal(check(r, 'b1:lineage').result, 'PASS', check(r, 'b1:lineage').reason);
 });
 
 test('B2 attribution: inputs.label must be decision_time, and absence is UNVERIFIED, not PASS', async (t) => {
