@@ -205,9 +205,11 @@ test('reading it writes nothing, in process and through the signed-in route, whi
   const before = tree(s.root);
   V.view(s.ws, { now: s.end });
   assert.deepEqual(tree(s.root), before);
-  const { start } = require('../server');
-  const srv = await start(s.ws, { port: 49400 + Math.floor(Math.random() * 500), quiet: true });
-  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  // The server's own background work is held (server-background.js): its
+  // start-up jobs record their runs in logs/jobs-state.json and its watcher
+  // rebuilds the derived index, and neither is the route's write. The whole
+  // tree is still compared after the reads, unchanged.
+  const { srv } = await require('./server-background').startWithBackgroundHeld(t, s.ws, { port: 49400 + Math.floor(Math.random() * 500), quiet: true });
   const started = tree(s.root); // the server's own start writes its index first
   const get = (p, headers) => new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: srv.port, path: p, method: 'GET', headers: { host: `127.0.0.1:${srv.port}`, ...headers } }, (res) => {

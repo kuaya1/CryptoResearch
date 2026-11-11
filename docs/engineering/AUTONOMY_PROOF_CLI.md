@@ -70,7 +70,7 @@ a bundle is executed, and a narrative's words are inventoried, never interpreted
 |---|---|---|
 | R0 | `revision-final.json`, `healthz.txt`, `tasks-final.json`, `pilot-all.final-status.json`, `verification.json`, `doctor-main-workspace.json`, `offsite-readback.json` | none |
 | B0 | `revision-final.json`, `healthz.txt`, `tasks-final.json`, `controls.json`, `trader.json`, `dry-run.json`, `dry-run-negative.json`, `isolation.json`, `doctor.json` | `build-deploy.json`, `authority.json`, `heartbeat.json`, `candidate.json`, `B0.txt` |
-| B1 | `run-log.json`, `tasks-after.json`, `trader-after-ack.json`, `trader-after-window.json`, `desk-controls-after.json` | `lineage.json`, `window.json`, `B1.txt` |
+| B1 | `run-log.json`, `tasks-after.json`, `trader-after-ack.json`, `basis-after-ack.json`, `trader-after-window.json`, `desk-controls-after.json` | `lineage.json`, `window.json`, `B1.txt` |
 | B2 | `attribution.json`, `basis.json`, `trader.json` | `lineage.json`, `successor.json`, `lifecycle-evidence.json`, `deploys.json`, `B2.txt` |
 | B3 | `trader-before.json`, `trader-after.json`, `trader-restart.json`, `desk-controls-before.json`, `desk-controls-repeat.json`, `desk-controls-restart.json`, `run-log-repeat.json`, `run-log-restart.json` | `B3.txt` |
 | cutover | `pc-task.json`, `desk-controls-2h.json`, `desk-controls-6h.json`, `desk-controls-24h.json`, `basis-hosted.json`, `trader-hosted.json` | `approval.json`, `service.json`, `kill-drill.json`, `desk-down.json`, `operations.json`, `healthchecks.json`, `lifecycle.json`, `cutover.txt` |
@@ -92,6 +92,48 @@ are as returned: `GET /api/desk/controls`, `GET /api/paper/trader`,
 - **B1** follows the lineage to the acknowledged buy, checks the control came
   before the first eligible hour was usable (a send at 14:20 is usable at 16:10),
   and reads the order cancelled, with no fill and no position, after that time.
+  The lineage also reads the order's opening receipt (`cr.opening-guard.v1`) from
+  its own row of `trader-after-ack.json` (`orders[].opening_receipt`, as
+  `GET /api/paper/trader` returns it): it must read `bound`, for this decision,
+  intent and reserved quantity, with the gate enforced and the guard's result
+  `pass`, listing no difference. No reading, or one the desk could not check, is
+  UNVERIFIED; `missing`, `not_checked`, `unreadable` or `mismatch` is FAIL.
+  `bound` is the desk's word, and the persisted reservation must bear it out:
+  `basis-after-ack.json` is `tickets basis <project_id> <decision_id> --json`
+  captured at the acknowledgement, the order's `reserved` line as the book holds
+  it, read through the book's own integrity checks, with the receipt written on
+  it (`contract_guard`). That receipt is the source of record. There must be
+  exactly one row in the trader view and one reservation for the order, and no
+  other row or reservation carrying its intent's ID or SHA-256 (the book keys
+  orders by `client_order_id`, derived from the intent ID, so a real capture
+  never repeats one; other orders' rows and reservations are left as they are).
+  The reservation must be an `OPEN_LONG` for this intent, its grant this
+  decision, ticket and project (an approve or a halve), the desk's own check of
+  it `bound` with no difference listed, and its receipt a whole
+  `cr.opening-guard.v1` (`opening-receipt.js` `problemsOf`) of an enforced pass.
+  In exact arithmetic (`contract-gate.js` `ratio`, `baseUnits`, `fixed`), the
+  receipt's final quantity must be the reserved one, its base units that
+  quantity at the token's decimals, not above the risk-sized quantity; the sale
+  valued at the reservation's own entry, the notional that quantity at that
+  entry, the book's reserved `notional_usd` equal to it (the same
+  `mulCeil(quantity, entry)` at 18 places, so trailing zeros aside the same
+  string), the unrounded cost within the limit the receipt records (equal is
+  within), and the receipt made no later than the reservation. The row must then
+  agree with the receipt figure by figure: quantity record, sizing quote,
+  observation and its SHA-256, chain, block, proving pool, cost, limit,
+  valuation, result and gate mode. The reservation not captured, or captured
+  without the receipt field, its notional or its check's list of differences,
+  is UNVERIFIED; no reservation, a repeated row or reservation, a refused
+  journal, no receipt (`null`) or any difference is FAIL. The limit and the
+  valuation version are the receipt's own as recorded; this gate does not
+  compare them with the ticket's frozen limit or the current code (the desk's
+  check behind `bound` ties the limit to the ticket at capture time). Everything is read
+  from the bundle, and the desk's current observation and settings are never
+  consulted, so a proof reads the same whenever it is run again. What it does not
+  establish: the guard's reading made again from the observation (the desk's own
+  check, which `bound` reports at capture time; the observation is not in the
+  bundle), or that the bytes are the desk's (the manifest and Eric's merged
+  receipt do that). A capture forged consistently in every field would pass.
 - **B2** needs `inputs.label === 'decision_time'` on the attribution row, an
   unrefused view, `digest: 'verified'` with every named original checked by its
   SHA-256 (`format: cr-decision-view@1`, the view of `cr.decision-basis.v1`), and

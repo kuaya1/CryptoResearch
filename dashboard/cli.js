@@ -392,11 +392,18 @@ async function run(argv) {
   if (cmd === 'test') {
     const { spawnSync } = require('child_process');
     const { withoutGithubCredentials } = require('./core/child-env');
+    const launch = require('./core/test-launch');
     const dir = path.join(__dirname, 'tests');
     const sim = path.join(dir, 'sim');
     const files = [dir, sim].filter((d) => fs.existsSync(d)).flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.test.js')).map((f) => path.join(d, f)));
-    const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', env: withoutGithubCredentials(process.env) });
-    process.exitCode = r.status;
+    // A run that started no test, or did not finish, is never a pass
+    // (core/test-launch.js): it exits 1 and says why. Otherwise the runner's
+    // own exit code, as before.
+    const refused = launch.refusal(files, process.env);
+    const r = refused ? null : spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', env: withoutGithubCredentials(process.env) });
+    const out = refused || launch.outcome(files, r);
+    if (out.words) console.error(out.words);
+    process.exitCode = out.code;
     return { _silent: true };
   }
   if (cmd === 'demo') {

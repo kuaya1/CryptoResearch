@@ -9,6 +9,11 @@ const { spawnSync } = require('child_process');
 const { safeRestoreRel, DEFAULT_ROOT } = require('./workspace');
 const { isProjectId } = require('./ids');
 const { readBodyBounded } = require('./netguard');
+// Pure record checks only (no workspace, file, network or process): the
+// opening receipt's own definition of a whole record, and the exact
+// rationals and base units the contract guard computes with.
+const OR = require('./opening-receipt');
+const G = require('./contract-gate');
 
 const FORMAT = 'cr-autonomy-proof@1';
 const ROOT = path.resolve(__dirname, '../..');
@@ -323,6 +328,19 @@ const hasAll = (rec, names) => {
 };
 const healthzRevision = (text) => { const m = /^revision ([0-9a-f]{40})\b/m.exec(String(text)); return m ? m[1] : null; };
 const orderIn = (tv, coid) => arr(tv.orders, 'orders').find((o) => o.client_order_id === coid) || null;
+// B1's order row, only when the capture names it once. The trader view lists
+// the book's orders, keyed by client_order_id, which the book derives from the
+// intent ID (paper-trader.js reserve), so neither repeats in a real capture: a
+// repeat is ambiguous, FAIL. Other orders' rows are left as they are.
+function onlyOrderIn(tv, coid) {
+  const rows = arr(tv.orders, 'orders').filter((o) => o && typeof o === 'object');
+  const mine = rows.filter((o) => o.client_order_id === coid);
+  if (!mine.length) return { verdict: unv('The order is not in the capture.') };
+  if (mine.length > 1) return { verdict: fail(`The trader view lists this order ${mine.length} times: which row is the desk's is ambiguous.`) };
+  const o = mine[0];
+  if (o.intent_id !== undefined && o.intent_id !== null && rows.some((x) => x !== o && x.intent_id === o.intent_id)) return { verdict: fail('Another row in the trader view carries this order\'s intent: which row is the desk\'s is ambiguous.') };
+  return { order: o };
+}
 const positionsOfAll = (tv) => [...arr(tv.results.open_positions, 'open_positions'), ...arr(tv.results.closed_positions, 'closed_positions')];
 const positionsOf = (tv, decisionId) => positionsOfAll(tv).filter((p) => p.decision_id === decisionId);
 const isZero = (v) => typeof v === 'string' && /^0(\.0*)?$/.test(v);
@@ -409,6 +427,125 @@ function attributionRow(v, decisionId) {
   if (v.code === 'INTEGRITY' || v.status === 'error') return { verdict: fail('The attribution view refused.') };
   const row = arr(v.rows, 'rows').find((r) => r.decision_id === decisionId);
   return row ? { row } : { verdict: unv('No attribution row for this decision.') };
+}
+// Exact figures (contract-gate.js ratio, never a float): a decimal string or
+// a number as a rational, compared by cross-multiplication.
+const exact = (v) => (typeof v === 'string' || typeof v === 'number' ? G.ratio(v) : null);
+const cmpExact = (a, b) => { const x = a.n * b.d - b.n * a.d; return x > 0n ? 1 : x < 0n ? -1 : 0; };
+// A figure repeated in a report only when it is a plain decimal.
+const fig = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : typeof v === 'string' && /^-?\d{1,40}(\.\d{1,40})?$/.test(v) ? v : 'a different value');
+// The same value, or absent (UNVERIFIED), or different (FAIL), for an object.
+function sameShape(actual, expected, what) {
+  if (actual === undefined) return unv(`${what} is not on record.`);
+  return G.canonicalJson(actual) === G.canonicalJson(expected) ? pass(`${what} agrees.`) : fail(`${what} is not the one on the reservation.`);
+}
+
+// The persisted reservation behind the row (B1 option (b), Eric 2026-11-11):
+// the order's `reserved` line as the book holds it, read through the book's
+// own integrity checks by `tickets basis <project> <decision> --json` at the
+// acknowledgement (basis-after-ack.json: decision-basis.js executionOf, over
+// trader-desk.js executionFor), with the opening receipt written on that line
+// (cr.opening-guard.v1, `contract_guard`). That receipt is the source of
+// record. It must be a whole record (opening-receipt.js problemsOf) of an
+// enforced CG-14 pass, for exactly the quantity the book reserved, under this
+// order's decision, ticket and project, with its unrounded exit cost within
+// the limit it records and the book's notional equal to the one it was
+// measured at; the desk's check of the reservation must list no difference;
+// no other reservation may carry this intent; and the trader view's row must
+// say the same thing.
+// Everything is read from the bundle: the desk's current observation and
+// settings are never consulted, so a proof reads the same from its bundle
+// whenever it is run again. What this does not do: make the guard's reading
+// again from the observation (that is the desk's own check, which `bound`
+// reports at capture time; the observation is not in the bundle), or prove
+// the bytes are the desk's (the manifest and Eric's merged receipt do that).
+function persistedReceipt(b, o, row, l) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return unv('The decision\'s execution is not in the capture.');
+  const head = all(eq(b.format, 'cr-decision-view@1', 'the decision basis view format'), eq(b.decision && b.decision.decision_id, l.decision_id, 'the decision the basis is for'));
+  if (head.result !== 'PASS') return head;
+  const ex = b.execution;
+  if (!ex || typeof ex !== 'object') return unv('The basis capture carries no execution.');
+  if (ex.state === 'integrity' || ex.code === 'INTEGRITY') return fail('The book refused its own journal when the reservation was read: no reservation it holds is shown.');
+  const lines = arr(ex.reserved, 'reserved').filter((x) => x && typeof x === 'object');
+  const mine = lines.filter((x) => x.client_order_id === l.client_order_id);
+  if (mine.length !== 1) return fail(mine.length ? 'The decision\'s execution holds more than one reservation for this order.' : 'The decision\'s execution, read through the book, holds no reservation for this order.');
+  const res = mine[0];
+  // The book holds one order per intent (paper-trader.js reserve: client_order_id
+  // is derived from intent_id) and executionFor refuses a line the book does not
+  // hold as recorded, so no other reservation can carry this intent's ID or hash.
+  const twins = lines.filter((x) => x !== res && ((x.intent_id !== undefined && x.intent_id !== null && x.intent_id === res.intent_id) || (HASH.test(String(x.intent_sha256)) && x.intent_sha256 === res.intent_sha256)));
+  if (twins.length) return fail('Another reservation in the decision\'s execution carries this order\'s intent (its ID or its SHA-256): which one the book holds is ambiguous.');
+  const g = res.grant;
+  const links = all(eq(res.side, 'OPEN_LONG', 'the reservation\'s side'), eq(res.intent_id, l.intent_id, 'the reservation\'s intent'),
+    HASH.test(String(res.intent_sha256)) ? eq(row.intent_sha256, res.intent_sha256, 'the reservation the row was checked against (intent_sha256)') : unv('The reservation\'s intent hash is not on record.'),
+    !g || typeof g !== 'object' ? unv('The grant the book read is not on record.')
+      : all(eq(g.decision_id, l.decision_id, 'the grant\'s decision'), eq(g.receipt_id, l.receipt_id, 'the grant\'s ticket'), eq(g.project_id, l.project_id, 'the grant\'s project'), g.action === 'approve' || g.action === 'halve' ? pass(`The grant is an ${g.action}.`) : fail('The grant the book read is not an approve or a halve.')),
+    eq(res.opening_receipt && res.opening_receipt.status, 'bound', 'the desk\'s check of the reservation'),
+    !res.opening_receipt || !Array.isArray(res.opening_receipt.differences) ? unv('The desk\'s check of the reservation does not list its differences.')
+      : res.opening_receipt.differences.length ? fail(`The desk's check of the reservation lists ${res.opening_receipt.differences.length} difference(s).`) : pass('The desk\'s check of the reservation lists no difference.'),
+    eq(o.quantity, res.quantity, 'the order\'s quantity against the reservation'));
+  const rec = res.contract_guard;
+  if (rec === undefined) return all(links, unv('The capture does not show the receipt written on the reservation.'));
+  if (rec === null) return all(links, fail('The reservation carries no opening receipt, whatever the row says.'));
+  const bad = OR.problemsOf(rec);
+  if (bad.length) return all(links, fail(`The receipt on the reservation is not a whole ${OR.VERSION}: ${bad.join('; ')}.`));
+  // problemsOf holds for a well-formed not_checked record too: only a pass under enforce opens B1.
+  if (rec.result !== 'pass' || rec.gate_mode !== 'enforce') return all(links, fail(`The receipt on the reservation records the guard ${rec.result === 'pass' ? 'passing' : 'not run'} with the gate ${said(rec.gate_mode)}: B1's opening needs an enforced pass.`));
+  const q = rec.quantity;
+  const e = rec.exit;
+  const ob = rec.observation;
+  const lim = rec.limits;
+  const base = G.baseUnits(q.final, q.decimals);
+  const [fin, risk, entry, notional, price, cost, limit] = [q.final, q.risk_sized, e.entry_usd, e.notional_usd, res.entry_price, e.cost_pct, lim.exit_cost_pct].map(exact);
+  const product = fin && entry ? { n: fin.n * entry.n, d: fin.d * entry.d } : null;
+  const [lo, hi] = product ? [exact(G.fixed(product, 18, 'floor', false)), exact(G.fixed(product, 18, 'ceil', false))] : [null, null];
+  const figures = all(
+    eq(q.final, res.quantity, 'the receipt\'s final quantity against the quantity the book reserved'),
+    base !== null && base.toString() === q.final_base_units ? pass(`Its base units are ${fig(q.final)} at ${q.decimals} decimals.`) : fail('The receipt\'s base units are not its final quantity at the token\'s decimals.'),
+    fin && risk && cmpExact(fin, risk) <= 0 ? pass('The final quantity is not above the risk-sized one.') : fail('The receipt\'s final quantity is above the quantity the risk sized.'),
+    q.sized_by === 'risk' && q.final !== q.risk_sized ? fail('The receipt says the order kept its risk-sized quantity, and its two quantities differ.') : pass(`Sized by ${q.sized_by}.`),
+    price && entry && cmpExact(price, entry) === 0 ? pass('The sale was valued at the order\'s own entry.') : fail('The receipt valued the sale at another entry than the reservation\'s limit price.'),
+    notional && lo && hi && cmpExact(notional, lo) >= 0 && cmpExact(notional, hi) <= 0 ? pass('The notional measured is the final quantity at that entry.') : fail('The notional the receipt was measured at is not the final quantity at the entry price.'),
+    // The book's notional (trade-risk.js sizing, mulCeil(quantity, entry) at 18
+    // places) and the guard's (trader-desk.js, the same sizing's notional_usd)
+    // are one figure for the same quantity and entry: equal, exactly.
+    res.notional_usd === undefined || res.notional_usd === null ? unv('The notional the book reserved is not on record.')
+      : exact(res.notional_usd) && notional && cmpExact(exact(res.notional_usd), notional) === 0 ? pass(`The book reserved the notional the receipt was measured at, ${fig(res.notional_usd)}.`)
+        : fail(`The book reserved a notional of ${fig(res.notional_usd)}; the receipt was measured at ${fig(e.notional_usd)}.`),
+    !cost || !limit || limit.n <= 0n ? unv('The receipt\'s cost or its limit does not read as an exact figure.')
+      : cmpExact(cost, limit) <= 0 ? pass(`The unrounded exit cost ${fig(e.cost_pct)}% is within the ${fig(lim.exit_cost_pct)}% limit the receipt records.`)
+        : fail(`The receipt's unrounded exit cost ${fig(e.cost_pct)}% is over the ${fig(lim.exit_cost_pct)}% limit it records.`),
+    !Number.isFinite(Date.parse(res.at)) ? unv('The reservation\'s time is not on record.') : Date.parse(rec.checked_at) <= Date.parse(res.at) ? pass('The receipt was made no later than its reservation.') : fail('The receipt is dated after the reservation it is written on.'));
+  // The row the trader view showed, figure by figure, against the reservation's receipt.
+  const agrees = all(
+    eq(row.reserved_quantity, res.quantity, 'the row\'s reserved quantity'), sameShape(row.quantity, q, 'The quantity record on the row'), sameShape(row.size, rec.size === undefined ? null : rec.size, 'The sizing quote on the row'),
+    eq(row.observation_id, ob.observation_id, 'the observation the row names'), eq(row.observation_sha256, ob.sha256, 'that observation\'s SHA-256 on the row'), eq(row.chain_id, ob.chain_id, 'the row\'s chain'), eq(row.block_number, ob.block_number, 'the row\'s block'),
+    eq(row.exit_pool, e.pool, 'the pool the row says proved the exit'), eq(row.cost_pct, e.cost_pct, 'the cost the row records'), eq(row.limit_pct, lim.exit_cost_pct, 'the limit the row records'), eq(row.valuation, rec.gate.exit, 'the valuation the row names'),
+    eq(row.result, rec.result, 'the row\'s guard result'), eq(row.gate_mode, rec.gate_mode, 'the row\'s gate mode'));
+  return all(links, figures, agrees, pass(`The reservation the book holds carries its receipt: an enforced CG-14 pass for exactly ${fig(res.quantity)} tokens, the exit proven at an unrounded ${fig(e.cost_pct)}% within ${fig(lim.exit_cost_pct)}%, and the row agrees with it figure by figure.`));
+}
+
+// The order's opening receipt, as the desk checked it for the trader view's
+// own order row (trader-desk.js view, core/opening-receipt.js verify,
+// cr.opening-guard.v1), and then the reservation it was checked against
+// (persistedReceipt). B1's opening runs with the contract gate enforced
+// (b0:arming_identity), so the row must read bound and say the guard passed.
+// A capture with no reading of it (a desk before the receipt existed) or one
+// the desk could not check proves nothing; an order with no receipt, an
+// unchecked one, a malformed one or any difference fails. `bound` is the
+// desk's word: it is taken as the desk's statement only, and the persisted
+// reservation must bear it out.
+function openingReceipt(o, l, basis) {
+  const r = o.opening_receipt;
+  if (r === undefined || r === null) return unv('The capture carries no reading of the order\'s opening receipt.');
+  const words = String(r.words || '').slice(0, 300);
+  if (r.status === 'unverifiable') return unv(`The order's opening receipt could not be checked: ${words}`);
+  if (r.status !== 'bound') return fail(`The order's opening receipt reads ${String(r.status)}: ${words}`);
+  return all(pass('The desk\'s check reads the order\'s opening receipt bound.'),
+    eq(r.decision_id, l.decision_id, 'the receipt\'s decision'), eq(r.intent_id, l.intent_id, 'the receipt\'s intent'), eq(r.reserved_quantity, o.quantity, 'the quantity the receipt is for'),
+    eq(r.gate_mode, 'enforce', 'the gate mode at the opening'), eq(r.result, 'pass', 'the guard\'s result'),
+    !Array.isArray(r.differences) ? unv('The row does not list the check\'s differences.') : r.differences.length ? fail(`The row reads bound and lists ${r.differences.length} difference(s).`) : pass('The check lists no difference.'),
+    persistedReceipt(basis, o, r, l));
 }
 const owner = (rec, names) => all(...names.map(([n, want]) => eq(rec[n], want, n)));
 const proofWord = (r) => (r === 'PASS' ? 'proven' : r === 'FAIL' ? 'failed' : 'pending');
@@ -521,12 +658,13 @@ const READERS = {
       },
     },
     lineage: {
-      files: ['lineage.json', 'trader-after-ack.json'],
+      // basis-after-ack.json: `tickets basis <project_id> <decision_id> --json`, run after the acknowledgement.
+      files: ['lineage.json', 'trader-after-ack.json', 'basis-after-ack.json'],
       judge: (d, c) => {
         const l = d['lineage.json'];
-        const o = orderIn(d['trader-after-ack.json'], l.client_order_id);
+        const { order: o, verdict } = onlyOrderIn(d['trader-after-ack.json'], l.client_order_id);
         return all(hasAll(l, ['project_id', 'run_id', 'report_id', 'receipt_id', 'generation', 'decision_id', 'intent_id', 'client_order_id', 'sent_at']), scope(l, c),
-          !o ? unv('The order is not in the capture.') : all(eq(o.state, 'ACKED', 'the order'), eq(o.side, 'OPEN_LONG', 'its side'), eq(o.decision_id, l.decision_id, 'its decision'), eq(o.intent_id, l.intent_id, 'its intent')));
+          !o ? verdict : all(eq(o.state, 'ACKED', 'the order'), eq(o.side, 'OPEN_LONG', 'its side'), eq(o.decision_id, l.decision_id, 'its decision'), eq(o.intent_id, l.intent_id, 'its intent'), openingReceipt(o, l, d['basis-after-ack.json'])));
       },
     },
     cancellation: {
@@ -536,10 +674,10 @@ const READERS = {
         const tv = d['trader-after-window.json'];
         const usable = usableAt(l.sent_at);
         const applied = atOf(l.control_applied_at);
-        const o = orderIn(tv, l.client_order_id);
+        const { order: o, verdict } = onlyOrderIn(tv, l.client_order_id);
         if (!Number.isFinite(usable) || !Number.isFinite(applied)) return unv('The send or the control has no usable time.');
         if (applied >= usable) return fail('The control came after the first eligible hour was usable.');
-        if (!o) return unv('The order is not in the capture.');
+        if (!o) return verdict;
         return all(pass('The control came before the first eligible hour was usable.'), eq(o.state, 'CANCELLED', 'the order'), isZero(o.filled) ? pass('Nothing filled.') : o.filled === undefined ? unv('Its filled quantity is not on record.') : fail('The order reads filled.'),
           positionsOf(tv, l.decision_id).length ? fail('A position came from it.') : pass('No position came from it.'));
       },

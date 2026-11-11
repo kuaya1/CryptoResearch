@@ -1144,14 +1144,32 @@ function contractCheckOf(ws, project, receipt, now) {
 // contract, current evidence, and the exit at the fitted notional (CG-14).
 // `final` when no later step can open it. Null when nothing holds the order.
 // Only an opening is checked: a close, a trim or a settlement never is.
-function contractOpenGuard(ws, project, receipt, { now = Date.now(), notionalUsd, priceUsd, quantity } = {}) {
-  if (contractGateMode(ws) !== 'enforce') return null;
+function contractOpenGuard(ws, project, receipt, opts = {}) {
+  return contractOpenReading(ws, project, receipt, opts).hold;
+}
+
+// The guard's whole reading (2026-11-10). `hold` is exactly what
+// contractOpenGuard returns (null when nothing holds the order). `guard` is
+// what a reading that did not hold evaluated, for the order's opening receipt
+// (core/opening-receipt.js, cr.opening-guard.v1): the observation it read, by
+// ID, SHA-256, chain and pinned block; the pool that proved the exit, with
+// the unrounded cost and its basis; the limits and the rule's versions it was
+// read under; or that the guard did not run, and why. It is built from the
+// very observation object fittedExit was given, never from a second read of
+// "the current observation". The trader's adapter adds the quantities and
+// puts the record on the intent it asks the book for. A hold has no `guard`.
+// Reads records only.
+function contractOpenReading(ws, project, receipt, { now = Date.now(), notionalUsd, priceUsd, quantity } = {}) {
+  const mode = contractGateMode(ws);
+  const base = { version: require('./opening-receipt').VERSION, gate_mode: mode, checked_at: iso(now) };
+  const held = (h) => ({ hold: h, guard: null });
+  if (mode !== 'enforce') return { hold: null, guard: { ...base, result: 'not_checked', why: 'gate_not_enforced' } };
   const cg = receipt && receipt.desk && receipt.desk.contract_gate;
-  if (!cg) return require('./contract-forensics').subjectsOf(project).length ? { hold: true, final: true, rule_id: 'CONTRACT_UNATTESTED', words: 'The ticket carries no contract attestation and the contract gate is enforced: no order is made from it.' } : null;
+  if (!cg) return require('./contract-forensics').subjectsOf(project).length ? held({ hold: true, final: true, rule_id: 'CONTRACT_UNATTESTED', words: 'The ticket carries no contract attestation and the contract gate is enforced: no order is made from it.' }) : { hold: null, guard: { ...base, result: 'not_checked', why: 'no_contract_read' } };
   const idNow = contractIdentityNow(ws, project, now);
-  if (!idNow || idNow.identity_key !== cg.identity_key) return { hold: true, final: true, rule_id: 'CONTRACT_CHANGED', words: 'The contract\'s identity fingerprint changed since the ticket was saved: no order is made from it.' };
+  if (!idNow || idNow.identity_key !== cg.identity_key) return held({ hold: true, final: true, rule_id: 'CONTRACT_CHANGED', words: 'The contract\'s identity fingerprint changed since the ticket was saved: no order is made from it.' });
   const stale = contractStaleWords(idNow);
-  if (stale) return { hold: true, final: false, rule_id: 'CG-20', words: `${stale} The order waits for a current observation.` };
+  if (stale) return held({ hold: true, final: false, rule_id: 'CG-20', words: `${stale} The order waits for a current observation.` });
   const fee = ws.settings && ws.settings.contracts && ws.settings.contracts.network_fee_ceiling_usd;
   const feeCeil = fee && typeof fee === 'object' ? fee[idNow.exit_observation.subject.chain_id] : null;
   const limit = receipt.desk.sizing && receipt.desk.sizing.max_exit_cost_pct;
@@ -1160,15 +1178,34 @@ function contractOpenGuard(ws, project, receipt, { now = Date.now(), notionalUsd
   // or invalid, the guard holds; above 90 minutes, the guard caps it (round 6).
   const fr = ws.settings && ws.settings.freshness;
   const priceStaleMinutes = fr && typeof fr === 'object' ? fr.price_stale_minutes : undefined;
-  const fx = require('./contract-gate').fittedExit(idNow.exit_observation, { notionalUsd, priceUsd, quantity, networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: limit, priceStaleMinutes });
-  if (!fx.ok) return { hold: true, final: false, rule_id: 'CG-14', fitted: fx, words: `${fx.words} The order waits until the fitted size is within the proven exit.` };
-  return null;
+  const G = require('./contract-gate');
+  const o = idNow.exit_observation;
+  const networkFeeUsd = feeCeil === undefined || feeCeil === null ? null : String(feeCeil);
+  const fx = G.fittedExit(o, { notionalUsd, priceUsd, quantity, networkFeeUsd, limitPct: limit, priceStaleMinutes });
+  if (!fx.ok) return held({ hold: true, final: false, rule_id: 'CG-14', fitted: fx, words: `${fx.words} The order waits until the fitted size is within the proven exit.` });
+  const pc = fx.price_check || {};
+  return {
+    hold: null,
+    guard: {
+      ...base,
+      result: 'pass',
+      rule_id: 'CG-14',
+      gate: { version: G.GATE_VERSION, exit: G.EXIT_VERSION },
+      observation: { observation_id: o.observation_id, sha256: o.sha256 || null, chain_id: String(o.subject.chain_id), block_number: o.block.number, block_hash: o.block.hash, block_time: o.block.timestamp },
+      exit: { pool: fx.pool, cost_pct: fx.cost_pct, value_usd: fx.value_usd, value_basis: fx.value_basis, ...(fx.quote_basis ? { quote_usd: fx.quote_usd, quote_basis: fx.quote_basis } : {}), notional_usd: String(notionalUsd), entry_usd: String(priceUsd) },
+      limits: { exit_cost_pct: limit, network_fee_usd: networkFeeUsd, price_stale_minutes: priceStaleMinutes },
+      price_check: { state: pc.state || null, limit_minutes: pc.limit_minutes === undefined ? null : pc.limit_minutes, gap_ms: pc.gap_ms === undefined ? null : pc.gap_ms, as_of: pc.as_of || null },
+      // What the adapter needs to finish the record, and no part of it.
+      evaluated: { quantity, token_decimals: o.token ? o.token.decimals : null },
+    },
+  };
 }
 
 // The order quantities CG-14 can prove an exit for (the trader's sizing step,
 // audit 2026-11-08): each provable concentrated-pool quote of the current
 // observation whose quantity is a whole number of `lot`, largest first, as a
-// token quantity. Reads records only; empty when there is no observation.
+// token quantity, each with the observation it was read from (for the
+// opening receipt). Reads records only; empty when there is no observation.
 function contractQuotedSizes(ws, project, { now = Date.now(), lot } = {}) {
   const G = require('./contract-gate');
   const idNow = contractIdentityNow(ws, project, now);
@@ -1177,8 +1214,48 @@ function contractQuotedSizes(ws, project, { now = Date.now(), lot } = {}) {
   const step = G.lotStep(lot, dec);
   if (!o || step === null) return [];
   return G.quotedQuantities(o).filter((x) => x.base % step === 0n).sort((a, b) => (a.base < b.base ? 1 : a.base > b.base ? -1 : 0))
-    .map((x) => ({ quantity: G.tokensText(x.base, dec), base: x.base.toString(), pool: x.pool, reference_usd: x.label, recorded: x.recorded }));
+    .map((x) => ({ quantity: G.tokensText(x.base, dec), base: x.base.toString(), pool: x.pool, reference_usd: x.label, recorded: x.recorded, observation_id: o.observation_id }));
 }
+
+// The opening receipt (core/opening-receipt.js, cr.opening-guard.v1) as the
+// trader's adapter reaches it. The adapter requires only this module of the
+// desk's contract code (tests/trader-boundary.test.js), so the receipt's own
+// module is called through here, at call time.
+// `check`: one reservation line of the book's journal against its receipt and
+// the records the receipt names: the observation by its SHA-256
+// (contract-forensics.js readObservation), the ticket receipt's frozen
+// exit-cost limit (a receipt that does not check out against its frozen
+// packet is not read), and the decision's own line. A check that cannot be
+// made reads `unverifiable` and is never thrown into the read that asked.
+// Reads only.
+function openingReceiptCheck(ws, line) {
+  const OR = require('./opening-receipt');
+  const ticketReceipt = (pid, rid) => {
+    let r = null;
+    try { r = JSON.parse(require('fs').readFileSync(ws.abs(`projects/${pid}/tickets/receipts/${rid}.json`), 'utf8')); } catch (_) { return null; }
+    if (!r || r.receipt_id !== rid || r.project_id !== pid) return null;
+    let integ = null;
+    try { integ = integrityOf(ws, r); } catch (_) { integ = null; }
+    return integ && integ.status === 'ok' ? r : null;
+  };
+  try {
+    return OR.verify(line, {
+      readObservation: (pid, id) => require('./contract-forensics').readObservation(ws, pid, id),
+      ticketReceipt,
+      decisionOf: (pid, did) => readDecisions(ws, pid).find((d) => d.decision_id === did) || null,
+    });
+  } catch (err) {
+    return { version: OR.CHECK_VERSION, status: 'unverifiable', words: `The opening receipt could not be checked (${String(err && err.message || err).slice(0, 200)}).`, differences: [], reservation: { decision_id: line && line.intent ? line.intent.decision_id || null : null, intent_id: (line && line.intent_id) || null, intent_sha256: (line && line.intent_sha256) || null, quantity: (line && line.quantity) || null, grant: null }, record: null };
+  }
+}
+const openingReceipt = Object.freeze({
+  CHECK_VERSION: require('./opening-receipt').CHECK_VERSION,
+  build: (guard, opts) => require('./opening-receipt').build(guard, opts),
+  attach: (intent, record) => require('./opening-receipt').attach(intent, record),
+  readFrom: (intent) => require('./opening-receipt').readFrom(intent),
+  summaryOf: (check) => require('./opening-receipt').summaryOf(check),
+  check: openingReceiptCheck,
+});
 
 function cancelTicket(ws, pid, tid, reason = null) {
   return updateTicket(ws, pid, tid, (t) => {
@@ -3408,6 +3485,8 @@ module.exports = {
   TAX_SPIKE_BPS,
   contractIdentityNow,
   contractOpenGuard,
+  contractOpenReading,
+  openingReceipt,
   contractQuotedSizes,
   contractVerdictNow,
   contractCheckOf,
