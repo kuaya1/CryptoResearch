@@ -218,7 +218,7 @@ function snapToQuote(ws, project, { f, plan, bk, s, now, guardAt }) {
     const at = `${q < want ? 'Sized down to' : 'At'} ${str(q)}, the quantity of the $${c.reference_usd} reference quote`;
     if (!f2.ok) return { ok: false, words: `${at}, the book would refuse it: ${f2.refusals.map((x) => x.words).join(' ')}` };
     if (f2.sizing.quantity !== str(q)) return { ok: false, words: `${at}, the book sizes ${f2.sizing.quantity} instead, so it is not asked.` };
-    return { ok: true, fit: { ...f2, binding: [...new Set([...f.binding, 'quote'])] }, snapped: { from_quantity: f.sizing.quantity, quantity: str(q), reference_usd: c.reference_usd, pool: c.pool, quote_input: c.recorded ? 'recorded' : 'rebuilt' } };
+    return { ok: true, fit: { ...f2, binding: [...new Set([...f.binding, 'quote'])] }, snapped: { from_quantity: f.sizing.quantity, quantity: str(q), reference_usd: c.reference_usd, pool: c.pool, quote_input: c.recorded ? 'recorded' : 'rebuilt', observation_id: c.observation_id || null } };
   }
   return { ok: false, words: `${dec(first.c.quantity) < want ? 'Sized down to' : 'At'} ${first.c.quantity}, the quantity of the $${first.c.reference_usd} reference quote, the exit is still not proven: ${first.h.words}` };
 }
@@ -794,8 +794,15 @@ function assess(ws, ctx, g, snap) {
     // When CG-14 alone holds the risk-sized order, it is sized down to the
     // largest quantity a saved quote proves an exit for (snapToQuote), then
     // the whole guard is read again for that final quantity.
+    // The guard's last reading is kept (tickets.js contractOpenReading): the
+    // last call is always for the quantity the book is then asked for, so
+    // `reading` is the decision the order goes out on, and what it evaluated
+    // goes with the intent as the order's opening receipt.
+    let reading = null;
+    const riskSized = sz.quantity;
     const guardAt = (s) => {
-      try { return require('./tickets').contractOpenGuard(ws, g.project, rc.receipt, { now: ctx.t, notionalUsd: s.notional_usd, priceUsd: plan.entry, quantity: s.quantity }); } catch (err) { return { hold: true, final: false, words: `The contract gate could not be read (${String(err && err.message || err).slice(0, 160)}); the order waits.` }; }
+      reading = null;
+      try { reading = require('./tickets').contractOpenReading(ws, g.project, rc.receipt, { now: ctx.t, notionalUsd: s.notional_usd, priceUsd: plan.entry, quantity: s.quantity }); return reading.hold; } catch (err) { return { hold: true, final: false, words: `The contract gate could not be read (${String(err && err.message || err).slice(0, 160)}); the order waits.` }; }
     };
     let guard = guardAt(sz);
     let snapped = null;
@@ -809,8 +816,27 @@ function assess(ws, ctx, g, snap) {
       } else guard = { ...guard, words: `${guard.words} ${sn.words}` };
     }
     if (guard && guard.hold) return out(guard.final ? 'not_opened' : 'waiting', guard.words, null, { pair: pr.pair, final: Boolean(guard.final), contract: { rule_id: guard.rule_id || null, ...(guard.fitted ? { fitted: guard.fitted } : {}) }, exit_as_of: bk.exit ? bk.exit.as_of : null });
+    // The opening receipt (core/opening-receipt.js, cr.opening-guard.v1): what
+    // that final reading evaluated, with the quantity the risk sized, the
+    // quantity asked for, and the saved quote the order was sized down to. It
+    // rides on the intent as one more of the metrics evaluated, which the
+    // published intent schema allows, so the book copies it, hashes it
+    // (intent_sha256) and writes it on the reservation's own journal line. The
+    // book never reads it for its decision. Under enforce an order whose
+    // receipt cannot be made is not asked: it waits, in words. With the gate
+    // observed only, the receipt says the guard did not run, and an order is
+    // never held back over it.
+    const OR = require('./tickets').openingReceipt;
+    const enforced = Boolean(reading && reading.guard && reading.guard.gate_mode === 'enforce');
+    let toAsk = f.intent;
+    try {
+      toAsk = OR.attach(f.intent, OR.build(reading && reading.guard, { riskSized, final: sz.quantity, snapped }));
+    } catch (err) {
+      if (enforced || !reading) return out('waiting', `The order's opening receipt could not be made (${String(err && err.message || err).slice(0, 200)}), and no order is asked without it while the contract gate is enforced; the order waits.`, null, { pair: pr.pair, contract: { rule_id: 'OPENING_RECEIPT' }, exit_as_of: bk.exit ? bk.exit.as_of : null });
+      toAsk = f.intent;
+    }
     const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
-    return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding, ...(snapped ? { snapped } : {}) } });
+    return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: toAsk }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding, ...(snapped ? { snapped } : {}) } });
   }
 
   // A refused intent has no order, so its pair is named from the project.
@@ -991,6 +1017,8 @@ function view(ws, { now } = {}) {
   };
   const intents = snap.list;
   const byOrder = new Map(intents.filter((i) => i.client_order_id).map((i) => [i.client_order_id, i]));
+  const OR = require('./tickets').openingReceipt;
+  const openings = openingLines(ws);
   const ofPosition = (p) => ({ ...p, ...whose(String(p.position_id).replace(/^pos-/, '')), exit_words: p.exits && p.exits.length ? exitWords(p.exits[p.exits.length - 1]) : null });
   // While an hour is missing, the book's figures are what it has recorded,
   // never a settled account (a fill or a stop may be in the missing hour).
@@ -1014,7 +1042,11 @@ function view(ws, { now } = {}) {
     requests: reqs,
     orders: res.orders.map((o) => {
       const i = byOrder.get(o.client_order_id) || {};
-      return { ...o, intent_id: i.intent_id || null, side: i.side || null, pair: i.pair || null, position_id: i.position_id || null, ...whose(i.intent_id) };
+      // An opening's receipt, checked against its reservation line and the
+      // observation it names (core/opening-receipt.js): null for a close.
+      const line = i.side === 'OPEN_LONG' ? openings.get(o.client_order_id) || null : null;
+      const opening = i.side !== 'OPEN_LONG' ? null : line ? OR.summaryOf(openingCheck(ws, line)) : { version: OR.CHECK_VERSION, status: 'unverifiable', words: 'This order\'s reservation line was not read with the book; read the view again.', differences: [] };
+      return { ...o, intent_id: i.intent_id || null, side: i.side || null, pair: i.pair || null, position_id: i.position_id || null, ...whose(i.intent_id), opening_receipt: opening };
     }),
     refusals: intents.filter((i) => i.state === 'REFUSED').map((i) => ({ intent_id: i.intent_id, refusals: i.refusals || [], ...whose(i.intent_id) })),
     hours: snap.hours,
@@ -1112,7 +1144,16 @@ function step(ws, { now, project = null } = {}) {
     tried.add(key(a));
     const what = { kind: a.next.kind, project_id: a.project_id, decision_id: a.decision_id, receipt_id: a.receipt_id, intent_id: a.next.intent ? a.next.intent.intent_id : null, client_order_id: a.next.client_order_id || null };
     if (a.next.kind === 'cancel') attempt(what, () => underAnchor(ws, () => PT.cancelOrder(ws, a.next.client_order_id, { now: ctx.now }), ctx.fence));
-    else attempt(what, () => underAnchor(ws, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue }), ctx.fence));
+    else {
+      const r = attempt(what, () => underAnchor(ws, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue }), ctx.fence));
+      // The book sizes the order itself. Should it reserve another quantity
+      // than the one the guard proved (the book moved between the reading and
+      // the reservation), the receipt on that reservation is for a different
+      // order: said at once, and read as `mismatch` wherever the receipt is
+      // checked (core/opening-receipt.js verify). Nothing is cancelled here.
+      const rec = a.next.kind === 'open' && r && r.sizing ? require('./tickets').openingReceipt.readFrom(a.next.intent) : null;
+      if (rec && !rec.unreadable && r.sizing.quantity !== rec.quantity.final) problems.push({ ...what, code: 'RECEIPT_MISMATCH', words: `The book reserved ${r.sizing.quantity}; this order's opening receipt is for ${rec.quantity.final}. The reservation stands as the book wrote it, and its receipt does not prove it.` });
+    }
     snap = snapshotOf(ws, ctx.now);
   }
   // The requests as the book stands after the last thing recorded: snap was
@@ -1233,6 +1274,29 @@ function gapOf(ws, pair, hour, now) {
 
 const JOURNAL = PT.JOURNAL;
 
+// One reservation line's opening receipt, checked against the records it
+// names (tickets.js openingReceipt.check, over core/opening-receipt.js
+// verify). The receipt's own module is reached through tickets.js, the one
+// contract module this adapter requires (tests/trader-boundary.test.js).
+const openingCheck = (ws, line) => require('./tickets').openingReceipt.check(ws, line);
+
+// Every opening's reservation line in the journal, by client order ID, for
+// the trader view's order rows. The journal is append-only and is read here
+// after the book's own validated read of it in the same bracketed read
+// (anchoredRead), so every order that read lists has its line here.
+function openingLines(ws) {
+  let text;
+  try { text = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8'); } catch (_) { return new Map(); }
+  const out = new Map();
+  for (const l of text.split('\n')) {
+    if (!l.includes('"reserved"')) continue;
+    let e;
+    try { e = JSON.parse(l); } catch (_) { continue; }
+    if (e && e.type === 'reserved' && e.intent && e.intent.side === 'OPEN_LONG' && e.client_order_id) out.set(e.client_order_id, e);
+  }
+  return out;
+}
+
 // One decision's execution as the book recorded it, for the read-only
 // decision basis view (core/decision-basis.js), read only through the book's
 // own integrity checks (audit F5). In one consistent read: the venue's
@@ -1287,7 +1351,11 @@ function executionFor(ws, decisionId) {
       if (!b || b.client_order_id !== e.client_order_id || (b.position_id || null) !== (e.position_id || null) || b.quantity !== e.quantity) throw new OpError('INTEGRITY', `${PT.JOURNAL} reserves ${e.client_order_id} for ${decisionId}, but the book does not hold that order as recorded. Nothing is shown until it is repaired.`);
       coids.add(e.client_order_id);
       if (e.position_id) positions.add(e.position_id);
-      out.reserved.push({ at: e.at, intent_id: e.intent_id, intent_sha256: e.intent_sha256 || null, side: e.intent.side || null, entry_price: e.intent.entry_price || null, client_order_id: e.client_order_id, position_id: e.position_id || null, quantity: e.quantity, notional_usd: e.notional_usd || null, loss_at_stop_usd: e.loss_at_stop_usd || null, valid_until_effective: e.valid_until_effective || null, venue: e.venue || null, grant: e.grant || null });
+      // An opening's receipt as its reservation line carries it, and that
+      // receipt checked against the line (core/opening-receipt.js): null for a
+      // close. Both come from the bytes the book validated above.
+      const opening = e.intent.side === 'OPEN_LONG' ? openingCheck(ws, e) : null;
+      out.reserved.push({ at: e.at, intent_id: e.intent_id, intent_sha256: e.intent_sha256 || null, side: e.intent.side || null, entry_price: e.intent.entry_price || null, client_order_id: e.client_order_id, position_id: e.position_id || null, quantity: e.quantity, notional_usd: e.notional_usd || null, loss_at_stop_usd: e.loss_at_stop_usd || null, valid_until_effective: e.valid_until_effective || null, venue: e.venue || null, grant: e.grant || null, contract_guard: opening ? opening.record : null, opening_receipt: opening ? { version: opening.version, status: opening.status, words: opening.words, differences: opening.differences } : null });
     }
     for (const e of events) {
       if (e.type === 'fill' && coids.has(e.client_order_id)) out.fills.push({ at: e.at, hour: e.hour, client_order_id: e.client_order_id, quantity: e.quantity, price: e.price, notional_usd: e.notional_usd, fee_usd: e.fee_usd, fee_kind: e.fee_kind });

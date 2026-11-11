@@ -410,6 +410,25 @@ function attributionRow(v, decisionId) {
   const row = arr(v.rows, 'rows').find((r) => r.decision_id === decisionId);
   return row ? { row } : { verdict: unv('No attribution row for this decision.') };
 }
+// The order's opening receipt, as the desk checked it for the trader view's
+// own order row (trader-desk.js view, core/opening-receipt.js verify,
+// cr.opening-guard.v1): the contract guard's final reading, written with the
+// reservation, compared with what the book reserved and made again from the
+// observation it names. B1's opening runs with the contract gate enforced
+// (b0:arming_identity), so the receipt must be bound and say the guard
+// passed. A capture with no reading of it (a desk before the receipt existed)
+// or one the desk could not check proves nothing; an order with no receipt,
+// an unchecked one, a malformed one or any difference fails.
+function openingReceipt(o, l) {
+  const r = o.opening_receipt;
+  if (r === undefined || r === null) return unv('The capture carries no reading of the order\'s opening receipt.');
+  const words = String(r.words || '').slice(0, 300);
+  if (r.status === 'unverifiable') return unv(`The order's opening receipt could not be checked: ${words}`);
+  if (r.status !== 'bound') return fail(`The order's opening receipt reads ${String(r.status)}: ${words}`);
+  return all(pass('The opening receipt is bound to the reservation, and the guard\'s reading holds when made again from the observation it names.'),
+    eq(r.decision_id, l.decision_id, 'the receipt\'s decision'), eq(r.intent_id, l.intent_id, 'the receipt\'s intent'), eq(r.reserved_quantity, o.quantity, 'the quantity the receipt is for'),
+    eq(r.gate_mode, 'enforce', 'the gate mode at the opening'), eq(r.result, 'pass', 'the guard\'s result'));
+}
 const owner = (rec, names) => all(...names.map(([n, want]) => eq(rec[n], want, n)));
 const proofWord = (r) => (r === 'PASS' ? 'proven' : r === 'FAIL' ? 'failed' : 'pending');
 const NATURAL_EXITS = new Set(['stop', 'stop_gap', 'take_profit', 'close']);
@@ -526,7 +545,7 @@ const READERS = {
         const l = d['lineage.json'];
         const o = orderIn(d['trader-after-ack.json'], l.client_order_id);
         return all(hasAll(l, ['project_id', 'run_id', 'report_id', 'receipt_id', 'generation', 'decision_id', 'intent_id', 'client_order_id', 'sent_at']), scope(l, c),
-          !o ? unv('The order is not in the capture.') : all(eq(o.state, 'ACKED', 'the order'), eq(o.side, 'OPEN_LONG', 'its side'), eq(o.decision_id, l.decision_id, 'its decision'), eq(o.intent_id, l.intent_id, 'its intent')));
+          !o ? unv('The order is not in the capture.') : all(eq(o.state, 'ACKED', 'the order'), eq(o.side, 'OPEN_LONG', 'its side'), eq(o.decision_id, l.decision_id, 'its decision'), eq(o.intent_id, l.intent_id, 'its intent'), openingReceipt(o, l)));
       },
     },
     cancellation: {

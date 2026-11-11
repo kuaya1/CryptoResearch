@@ -36,7 +36,9 @@ function complete(step, base = SHA) {
     projects: [{ project_id: PID, dispatch: { state: 'released', reconcile: false, attempt_id: 'att1', claim_state: 'released', run_id: 'run1' }, reports: { claude: { report_id: 'rep1' } } }],
     ...over,
   });
-  const order = (over = {}) => ({ client_order_id: COID1, intent_id: INT1, side: 'OPEN_LONG', decision_id: DEC1, state: 'ACKED', filled: '0', ...over });
+  // The order's opening receipt as the trader view's order row carries it (core/opening-receipt.js summaryOf).
+  const receipt = { version: 'cr-opening-guard-check@1', status: 'bound', words: 'The receipt is bound to this reservation.', differences: [], decision_id: DEC1, intent_id: INT1, intent_sha256: 'a'.repeat(64), reserved_quantity: '10', result: 'pass', gate_mode: 'enforce' };
+  const order = (over = {}) => ({ client_order_id: COID1, intent_id: INT1, side: 'OPEN_LONG', decision_id: DEC1, state: 'ACKED', filled: '0', quantity: '10', opening_receipt: { ...receipt }, ...over });
   const trader = (over = {}) => ({ now: iso(1), orders: [order()], requests: [{ decision_id: DEC1, receipt_id: 'tk1' }], results: { open_positions: [], closed_positions: [] }, candles: { accounting_unknown: null, last_run_at: iso(1) }, ...over });
   const line = (over = {}) => ({ format: 'cr-pilot-all@1', dry_run: false, max_agents: 1, polled: [], exit: 0, error: null, revision: { runner: base, desk: base, source: 'git', clean: true }, ...over });
   // Sent at 00:20: the first eligible hour is 01:00-02:00, usable at 02:10.
@@ -205,6 +207,17 @@ const CONTRADICTIONS = [
   ['b1', 'window.json', (v) => { v.other_projects_ran = true; }, 'b1:window'],
   ['b1', 'tasks-after.json', (v) => { v.pilot.state = 'Ready'; }, 'b1:window'],
   ['b1', 'trader-after-ack.json', (v) => { v.orders[0].decision_id = 'td_other'; }, 'b1:lineage'],
+  // The order's opening receipt (cr.opening-guard.v1): anything but bound, to this order, under enforce, with a pass.
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'missing'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'not_checked'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'unreadable'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'mismatch'; v.orders[0].opening_receipt.differences = ['exit.pool']; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'some later word'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.reserved_quantity = '9'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.decision_id = 'td_other'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.intent_id = 'intent-other'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.gate_mode = 'observe'; }, 'b1:lineage'],
+  ['b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.result = 'not_checked'; }, 'b1:lineage'],
   ['b1', 'lineage.json', (v) => { v.control_applied_at = iso(2.5); }, 'b1:cancellation'],
   ['b1', 'trader-after-window.json', (v) => { v.orders[0].state = 'FILLED'; v.orders[0].filled = '10'; }, 'b1:cancellation'],
   ['b1', 'trader-after-window.json', (v) => { v.results.open_positions = [{ position_id: 'p', decision_id: DEC1 }]; }, 'b1:cancellation'],
@@ -241,6 +254,29 @@ test('a record that contradicts a gate is FAIL and names that gate', async (t) =
     assert.equal(r.result, 'FAIL');
     assert.equal(r.exit_code, 1);
   }
+});
+
+test('B1 lineage: the order\'s opening receipt must be on the capture and checked; absent or uncheckable is UNVERIFIED, never PASS', async (t) => {
+  const whole = await prove('b1', evidence(t));
+  assert.equal(check(whole, 'b1:lineage').result, 'PASS');
+  assert.match(check(whole, 'b1:lineage').reason, /The opening receipt is bound to the reservation/);
+  for (const [name, change, why] of [
+    ['a capture from a desk before the receipt existed', (v) => { delete v.orders[0].opening_receipt; }, /carries no reading of the order's opening receipt/],
+    ['a null reading', (v) => { v.orders[0].opening_receipt = null; }, /carries no reading of the order's opening receipt/],
+    ['a receipt the desk could not check', (v) => { v.orders[0].opening_receipt.status = 'unverifiable'; v.orders[0].opening_receipt.words = 'The observation the receipt names is not readable now.'; }, /could not be checked: The observation the receipt names is not readable now/],
+    ['an order row with no quantity to compare', (v) => { delete v.orders[0].quantity; }, /What the quantity the receipt is for must match is not on record/],
+    ['a bound reading that names no decision', (v) => { delete v.orders[0].opening_receipt.decision_id; }, /the receipt's decision is not on record/],
+    ['a bound reading with no gate mode', (v) => { delete v.orders[0].opening_receipt.gate_mode; }, /the gate mode at the opening is not on record/],
+  ]) {
+    const r = await prove('b1', evidence(t, edit('b1', 'trader-after-ack.json', change)));
+    assert.equal(check(r, 'b1:lineage').result, 'UNVERIFIED', name);
+    assert.match(check(r, 'b1:lineage').reason, why, name);
+    assert.equal(r.result, 'UNVERIFIED', name);
+  }
+  // A failing receipt says what it reads, in the desk's own words.
+  const bad = await prove('b1', evidence(t, edit('b1', 'trader-after-ack.json', (v) => { v.orders[0].opening_receipt.status = 'mismatch'; v.orders[0].opening_receipt.words = 'The receipt is for 71.022727; the book reserved 71.'; })));
+  assert.equal(check(bad, 'b1:lineage').result, 'FAIL');
+  assert.match(check(bad, 'b1:lineage').reason, /opening receipt reads mismatch: The receipt is for 71\.022727; the book reserved 71/);
 });
 
 test('B2 attribution: inputs.label must be decision_time, and absence is UNVERIFIED, not PASS', async (t) => {

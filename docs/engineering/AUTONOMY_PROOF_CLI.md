@@ -92,6 +92,12 @@ are as returned: `GET /api/desk/controls`, `GET /api/paper/trader`,
 - **B1** follows the lineage to the acknowledged buy, checks the control came
   before the first eligible hour was usable (a send at 14:20 is usable at 16:10),
   and reads the order cancelled, with no fill and no position, after that time.
+  The lineage also reads the order's opening receipt (`cr.opening-guard.v1`) from
+  its own row of `trader-after-ack.json` (`orders[].opening_receipt`, as
+  `GET /api/paper/trader` returns it): it must read `bound`, for this decision,
+  intent and reserved quantity, with the gate enforced and the guard's result
+  `pass`. No reading, or one the desk could not check, is UNVERIFIED; `missing`,
+  `not_checked`, `unreadable` or `mismatch` is FAIL.
 - **B2** needs `inputs.label === 'decision_time'` on the attribution row, an
   unrefused view, `digest: 'verified'` with every named original checked by its
   SHA-256 (`format: cr-decision-view@1`, the view of `cr.decision-basis.v1`), and

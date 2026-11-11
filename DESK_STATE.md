@@ -586,6 +586,22 @@ Every other field is v2's, as above.
 - **A close reads no exit cap.** A position still closes after its readings go stale.
 - The schema is published as `templates/schemas/trade-intent.v3.schema.json` and never edited after; v2's file stays as published; a change is `cr.trade-intent.v4`.
 
+### The opening receipt (`cr.opening-guard.v1`, 2026-11-10)
+
+- **What it is.** When the adapter asks the book for a new opening, the contract guard's final reading for exactly that order goes on the intent (`dashboard/core/opening-receipt.js`; the reading is `tickets.js` `contractOpenReading`, built from the observation object the guard was given).
+- **How it rides.** One more item of `evidence.metrics_evaluated`: `contract_gate.opening_guard=` and the record as canonical JSON. The published v3 schema is not edited: its metrics are a list of non-empty strings, and this is one. The engine and the intent schema are unchanged.
+- **Bound to the reservation.** The book copies the intent, hashes it and writes it on the `reserved` line, so the receipt and the reservation are one write and the line's `intent_sha256` covers the receipt. A retry writes nothing new for an order already reserved.
+- **What it holds.**
+  - the observation the guard evaluated: its ID, SHA-256, chain and pinned block;
+  - the pool that proved the exit, the unrounded cost, and what the sale was valued against;
+  - the limits it was read under (the ticket's frozen exit-cost limit, the network fee, the price freshness limit) and the gate's and the valuation's versions;
+  - the quantity the risk sized and the final quantity, in tokens and exact base units;
+  - when the order was sized down to a saved quote, that quote's pool, reference rung and observation, apart from the pool that proved the exit.
+- **What it does not repeat.** The project, ticket and decision are the intent's own fields; the grant and the reserved quantity are the line's; pools, quotes and the quote asset's value are the observation's.
+- **Checked** (`verify`): the receipt against the reservation, the named observation by its hash, and the guard's reading made again from that observation with the receipt's own inputs. It reads `bound`, `not_checked` (the gate was observed only), `missing` (an order reserved before the receipt existed), `unreadable`, `mismatch` (each difference named) or `unverifiable`.
+- **Where it is read.** `tickets basis <id> <decision_id>` (`execution.reserved[].contract_guard` and `.opening_receipt`), the trader view's order rows (`GET /api/paper/trader`, `orders[].opening_receipt`), and B1's lineage gate, which reads that view as captured.
+- **Under enforce** an order whose receipt cannot be made is not asked: it waits, in words. Should the book reserve another quantity than the guard proved, the step says so (`RECEIPT_MISMATCH`) and the check reads `mismatch`; nothing is cancelled.
+
 ### Paper Book `cr-paper@2`
 
 Pipeline review, 2026-10-27. What the trader's Paper Book must be before any engine routes an intent to it. Built in `dashboard/core/paper-trader.js` (PR #59) beside `cr-paper@1` (`dashboard/core/paper.js`, unchanged), which keeps measuring the PM's ticket decisions exactly as it does. `cr-paper@2` has its own hash-chained, append-only records under `paper/trader/` and never touches `paper/positions.jsonl`.

@@ -48,7 +48,10 @@ test('brief 5: the Paper Book view reads the journal once per phase, with the sa
   const { out, n } = journalReads(t, () => TD.view(ws, { now: at }));
   // One snapshot: the engine's results, intents and hours, one read each (6
   // before; one read for all three needs an engine API, a [P] follow-up).
-  assert.equal(n, 3, `view read the journal ${n} times`);
+  // And one read of the view's own (2026-11-10): the openings' reservation
+  // lines, which carry the opening receipts its order rows show
+  // (cr.opening-guard.v1). The engine's reads give no intent body.
+  assert.equal(n, 4, `view read the journal ${n} times`);
   // The same answer as its parts read on their own.
   const PT = require('../core/paper-trader');
   assert.deepEqual(out.results.orders.map((o) => o.client_order_id), PT.results(ws, { now: at }).orders.map((o) => o.client_order_id));
