@@ -613,8 +613,11 @@ test('admission-only patch: the runbook\'s console script, on a signed-in FICTIO
   assert.doesNotMatch(RUNBOOK_SCRIPT, /exit-quotes|init-defaults|pilot|enroll|contracts|forensics|DESK_INGEST_KEY|XAI_API_KEY|ALCHEMY_API_KEY|passphrase/i);
   const w = await ownValuesDesk(t);
   const ws = reopen(w);
-  const srv = await start(ws, { port: 47980 + Math.floor(Math.random() * 9), quiet: true });
-  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  // The server's own background work is held (server-background.js): its
+  // start-up jobs record their runs in logs/jobs-state.json, which is not
+  // this request's write. What the request itself writes is still compared
+  // below, unchanged.
+  const { srv } = await require('./server-background').startWithBackgroundHeld(t, ws, { port: 47980 + Math.floor(Math.random() * 9), quiet: true });
   // As written: nothing is asked of the desk.
   const idle = fictionalTransport(srv.port);
   const said = [];
