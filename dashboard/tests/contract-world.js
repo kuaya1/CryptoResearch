@@ -193,4 +193,33 @@ const SHALLOW = 35294n * E18;
 const shallowState = (controller) => baseState({ owner: controller, minter: controller, reserve_token: SHALLOW, reserve_quote: 30000n * 10n ** 6n, bal: { [PAIR]: SHALLOW, [BUYER]: 50000n * E18 } });
 const liveBlock = (n) => ({ number: n, hash: `0x${n.toString(16).padStart(64, '0')}`, timestamp: Math.floor(Date.now() / 1000) - 600 });
 
-module.exports = { NOW, E18, ADDR, W, Aw, sel, arg, argA, ok, okA, REVERT, codeWith, M256, runEvm, TOKEN, USDC, FACTORY, INIT, OWNER, BUYER, HIDDEN, T0, T1, PAIR, TOKEN_RES, USDC_RES, BLOCK, tokenFns, world, ROW, baseState, TL, TL2, TL_CODE, TOKEN_CODE, TOKEN_ABI, sources, timelocks, SHALLOW, shallowState, liveBlock };
+// A concentrated pool's own price for these fixtures (cr-contract-exit@2).
+// `sqrtAt` is the square-root price slot0() stores (Q64.96) for a token that
+// costs `usd` in a quote asset worth $1: the nearest one that does not put
+// the pool's price over `usd`, so a pool "at" a price never reads above it.
+// `spotAt` is the pool row's `spot` as the capture writes it; `slot0At` is
+// the pool's answer to slot0(). The fictional token sorts below the quote
+// asset, so it is token0 unless a test says otherwise.
+function isqrt(n) {
+  if (n < 2n) return n;
+  let x0 = n;
+  let x1 = (n >> 1n) + 1n;
+  while (x1 < x0) { x0 = x1; x1 = (x1 + n / x1) >> 1n; }
+  return x0;
+}
+function sqrtAt(usd, { tokenDecimals = 18, quoteDecimals = 6, side = TOKEN === T0 ? 'token0' : 'token1' } = {}) {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(String(usd));
+  if (!m) throw new Error(`not a plain price: ${usd}`);
+  const frac = m[2] || '';
+  // The price as quote base units per token base unit: num / den.
+  const num = BigInt(`${m[1]}${frac}`) * 10n ** BigInt(quoteDecimals);
+  const den = 10n ** BigInt(frac.length + tokenDecimals);
+  if (num === 0n) throw new Error('a pool has no price of zero');
+  if (side === 'token0') return isqrt((num << 192n) / den); // s² / 2^192 <= price
+  const s = isqrt((den << 192n) / num); // 2^192 / s² <= price
+  return s * s * num < den << 192n ? s + 1n : s;
+}
+const spotAt = (usd, opts = {}) => ({ sqrt_price_x96: sqrtAt(usd, opts).toString(), token_side: opts.side || (TOKEN === T0 ? 'token0' : 'token1') });
+const slot0At = (usd, opts = {}) => ok(sqrtAt(usd, opts), 0, 0, 0, 0, 0, 1);
+
+module.exports = { NOW, E18, ADDR, W, Aw, sel, arg, argA, ok, okA, REVERT, codeWith, M256, runEvm, TOKEN, USDC, FACTORY, INIT, OWNER, BUYER, HIDDEN, T0, T1, PAIR, TOKEN_RES, USDC_RES, BLOCK, tokenFns, world, ROW, baseState, TL, TL2, TL_CODE, TOKEN_CODE, TOKEN_ABI, sources, timelocks, SHALLOW, shallowState, liveBlock, sqrtAt, spotAt, slot0At };

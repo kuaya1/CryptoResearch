@@ -4,11 +4,15 @@
 // physics and the value-capture tests. No file, no clock, no network: the
 // same inputs give the same bytes.
 //
-// - Exit physics (cr-contract-exit@1): constant-product proceeds in exact
+// - Exit physics (cr-contract-exit@2): constant-product proceeds in exact
 //   integer arithmetic from the reserves at the pinned block; the cost is
 //   (S − received + network fee) / S × 100, kept as a decimal ceiled at 18
 //   places; taxes and pool fees are inside the proceeds, never counted twice.
 //   The depth to a limit c is R_in × [γ(1−t) − (1−c)] / [(1−c) γ (1−t)].
+//   @2 (2026-11-10): where a sale is valued at the observation (CG-14, and a
+//   ladder row selling a recorded quote input), S is also never less than the
+//   sold quantity at the price of the pool it is sold into, read at the same
+//   block (poolPrice). @1 valued it at the entry and the stored price only.
 // - The legacy projection (cr-forensic-exit-legacy@1) rounds a cost UP to
 //   three decimals, the shape `packet.exits` has always had.
 // - Value capture (cr-value-capture@1): holder yield against dilution and
@@ -23,7 +27,7 @@ const crypto = require('crypto');
 const GATE_VERSION = 'cr-contract-gate@1';
 const ATTESTATION_VERSION = 'cr-contract-attestation@1';
 const VALUE_CAPTURE_VERSION = 'cr-value-capture@1';
-const EXIT_VERSION = 'cr-contract-exit@1';
+const EXIT_VERSION = 'cr-contract-exit@2';
 const EXIT_LEGACY_VERSION = 'cr-forensic-exit-legacy@1';
 const JSON_VERSION = 'cr-forensic-json@1';
 const PACKET_V2 = 'cr.ticket-packet.v2';
@@ -179,6 +183,36 @@ function quotedQuantities(observation) {
 // same way; its ladder rows, sized at the ticket's price, are unchanged.
 const VALUED_AT_OBSERVATION = new Set(['concentrated', 'constant_product']);
 
+// The pool's own price at the observation's block (cr-contract-exit@2), in
+// quote base units per token base unit, exact: a constant-product pool's
+// reserve ratio (the reserves its sale is computed from), or a concentrated
+// pool's slot0 square-root price (`spot.sqrt_price_x96`, a uint160 as a
+// canonical decimal string) turned the way the token sits in the pool
+// (`spot.token_side`: 'token0' reads s² / 2^192, 'token1' its inverse). Null
+// when it is not on record: an observation made before the capture read it,
+// a read that did not answer, or a malformed value. A concentrated pool's
+// `reserves` are its two token balances, never a price: liquidity parked away
+// from the price moves them and not the price.
+const Q192 = 2n ** 192n;
+const positive = (v) => (typeof v === 'string' && /^[1-9]\d*$/.test(v) ? BigInt(v) : null);
+function poolPrice(pool) {
+  if (!pool || typeof pool !== 'object') return null;
+  if (pool.mechanism === 'constant_product') {
+    const r = pool.reserves && typeof pool.reserves === 'object' ? pool.reserves : null;
+    const t = r ? positive(r.token) : null;
+    const q = r ? positive(r.quote) : null;
+    return t !== null && q !== null ? { n: q, d: t } : null;
+  }
+  if (pool.mechanism === 'concentrated') {
+    const sp = pool.spot !== null && typeof pool.spot === 'object' && !Array.isArray(pool.spot) ? pool.spot : null;
+    const s = sp ? positive(sp.sqrt_price_x96) : null;
+    if (s === null || s >= 2n ** 160n) return null;
+    if (sp.token_side === 'token0') return { n: s * s, d: Q192 };
+    if (sp.token_side === 'token1') return { n: Q192, d: s * s };
+  }
+  return null;
+}
+
 // Constant-product output for an input already net of the token's tax.
 function cpOut({ rIn, rOut, feeBps, qIn }) {
   const g = BigInt(10000 - feeBps);
@@ -201,6 +235,19 @@ function cpOut({ rIn, rOut, feeBps, qIn }) {
 // (`valuePriceUsd`); with no stored price the sale is not valued, so it is
 // not proven. A ladder row selling a recorded quote input is valued at that
 // quantity at the stored price, the basis the guard uses, not at its label.
+// The pool's own price (cr-contract-exit@2; Eric's option A, 2026-11-10):
+// wherever a sale is valued that way, its value is also never less than the
+// sold quantity at the pool's own price at the observation's block
+// (poolPrice), so a stored price under the pool's cannot make a sale look
+// cheaper than it is in that pool. The entry, the stored price and the
+// pool's price are three yardsticks and the largest value is used: that is
+// the highest cost whenever the proceeds exceed the network fee, and below
+// that every yardstick reads over 100%. The quote asset's dollar value
+// multiplies the pool's value and the proceeds alike, so on this basis only
+// the network fee's share depends on it. With `sellBase` (CG-14) a pool
+// whose price is not on record does not prove the sale. A ladder row of such
+// a pool keeps the stored-price basis: it is a reading for the ticket, and
+// the guard still decides the order.
 function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd, sellBase, quotePriceUsd, valuePriceUsd }) {
   const fitted = sellBase !== undefined;
   const how = pool.mechanism === 'concentrated' ? quoteRecord(pool) : null;
@@ -239,6 +286,13 @@ function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd,
   if (vp && vp.n > 0n) {
     const v = rDiv(rMul({ n: q, d: 1n }, vp), { n: 10n ** BigInt(tokenDecimals), d: 1n });
     if (!fitted || rCmp(v, S) > 0) { S = v; basis = 'observation'; }
+  }
+  if (valued) {
+    const pp = poolPrice(pool);
+    if (pp) {
+      const v = rDiv(rMul(rMul({ n: q, d: 1n }, pp), qUsd), { n: 10n ** BigInt(pool.quote_decimals), d: 1n });
+      if (rCmp(v, S) > 0) { S = v; basis = 'pool'; }
+    } else if (fitted) return { size_usd: sizeUsd, status: 'unavailable', no_pool_price: true, words: 'The pool\'s own price at the observation\'s block is not on record, so the sale cannot be measured against it.' };
   }
   const cost = rMul(rDiv(rAdd(rSub(S, received), fee || { n: 0n, d: 1n }), S), { n: 100n, d: 1n });
   return {
@@ -351,6 +405,10 @@ function priceFreshness(observation, staleMinutes) {
 // for a quantity rebuilt from a dollar figure (audit 2026-11-08).
 // `priceStaleMinutes`: the desk's resolved freshness.price_stale_minutes; the
 // stored price must pass priceFreshness, or the order holds (audit round 6).
+// The sale is also measured against the pool's own price at the block
+// (exitAt, cr-contract-exit@2): a fresh stored price under the pool's no
+// longer hides part of the cost, and a pool with no price on record proves
+// nothing until the next observation records one.
 function fittedExit(observation, { notionalUsd, priceUsd, networkFeeUsd, limitPct, quantity, priceStaleMinutes }) {
   const n = ratio(notionalUsd);
   const lim = ratio(limitPct);
@@ -363,14 +421,22 @@ function fittedExit(observation, { notionalUsd, priceUsd, networkFeeUsd, limitPc
   const quotePriceUsd = storedPrice(observation);
   const fresh = priceFreshness(observation, priceStaleMinutes);
   if (!fresh.ok && (quotePriceUsd !== null || fresh.state === 'no_limit')) return { ...base, ok: false, cost_pct: null, price_check: fresh, words: `The observation's stored price cannot value this sale: ${fresh.words}, so the exit at the fitted notional $${size} is not proven within ${limitPct}%.` };
-  const b = exitLadder(observation, { sizes: [notionalUsd], priceUsd, networkFeeUsd, limitPct, sellBase, quotePriceUsd }).best[0].best;
+  const ladder = exitLadder(observation, { sizes: [notionalUsd], priceUsd, networkFeeUsd, limitPct, sellBase, quotePriceUsd });
+  const b = ladder.best[0].best;
+  // Pools that price the sale but carry no price of their own are not
+  // measured. An order that does not pass says so, so the wait is explained.
+  const unpriced = ladder.pools.filter((p) => p.rows[0] && p.rows[0].no_pool_price === true).length;
+  const unmeasured = !unpriced ? '' : unpriced === 1 ? ' One pool\'s own price at the observation\'s block is not on record, so that pool is not measured until the next observation records it.'
+    : ` ${unpriced} pools' own prices at the observation's block are not on record, so those pools are not measured until the next observation records them.`;
+  const seen = unpriced ? { no_pool_price: unpriced } : {};
   const why = quotePriceUsd === null && Array.isArray(observation && observation.pools) && observation.pools.some((p) => p.counted === true && VALUED_AT_OBSERVATION.has(p.mechanism)) ? ' (the observation has no stored price, so the sale cannot be valued at it, nor a quote tied to a token quantity)' : '';
-  if (!b) return { ...base, ok: false, cost_pct: null, words: `No verified pool prices a sale of $${size} on chain${why}, so the exit at the fitted notional is not proven within ${limitPct}%.` };
-  // The basis, said only when it is the observation's (the stricter one).
-  const at = b.value_basis === 'observation' ? `, measured against the ${quantity} tokens at the observation price $${quotePriceUsd} ($${b.value_usd}),` : '';
-  const got = { ...base, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, value_usd: b.value_usd, value_basis: b.value_basis, price_check: fresh };
-  if (!b.cost_complete) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at} is at least ${b.cost_pct_3}% (${b.missing_costs.join(', ').replace(/_/g, ' ')} unknown): not proven within ${limitPct}%.` };
-  if (rCmp(ratio(b.cost_pct), lim) > 0) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at} is ${b.cost_pct_3}%, over the ${limitPct}% limit.` };
+  if (!b) return { ...base, ok: false, cost_pct: null, ...seen, words: `No verified pool prices a sale of $${size} on chain${why}, so the exit at the fitted notional is not proven within ${limitPct}%.${unmeasured}` };
+  // The basis, said when it is the observation's or the pool's (the stricter ones).
+  const at = b.value_basis === 'observation' ? `, measured against the ${quantity} tokens at the observation price $${quotePriceUsd} ($${b.value_usd}),`
+    : b.value_basis === 'pool' ? `, measured against the ${quantity} tokens at the pool's own price ($${b.value_usd}),` : '';
+  const got = { ...base, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, value_usd: b.value_usd, value_basis: b.value_basis, price_check: fresh, ...seen };
+  if (!b.cost_complete) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at} is at least ${b.cost_pct_3}% (${b.missing_costs.join(', ').replace(/_/g, ' ')} unknown): not proven within ${limitPct}%.${unmeasured}` };
+  if (rCmp(ratio(b.cost_pct), lim) > 0) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at} is ${b.cost_pct_3}%, over the ${limitPct}% limit.${unmeasured}` };
   return { ...got, ok: true, words: `The exit cost at the fitted notional $${size}${at} is ${b.cost_pct_3}%, within ${limitPct}%.` };
 }
 
@@ -525,5 +591,5 @@ const tierOf = (v) => (v && TIER_RANK[v.tier] !== undefined ? v.tier : 'none');
 
 module.exports = {
   GATE_VERSION, ATTESTATION_VERSION, VALUE_CAPTURE_VERSION, EXIT_VERSION, EXIT_LEGACY_VERSION, JSON_VERSION, PACKET_V2, MODES, PARAMS_DEFAULT, TIER_RANK, CAP_RULE,
-  canonicalJson, hashOf, ratio, fixed, tokensFor, baseUnits, tokensText, lotStep, quoteRecord, quoteInput, quotedQuantities, cpOut, exitAt, depthToLimit, legacyExit, exitLadder, utcMs, priceFreshness, PRICE_GAP_CAP_MINUTES, fittedExit, valueCapture, verdict, tierOf,
+  canonicalJson, hashOf, ratio, fixed, tokensFor, baseUnits, tokensText, lotStep, quoteRecord, quoteInput, quotedQuantities, poolPrice, cpOut, exitAt, depthToLimit, legacyExit, exitLadder, utcMs, priceFreshness, PRICE_GAP_CAP_MINUTES, fittedExit, valueCapture, verdict, tierOf,
 };

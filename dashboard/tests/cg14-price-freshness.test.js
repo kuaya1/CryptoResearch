@@ -45,7 +45,7 @@ const TD = require('../core/trader-desk');
 const TF = require('./trader-fixture');
 const H = require('./helpers');
 const { exact: { dec, str, mulCeil } } = require('../core/trade-risk');
-const { world, baseState, ROW, T0, T1, PAIR, USDC, BUYER, ADDR, Aw, W, sel, arg, ok, okA, TOKEN, TOKEN_CODE, sources, timelocks, liveBlock, TL } = require('./contract-world');
+const { world, baseState, ROW, T0, T1, PAIR, USDC, BUYER, ADDR, Aw, W, sel, arg, ok, okA, TOKEN, TOKEN_CODE, sources, timelocks, liveBlock, TL, spotAt, slot0At } = require('./contract-world');
 
 const E18 = 10n ** 18n;
 const MIN = 60000;
@@ -61,6 +61,8 @@ const at = (ms) => new Date(T_MS + ms).toISOString();
 const v3 = (quotedIn = { 500: R500.toString() }, outs = { 500: '496749998' }) => ({ pool: '0xv3', mechanism: 'concentrated', counted: true, quote_decimals: 6, quote_usd: '1', reserves: { token: '1', quote: '1' }, quoted: outs, ...(quotedIn === null ? {} : { quoted_in: quotedIn }) });
 // A deep constant-product pair priced at $7.04.
 const cp = () => ({ pool: '0xcp', mechanism: 'constant_product', counted: true, fee_bps: 30, quote_decimals: 6, quote_usd: '1', reserves: { token: (500000n * E18).toString(), quote: '3520000000000' } });
+// A concentrated pool trades at the observation's stored price (its `spot`, cr-contract-exit@2) unless a test gives it one of its own.
+const atStored = (pools, price, decimals = 18) => pools.map((p) => (p.mechanism === 'concentrated' && price !== null && price !== undefined && !('spot' in p) ? { ...p, spot: spotAt(price, { tokenDecimals: decimals }) } : p));
 // ABSENT leaves a time out of the record entirely.
 const ABSENT = Symbol('absent');
 function obs(pools, { price = '7.04', asOf = at(8 * MIN), block = at(0), finished = at(13 * MIN), priceRef } = {}) {
@@ -70,7 +72,7 @@ function obs(pools, { price = '7.04', asOf = at(8 * MIN), block = at(0), finishe
     retrieved: finished === ABSENT ? { started_at: at(12 * MIN) } : { started_at: at(12 * MIN), finished_at: finished },
     price_ref: priceRef !== undefined ? priceRef : { usd: price, as_of: asOf, source: 'coingecko_stored' },
     transfer_probe: { status: 'ok', sell_path: { tax_bps: 0 } },
-    pools,
+    pools: atStored(pools, price),
   };
 }
 const guard = (o, opts = {}) => {
@@ -236,7 +238,7 @@ let RATES = POOL_732;
 const PAY = (q) => ((q <= 100n * E18 ? q * RATES.small : q * RATES.large) / (100000n * 10n ** 12n));
 const V3 = {
   [FACT3]: { code: '0x60806040526003', fns: { [sel('getPool(address,address,uint24)')]: () => okA(POOL3) } },
-  [POOL3]: { code: '0x60806040526004', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1) } },
+  [POOL3]: { code: '0x60806040526004', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1), [sel('slot0()')]: () => slot0At('7.32') } }, // the pool's own price, as this fixture describes it
   [QUOTER]: { code: QCODE, fns: { [sel('quoteExactInputSingle((address,address,uint256,uint24,uint160))')]: (S, f, d) => ok(PAY(arg(d, 2)), 0, 0, 0) } },
 };
 const THIN = { token: 564531721145538574650n, quote: 3962014889n };

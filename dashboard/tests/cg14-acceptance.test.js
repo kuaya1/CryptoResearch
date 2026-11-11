@@ -46,7 +46,7 @@ const TD = require('../core/trader-desk');
 const TF = require('./trader-fixture');
 const H = require('./helpers');
 const projects = require('../core/projects');
-const { world, baseState, ROW, TOKEN, USDC, BUYER, T0, T1, PAIR, ADDR, Aw, W, sel, arg, ok, okA, TOKEN_CODE, sources, timelocks, liveBlock, TL } = require('./contract-world');
+const { world, baseState, ROW, TOKEN, USDC, BUYER, T0, T1, PAIR, ADDR, Aw, W, sel, arg, ok, okA, TOKEN_CODE, sources, timelocks, liveBlock, TL, spotAt, slot0At } = require('./contract-world');
 
 const KEY = 'FICTIONALkey_0123456789';
 const E18 = 10n ** 18n;
@@ -61,7 +61,9 @@ const quotedAt = (ref, sizes) => Object.fromEntries(sizes.map((s) => [String(s),
 const clPool = (ref = REF, sizes = [100, 500, 2000]) => ({ pool: '0xv3', mechanism: 'concentrated', counted: true, quote_decimals: 6, quote_usd: '1', reserves: { token: '1', quote: '1' }, quoted: quotedAt(ref, sizes) });
 // The three times a capture writes (audit round 6): the stored price 8 minutes after the block, the capture finished 13 minutes after.
 const TIMED = { block: { timestamp: '2026-11-09T12:00:00.000Z' }, retrieved: { started_at: '2026-11-09T12:12:00.000Z', finished_at: '2026-11-09T12:13:00.000Z' } };
-const obsOf = (pools, { tax = 0, ref = REF } = {}) => ({ token: { decimals: 18 }, ...TIMED, price_ref: { usd: ref, as_of: '2026-11-09T12:08:00.000Z', source: 'coingecko_stored' }, transfer_probe: tax === null ? { status: 'unavailable', words: 'The pool\'s recent transfers did not read.' } : { status: 'ok', sell_path: { tax_bps: tax } }, pools });
+// A concentrated pool trades at the observation's stored price (its `spot`, cr-contract-exit@2) unless a test gives it one of its own.
+const atStored = (pools, price, decimals = 18) => pools.map((p) => (p.mechanism === 'concentrated' && price !== null && price !== undefined && !('spot' in p) ? { ...p, spot: spotAt(price, { tokenDecimals: decimals }) } : p));
+const obsOf = (pools, { tax = 0, ref = REF } = {}) => ({ token: { decimals: 18 }, ...TIMED, price_ref: { usd: ref, as_of: '2026-11-09T12:08:00.000Z', source: 'coingecko_stored' }, transfer_probe: tax === null ? { status: 'unavailable', words: 'The pool\'s recent transfers did not read.' } : { status: 'ok', sell_path: { tax_bps: tax } }, pools: atStored(pools, ref) });
 // A base-unit count as a decimal token quantity (18 decimals).
 const asQty = (base, decimals = 18) => { const s = base.toString().padStart(decimals + 1, '0'); return `${s.slice(0, -decimals)}.${s.slice(-decimals)}`.replace(/\.?0+$/, ''); };
 // The quantity an order of `notional` at `entry` buys, for the unit cases.
@@ -158,9 +160,11 @@ const QCODE = '0x6080604052600f';
 const INIT3 = K.keccak256Hex('0x0f1c7101a1');
 const POOL3 = K.create2Address(FACT3, K.keccak256Hex(`0x${Aw(T0)}${Aw(T1)}${W(3000)}`), INIT3);
 const ROW3 = { chain_id: '8453', name: 'Fictional V3', kind: 'v3', factory: FACT3, init_code_hash: INIT3, fee_tiers: [3000], quoter: QUOTER, quoter_code_hash: K.keccak256Hex(QCODE), quotes: [{ address: USDC, decimals: 6, usd_value: '1' }] };
+// The pool's own price follows the stored price each capture is sized at: these cases are about which quantity a quote is for, not about the two prices differing.
+let POOL_USD = '0.85';
 const V3 = {
   [FACT3]: { code: '0x60806040526003', fns: { [sel('getPool(address,address,uint24)')]: () => okA(POOL3) } },
-  [POOL3]: { code: '0x60806040526004', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1) } },
+  [POOL3]: { code: '0x60806040526004', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1), [sel('slot0()')]: () => slot0At(POOL_USD) } },
   [QUOTER]: { code: QCODE, fns: { [sel('quoteExactInputSingle((address,address,uint256,uint24,uint160))')]: (S, f, d) => ok((arg(d, 2) * 849n) / (1000n * 10n ** 12n), 0, 0, 0) } },
 };
 const THIN_TOKEN = 3529n * E18;
@@ -193,6 +197,7 @@ function failingLogs(w) {
 let blockN = 9900;
 async function observe(s, { price, failLogs = false }) {
   H.freshPrice(s.ws, 'example-payfi-fictional', price);
+  POOL_USD = String(price);
   let w = world({ S: thinState(), tokenCode: TOKEN_CODE, extra: { ...timelocks, ...V3 }, block: liveBlock(blockN += 1) });
   if (failLogs) w = failingLogs(w);
   await CF.probeNetwork(s.ws, '8453', { fetchImpl: w.fetch, key: KEY, now: Date.now });

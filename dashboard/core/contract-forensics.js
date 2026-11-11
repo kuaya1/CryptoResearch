@@ -764,7 +764,9 @@ const sortedPair = (a, b) => (lower(a) < lower(b) ? [lower(a), lower(b)] : [lowe
 // Every allowlisted pool of the token, each checked: the factory's own
 // lookup, the CREATE2 address, token0/token1, and for a constant-product pool
 // the token balance against the reserve (a rebasing or fee-accruing token is
-// not computed). A failed check excludes the pool with its reason.
+// not computed). A failed check excludes the pool with its reason. A
+// concentrated pool's `reserves` are its two token balances; its price is
+// `spot` (slot0 at the pinned block), read for a pool that passed its checks.
 async function discoverPools(session, rd, token, ctx) {
   const out = [];
   for (const f of ctx.factories) {
@@ -802,6 +804,15 @@ async function discoverPools(session, rd, token, ctx) {
           row.reserves = { token: tokenBal ? decUint(tokenBal).toString() : null, quote: qb ? decUint(qb).toString() : null };
           const qc = await rd.code(f.quoter);
           if (!qc || qc.hash !== f.quoter_code_hash) { exclude('The quoter\'s code is not the allowlisted code.'); continue; }
+          // The pool's own price at the pinned block, for CG-14 (contract-gate.js
+          // poolPrice, cr-contract-exit@2): slot0()'s first word is sqrtPriceX96,
+          // a uint160, and the token's side is the order checked just above. One
+          // pinned eth_call per pool that is about to be counted. A read that
+          // does not answer, or a zero (a pool never initialized), leaves the
+          // field off: the pool stays counted for the other checks, and CG-14
+          // holds an order that would need it.
+          const sq = decUint(await rd.view(addr, callData('slot0()')) || '0x');
+          if (sq !== null && sq > 0n && sq < 2n ** 160n) row.spot = { sqrt_price_x96: sq.toString(), token_side: token === t0 ? 'token0' : 'token1' };
         }
         row.counted = true;
         out.push(row);

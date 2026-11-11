@@ -587,7 +587,8 @@ test('enforce: the trader waits while the fitted notional\'s exit is over the li
   const d = T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: 'req_pc_cg14_000001' }).result.decision;
   const a = TD.requests(s.ws, {}).requests.find((x) => x.decision_id === d.decision_id);
   assert.equal(a.phase, 'waiting', a.words);
-  assert.match(a.words, /fitted notional \$\d+(\.\d+)? is \d+\.\d{3}%, over the 5% limit/);
+  // The pair's reserve ratio sits a hair over the stored $0.85, so the sentence names the pool's own price as its basis (cr-contract-exit@2).
+  assert.match(a.words, /fitted notional \$\d+(\.\d+)?(, measured against the [\d.]+ tokens at the pool's own price \(\$[\d.]+\),)? is \d+\.\d{3}%, over the 5% limit/);
   assert.equal(a.contract.rule_id, 'CG-14');
   // The reference tranche alone passes: $500 on chain is within 5%.
   const proj = projects.getProject(s.ws, s.pid);
