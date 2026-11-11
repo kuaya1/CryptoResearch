@@ -50,16 +50,34 @@ const PROJECT_FILE = path.join('projects', 'example-payfi-fictional', 'project.j
 // Runs `starting` and keeps the callback it hands the operating system's
 // watcher, so a test can deliver a change notice itself, exactly as the
 // system would, instead of waiting for one.
+// The server's watcher is its one RECURSIVE watch on the workspace root
+// (`root`): `asked` is the folder of every recursive watch `starting` asked
+// for, and `given` the callback of each one on `root`. Every call goes on to
+// the real fs.watch, whatever it is for. Where the operating system has no
+// recursive watch (Linux), Node makes one from nonrecursive watches, one on
+// the root itself and one on each file and folder under it, and asks for each
+// through fs.watch as it is then, so they pass through here too. The folder
+// alone therefore does not tell the server's call from Node's own.
 // `left` is what fs.watch was the moment `starting` had finished, before this
 // puts the real one back: it must be `recorder`, the one `starting` found.
-async function watching(starting) {
+async function watching(root, starting) {
   const realWatch = fs.watch;
+  const at = path.resolve(root);
+  const asked = [];
   const given = [];
-  const recorder = (...a) => { given.push(a.find((x) => typeof x === 'function')); return realWatch(...a); };
+  const recorder = (...a) => {
+    const [dir, options] = a;
+    if (options !== null && typeof options === 'object' && options.recursive === true) {
+      const folder = typeof dir === 'string' ? path.resolve(dir) : dir;
+      asked.push(folder);
+      if (folder === at) given.push(a.find((x) => typeof x === 'function'));
+    }
+    return realWatch(...a);
+  };
   fs.watch = recorder;
   try {
     const out = await starting();
-    return { out, given, recorder, left: fs.watch };
+    return { out, at, asked, given, recorder, left: fs.watch };
   } finally { fs.watch = realWatch; }
 }
 // The delays of the timers `fn` sets, with none of them started.
@@ -86,9 +104,10 @@ test('held: the server\'s 200 ms start-up jobs fire, are held, and write nothing
   jobs.runJobs = noted(realJobs[1]);
   t.after(() => { [jobs.runJob, jobs.runJobs] = realJobs; });
   const entry = [jobs.runJob, jobs.runJobs];
-  const { out: h, given, recorder, left } = await watching(() => startWithBackgroundHeld(t, w.ws, { port: port(), quiet: true }));
+  const { out: h, at, asked, given, recorder, left } = await watching(w.ws.root, () => startWithBackgroundHeld(t, w.ws, { port: port(), quiet: true }));
   assert.equal(left, recorder, 'fs.watch is what it was as soon as the server has started');
   assert.deepEqual([global.setTimeout, global.setInterval, fs.watch], before, 'and so are the global timers');
+  assert.deepEqual(asked, [at], 'the server asked for exactly one recursive watch, on its workspace');
   assert.equal(given.length, 1, 'the server opened its one watcher');
   const started = tree(w.root); // the server's own start writes its index first
   assert.equal(started[STATE], undefined, 'no job has recorded a run');
@@ -128,7 +147,7 @@ test('not held (the server as production starts it): the same start-up timer wri
   const finished = new Promise((resolve) => { done = resolve; });
   jobs.runJobs = async (...a) => { const r = await realRunJobs(...a); if (a[0] === w.ws && Array.isArray(a[1]) && a[1].includes('inbox')) done(r); return r; };
   t.after(() => { jobs.runJobs = realRunJobs; });
-  const { out: srv, given } = await watching(() => start(w.ws, { port: port(), quiet: true }));
+  const { out: srv, at, asked, given } = await watching(w.ws.root, () => start(w.ws, { port: port(), quiet: true }));
   t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
   const started = tree(w.root);
   assert.equal(started[STATE], undefined);
@@ -137,6 +156,7 @@ test('not held (the server as production starts it): the same start-up timer wri
   assert.deepEqual(changed(started, tree(w.root)).filter((f) => f === STATE), [STATE], 'the background write the two tests were racing');
   // The watcher's own work, read off the timers its callback sets (none is started here):
   // a change in the workspace schedules the index rebuild; one in the inbox, the inbox jobs as well.
+  assert.deepEqual(asked, [at], 'the server asked for exactly one recursive watch, on its workspace');
   assert.equal(given.length, 1);
   assert.deepEqual(timersSetBy(() => given[0]('rename', PROJECT_FILE)), [300], 'the derived index is rebuilt 300 ms after a change');
   assert.deepEqual(timersSetBy(() => given[0]('change', INBOX_FILE)), [1500, 300], 'and the inbox jobs are scheduled again');
