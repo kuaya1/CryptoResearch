@@ -679,6 +679,7 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev, market 
       effects: obs.effects,
       pools: obs.pools,
       price_ref: market && market.price_usd !== null ? { usd: String(market.price_usd), as_of: market.as_of || null, source: 'coingecko_stored' } : null,
+      quote_price_ref: quotePriceRefs(subject.chain_id, obs.pools, market),
       errors: rd.errors,
       coverage: { complete: false, missing: [...new Set(missing)].sort(), words: 'LP removal is not read in this version.' },
       retrieved: { started_at: started, finished_at: new Date(now()).toISOString() },
@@ -764,7 +765,9 @@ const sortedPair = (a, b) => (lower(a) < lower(b) ? [lower(a), lower(b)] : [lowe
 // Every allowlisted pool of the token, each checked: the factory's own
 // lookup, the CREATE2 address, token0/token1, and for a constant-product pool
 // the token balance against the reserve (a rebasing or fee-accruing token is
-// not computed). A failed check excludes the pool with its reason.
+// not computed). A failed check excludes the pool with its reason. A
+// concentrated pool's `reserves` are its two token balances; its price is
+// `spot` (slot0 at the pinned block), read for a pool that passed its checks.
 async function discoverPools(session, rd, token, ctx) {
   const out = [];
   for (const f of ctx.factories) {
@@ -802,6 +805,15 @@ async function discoverPools(session, rd, token, ctx) {
           row.reserves = { token: tokenBal ? decUint(tokenBal).toString() : null, quote: qb ? decUint(qb).toString() : null };
           const qc = await rd.code(f.quoter);
           if (!qc || qc.hash !== f.quoter_code_hash) { exclude('The quoter\'s code is not the allowlisted code.'); continue; }
+          // The pool's own price at the pinned block, for CG-14 (contract-gate.js
+          // poolPrice, cr-contract-exit@2): slot0()'s first word is sqrtPriceX96,
+          // a uint160, and the token's side is the order checked just above. One
+          // pinned eth_call per pool that is about to be counted. A read that
+          // does not answer, or a zero (a pool never initialized), leaves the
+          // field off: the pool stays counted for the other checks, and CG-14
+          // holds an order that would need it.
+          const sq = decUint(await rd.view(addr, callData('slot0()')) || '0x');
+          if (sq !== null && sq > 0n && sq < 2n ** 160n) row.spot = { sqrt_price_x96: sq.toString(), token_side: token === t0 ? 'token0' : 'token1' };
         }
         row.counted = true;
         out.push(row);
@@ -1141,14 +1153,52 @@ function changesBetween(a, b) {
 
 // The stored price and Eric's exit sizes the pools are priced at (the
 // screening preferences' ladder and position).
+// From the same market record, the stored dollar value of each quote asset
+// CG-14 converts at its stored value (contract-gate.js QUOTE_PRICE_IDS,
+// decision D1): a positive number, timed by the provider's own update time
+// only (a fetch time is kept as provenance and never stands in for it), with
+// the identity the record itself gives: the row's own `id` and the file's
+// `provider`. The gate refuses a value whose identity is not the mapped
+// CoinGecko asset (D1 correction, 2026-11-10).
 function marketFor(ws, project) {
   const cg = project && project.identity && project.identity.coingecko_id;
-  let row = null;
-  try { row = cg ? (require('./market').readLatest(ws).assets || {})[cg] : null; } catch (_) { row = null; }
+  let latest = {};
+  try { latest = require('./market').readLatest(ws) || {}; } catch (_) { latest = {}; }
+  const assets = latest && typeof latest.assets === 'object' && latest.assets ? latest.assets : {};
+  const row = cg ? assets[cg] || null : null;
   let sizes = [100, 500, 2000];
   try { const p = require('./forensics').prefsOf(ws); sizes = [...new Set([...p.exit_sizes_usd, p.exit_position_usd])].sort((a, b) => a - b); } catch (_) { /* defaults */ }
-  const price = row && typeof row.price_usd === 'number' && row.price_usd > 0 ? row.price_usd : null;
-  return { price_usd: price, as_of: row ? row.source_last_updated_at || row.fetched_at || null : null, sizes };
+  const priceOf = (r) => (r && typeof r.price_usd === 'number' && r.price_usd > 0 ? r.price_usd : null);
+  const quotes = {};
+  for (const id of new Set(Object.values(require('./contract-gate').QUOTE_PRICE_IDS))) {
+    const q = Object.prototype.hasOwnProperty.call(assets, id) ? assets[id] : null;
+    if (!q || typeof q !== 'object' || priceOf(q) === null) continue;
+    const src = q.source_last_updated_at;
+    quotes[id] = { price_usd: priceOf(q), as_of: src === undefined || src === null || src === '' ? null : src, fetched_at: q.fetched_at || null, row_id: typeof q.id === 'string' ? q.id : null, provider: typeof latest.provider === 'string' ? latest.provider : null };
+  }
+  return { price_usd: priceOf(row), as_of: row ? row.source_last_updated_at || row.fetched_at || null : null, sizes, quotes };
+}
+
+// The observation's `quote_price_ref` (D1): for each counted pool whose quote
+// asset is mapped on this chain, its stored value from the market record,
+// with the provider's time (null when the row has none), the fetch time, and
+// the identity as read: the asset the row names, the source the file names,
+// the chain the capture was made on and the contract the pool quotes into.
+// The gate compares those with the mapping, so a row that does not name the
+// mapped asset, or a file that is not CoinGecko's, is recorded and refused.
+// Null when no counted pool needs one or none is stored.
+function quotePriceRefs(chainId, pools, market) {
+  const G = require('./contract-gate');
+  const out = {};
+  for (const p of Array.isArray(pools) ? pools : []) {
+    if (p.counted !== true) continue;
+    const m = G.quoteMapping(chainId, p.quote_asset);
+    if (!m || out[m.address]) continue;
+    const q = market && market.quotes ? market.quotes[m.coingecko_id] : null;
+    if (!q) continue;
+    out[m.address] = { usd: String(q.price_usd), as_of: q.as_of, fetched_at: q.fetched_at, source: q.provider === 'coingecko' ? G.QUOTE_PRICE_SOURCE : `unverified_stored:${q.provider === null ? 'no_provider' : q.provider}`, coingecko_id: q.row_id, chain_id: String(chainId), address: lower(p.quote_asset) };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // Saves one observation and its code, and moves the subject's pointer.
@@ -1176,6 +1226,7 @@ function store(ws, pid, subject, built, { provider, now }) {
     effects: o.effects || undefined,
     pools: o.pools || undefined,
     price_ref: o.price_ref || undefined,
+    quote_price_ref: o.quote_price_ref || undefined,
     extensions: o.extensions || undefined,
     flags: o.flags || undefined,
     transfer_fee: o.transfer_fee || undefined,

@@ -45,7 +45,7 @@ const TD = require('../core/trader-desk');
 const TF = require('./trader-fixture');
 const H = require('./helpers');
 const { exact: { dec, str, mulCeil } } = require('../core/trade-risk');
-const { world, baseState, ROW, T0, T1, PAIR, USDC, BUYER, ADDR, Aw, W, sel, arg, ok, okA, TOKEN, TOKEN_CODE, sources, timelocks, liveBlock, TL } = require('./contract-world');
+const { world, baseState, ROW, T0, T1, PAIR, USDC, BUYER, ADDR, Aw, W, sel, arg, ok, okA, TOKEN, TOKEN_CODE, sources, timelocks, liveBlock, TL, spotAt, slot0At } = require('./contract-world');
 
 const KEY = 'FICTIONALkey_0123456789';
 const E18 = 10n ** 18n;
@@ -67,7 +67,9 @@ test('the whole-lot step is the trader\'s lot at the token\'s decimals, never fi
 const v3 = (quotedIn, outs, extra = {}) => ({ pool: '0xv3', mechanism: 'concentrated', counted: true, quote_decimals: 6, quote_usd: '1', reserves: { token: '1', quote: '1' }, quoted: outs, ...(quotedIn ? { quoted_in: quotedIn } : {}), ...extra });
 // The three times a capture writes (audit round 6): the stored price 8 minutes after the block, the capture finished 13 minutes after.
 const TIMED = { block: { timestamp: '2026-11-09T12:00:00.000Z' }, retrieved: { started_at: '2026-11-09T12:12:00.000Z', finished_at: '2026-11-09T12:13:00.000Z' } };
-const obs = (pools, { price = '7.04', tax = 0 } = {}) => ({ token: { decimals: 18 }, ...TIMED, price_ref: price === null ? undefined : { usd: price, as_of: '2026-11-09T12:08:00.000Z', source: 'coingecko_stored' }, transfer_probe: tax === null ? { status: 'unavailable' } : { status: 'ok', sell_path: { tax_bps: tax } }, pools });
+// A concentrated pool trades at the observation's stored price (its `spot`, cr-contract-exit@2) unless a test gives it one of its own.
+const atStored = (pools, price, decimals = 18) => pools.map((p) => (p.mechanism === 'concentrated' && price !== null && price !== undefined && !('spot' in p) ? { ...p, spot: spotAt(price, { tokenDecimals: decimals }) } : p));
+const obs = (pools, { price = '7.04', tax = 0 } = {}) => ({ token: { decimals: 18 }, ...TIMED, price_ref: price === null ? undefined : { usd: price, as_of: '2026-11-09T12:08:00.000Z', source: 'coingecko_stored' }, transfer_probe: tax === null ? { status: 'unavailable' } : { status: 'ok', sell_path: { tax_bps: tax } }, pools: atStored(pools, price) });
 
 test('a recorded quote is matched to the order unit for unit: one base unit more or less refuses', () => {
   const q = 71022727000000000000n; // 71.022727 UNI, the $500 reference at $7.04, whole lots
@@ -116,7 +118,7 @@ const SENT = [];
 let QUOTER_CAP = null; // above it the fictional quoter answers 0 (no liquidity)
 const V3 = {
   [FACT3]: { code: '0x60806040526003', fns: { [sel('getPool(address,address,uint24)')]: () => okA(POOL3) } },
-  [POOL3]: { code: '0x60806040526004', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1) } },
+  [POOL3]: { code: '0x60806040526004', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1), [sel('slot0()')]: () => slot0At(PRICE) } }, // the pool trades at the stored price
   // The quoter pays $6.99424 a token (0.65% under $7.04) and notes what it was asked.
   [QUOTER]: { code: QCODE, fns: { [sel('quoteExactInputSingle((address,address,uint256,uint24,uint160))')]: (S, f, d) => { SENT.push(arg(d, 2)); if (QUOTER_CAP !== null && arg(d, 2) > QUOTER_CAP) return ok(0n, 0, 0, 0); return ok((arg(d, 2) * 699424n) / (100000n * 10n ** 12n), 0, 0, 0); } } },
 };
