@@ -118,7 +118,7 @@ function tokenFns(extraSigs = {}) {
   };
 }
 
-function world({ S, tokenCode, factoryPair = PAIR, extra = {}, block = BLOCK, buyers = [BUYER] }) {
+function world({ S, tokenCode, factoryPair = PAIR, extra = {}, block = BLOCK, buyers = [BUYER], chainIdHex = '0x2105' }) {
   const accounts = {
     [TOKEN]: { code: tokenCode, fns: tokenFns() },
     [USDC]: { code: codeWith('transfer(address,uint256)'), fns: { [sel('decimals()')]: () => ok(6), [sel('balanceOf(address)')]: (s, f, d) => ok(argA(d, 0) === PAIR ? s.reserve_quote || USDC_RES : 0n) } },
@@ -148,7 +148,7 @@ function world({ S, tokenCode, factoryPair = PAIR, extra = {}, block = BLOCK, bu
     const reply = (body) => ({ status: 200, ok: true, headers: { get: () => null }, text: async () => JSON.stringify({ jsonrpc: '2.0', id, ...body }) });
     const pinned = (ref) => (ref && ref.blockHash === block.hash && ref.requireCanonical === true) || ref === 'latest' || (violations.push(method), false);
     switch (method) {
-      case 'eth_chainId': return reply({ result: '0x2105' });
+      case 'eth_chainId': return reply({ result: chainIdHex });
       case 'eth_getBlockByNumber': return reply({ result: { number: `0x${block.number.toString(16)}`, hash: block.hash, timestamp: `0x${block.timestamp.toString(16)}` } });
       case 'eth_getCode': pinned(params[1]); return reply({ result: (accounts[params[0]] && accounts[params[0]].code) || '0x' });
       case 'eth_getStorageAt': pinned(params[2]); return reply({ result: `0x${W(0)}` });

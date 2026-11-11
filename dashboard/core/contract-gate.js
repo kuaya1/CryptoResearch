@@ -13,6 +13,12 @@
 //   ladder row selling a recorded quote input), S is also never less than the
 //   sold quantity at the price of the pool it is sold into, read at the same
 //   block (poolPrice). @1 valued it at the entry and the stored price only.
+//   Also in @2 (decision D1): Ethereum's USDC is converted to dollars at the
+//   lower of its setting and its fresh stored value at the observation
+//   (quoteValue), in every row; without that evidence no row of its pool is
+//   a reading. Its figure at the setting is a floor on D1's cost: on the
+//   ticket it still blocks over the limit and holds within it (verdict,
+//   unconvertedBound); it never proves a pass.
 // - The legacy projection (cr-forensic-exit-legacy@1) rounds a cost UP to
 //   three decimals, the shape `packet.exits` has always had.
 // - Value capture (cr-value-capture@1): holder yield against dilution and
@@ -157,6 +163,48 @@ function quoteInput(pool, label, quotePriceUsd, decimals) {
 
 const storedPrice = (o) => (o && o.price_ref && typeof o.price_ref.usd === 'string' && o.price_ref.usd ? o.price_ref.usd : null);
 
+// The quote assets whose dollar value CG-14 takes from the desk's stored
+// market record as well as from settings, by chain and contract (Eric,
+// 2026-11-10, decision D1): Ethereum's USDC, CoinGecko `usd-coin`, only.
+// Every other quote asset keeps its setting alone.
+const QUOTE_PRICE_IDS = Object.freeze({ '1:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'usd-coin' });
+const QUOTE_PRICE_SOURCE = 'coingecko_stored';
+const PLAIN_USD = /^(0|[1-9]\d*)(\.\d+)?$/;
+// The mapping for a quote asset on a chain, or null. With no chain on record
+// an address mapped on any chain counts as mapped there, so a record that
+// lacks its chain cannot step around the rule.
+function quoteMapping(chainId, address) {
+  if (typeof address !== 'string') return null;
+  const a = address.toLowerCase();
+  for (const [key, id] of Object.entries(QUOTE_PRICE_IDS)) {
+    const [c, k] = key.split(':');
+    if (k === a && (chainId === undefined || chainId === null || String(chainId) === c)) return { coingecko_id: id, chain_id: c, address: k };
+  }
+  return null;
+}
+// What converts a pool's quote asset to dollars (cr-contract-exit@2, D1): for
+// a mapped asset, its stored value at the observation (`quote_price_ref`,
+// keyed by the asset's address, written by the capture from the market
+// record the token's stored price comes from). The entry must name the same
+// CoinGecko asset, chain and contract, carry a plain positive decimal, and
+// pass the token price's freshness rule against the same block
+// (priceFreshness). `required` false: the setting alone, as before.
+function quoteValue(observation, pool, staleMinutes) {
+  const subj = observation && observation.subject && typeof observation.subject === 'object' ? observation.subject : null;
+  const map = pool ? quoteMapping(subj ? subj.chain_id : null, pool.quote_asset) : null;
+  if (!map) return { required: false };
+  const refs = observation.quote_price_ref;
+  const e = refs && typeof refs === 'object' && !Array.isArray(refs) && own(refs, map.address) ? refs[map.address] : null;
+  const no = (state, words, check) => ({ required: true, usd: null, coingecko_id: map.coingecko_id, state, words, ...(check ? { check } : {}) });
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return no('missing', 'it is not on record');
+  if (e.coingecko_id !== map.coingecko_id || String(e.chain_id) !== map.chain_id || typeof e.address !== 'string' || e.address.toLowerCase() !== map.address || e.source !== QUOTE_PRICE_SOURCE) return no('identity', 'the record does not name this CoinGecko asset, chain, contract and source');
+  const v = typeof e.usd === 'string' && PLAIN_USD.test(e.usd) ? ratio(e.usd) : null;
+  if (!v || v.n <= 0n) return no('malformed', 'it is not a positive dollar figure');
+  const f = priceFreshness({ block: observation.block, retrieved: observation.retrieved, price_ref: e }, staleMinutes);
+  if (!f.ok) return no(f.state, f.words, f);
+  return { required: true, usd: e.usd, as_of: e.as_of, coingecko_id: map.coingecko_id, state: 'ok', check: f };
+}
+
 // Every provable quote of an observation's counted concentrated pools: the
 // quantity it was asked for and the quoter's answer.
 function quotedQuantities(observation) {
@@ -248,7 +296,14 @@ function cpOut({ rIn, rOut, feeBps, qIn }) {
 // whose price is not on record does not prove the sale. A ladder row of such
 // a pool keeps the stored-price basis: it is a reading for the ticket, and
 // the guard still decides the order.
-function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd, sellBase, quotePriceUsd, valuePriceUsd }) {
+// A mapped quote asset (D1, `quote`, from quoteValue) is converted at the
+// lower of its setting and its fresh stored value, in every row, the
+// ticket's and the guard's alike. The cost falls as the quote asset's value
+// rises on every yardstick, so the lower value is never the cheaper reading.
+// Without usable stored evidence the row is not a reading: it says why and
+// carries the figure at the setting as an `estimate`, labeled, never a
+// decision. An unmapped quote asset leaves the row as it was.
+function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd, sellBase, quotePriceUsd, valuePriceUsd, quote }) {
   const fitted = sellBase !== undefined;
   const how = pool.mechanism === 'concentrated' ? quoteRecord(pool) : null;
   const asked = !fitted && how === 'recorded' ? quoteInput(pool, String(sizeUsd), null, tokenDecimals) : null;
@@ -276,8 +331,11 @@ function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd,
     if (v === undefined || v === null) return { size_usd: sizeUsd, status: 'unavailable', words: fitted ? 'The quoter gave no answer for this token quantity.' : 'The quoter gave no answer at this size.' };
     out = BigInt(v);
   } else return { size_usd: sizeUsd, status: 'unavailable', words: `A ${pool.mechanism} pool is not computed by the desk.` };
-  const qUsd = ratio(pool.quote_usd);
-  if (!qUsd) return { size_usd: sizeUsd, status: 'unavailable', words: 'The quote asset has no stated USD value.' };
+  const qSet = ratio(pool.quote_usd);
+  if (!qSet) return { size_usd: sizeUsd, status: 'unavailable', words: 'The quote asset has no stated USD value.' };
+  const qv = quote && quote.required ? quote : null;
+  const qStored = qv && qv.usd ? ratio(qv.usd) : null;
+  const qUsd = qStored && rCmp(qStored, qSet) < 0 ? qStored : qSet;
   const received = rDiv(rMul({ n: out, d: 1n }, qUsd), { n: 10n ** BigInt(pool.quote_decimals), d: 1n });
   const fee = ratio(networkFeeUsd);
   if (!fee) missing.push('network_fee');
@@ -295,7 +353,7 @@ function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd,
     } else if (fitted) return { size_usd: sizeUsd, status: 'unavailable', no_pool_price: true, words: 'The pool\'s own price at the observation\'s block is not on record, so the sale cannot be measured against it.' };
   }
   const cost = rMul(rDiv(rAdd(rSub(S, received), fee || { n: 0n, d: 1n }), S), { n: 100n, d: 1n });
-  return {
+  const row = {
     size_usd: sizeUsd,
     value_usd: fixed(S, 2, 'ceil', false),
     value_basis: basis,
@@ -310,6 +368,18 @@ function exitAt({ sizeUsd, priceUsd, tokenDecimals, taxBps, pool, networkFeeUsd,
     missing_costs: missing,
     network_fee: fee ? 'ceiling' : 'unknown',
   };
+  if (!qv) return row;
+  if (!qStored) {
+    return {
+      size_usd: sizeUsd,
+      status: 'unavailable',
+      no_quote_price: true,
+      quote_state: qv.state,
+      words: `The quote asset's stored dollar value at the observation cannot convert this sale (${qv.words}), so the sale is not measured in this pool.`,
+      estimate: { decision: false, label: 'Estimate at the configured quote-asset value; not a decision', quote_usd: fixed(qSet, 18, 'floor', false), value_basis: basis, cost_pct: row.cost_pct, cost_pct_3: row.cost_pct_3, cost_complete: row.cost_complete },
+    };
+  }
+  return { ...row, quote_usd: fixed(qUsd, 18, 'floor', false), quote_basis: qUsd === qStored ? 'stored' : 'setting', quote_stored_usd: qv.usd };
 }
 
 // The largest sale (token base units) within the limit in one constant-product
@@ -332,27 +402,62 @@ function legacyExit(row, asOf) {
 }
 
 // Every verified pool of an observation priced at each size; the cheapest
-// complete reading per size, else the cheapest.
-function exitLadder(observation, { sizes, priceUsd, networkFeeUsd, limitPct, sellBase, quotePriceUsd }) {
+// complete reading per size, else the cheapest. The ticket's reference rows
+// and the guard's fitted row are this one calculation: each pool's quote
+// asset is converted once (quoteValue, with the desk's
+// `priceStaleMinutes`) for every row. A size with no reading carries the
+// cheapest labeled `estimate`, if any, beside `best: null`; an estimate is
+// never a `best`.
+function exitLadder(observation, { sizes, priceUsd, networkFeeUsd, limitPct, sellBase, quotePriceUsd, priceStaleMinutes }) {
   const pools = Array.isArray(observation && observation.pools) ? observation.pools : [];
   const tp = observation && observation.transfer_probe;
   const taxBps = tp && tp.status === 'ok' && tp.sell_path ? tp.sell_path.tax_bps : null;
   const dec = observation && observation.token ? observation.token.decimals : null;
   const usable = pools.filter((p) => p.counted === true);
   const valuePriceUsd = storedPrice(observation);
-  const per = usable.map((p) => ({
-    pool: p.pool,
-    mechanism: p.mechanism,
-    rows: sizes.map((s) => exitAt({ sizeUsd: s, priceUsd, tokenDecimals: dec, taxBps, pool: p, networkFeeUsd, sellBase, quotePriceUsd, valuePriceUsd })),
-    depth: p.mechanism === 'constant_product' && taxBps !== null ? depthToLimit({ rIn: p.reserves.token, feeBps: p.fee_bps, taxBps, limitPct }) : null,
-  }));
+  const per = usable.map((p) => {
+    const quote = quoteValue(observation, p, priceStaleMinutes);
+    return {
+      pool: p.pool,
+      mechanism: p.mechanism,
+      ...(quote.required ? { quote } : {}),
+      rows: sizes.map((s) => exitAt({ sizeUsd: s, priceUsd, tokenDecimals: dec, taxBps, pool: p, networkFeeUsd, sellBase, quotePriceUsd, valuePriceUsd, quote })),
+      depth: p.mechanism === 'constant_product' && taxBps !== null ? depthToLimit({ rIn: p.reserves.token, feeBps: p.fee_bps, taxBps, limitPct }) : null,
+    };
+  });
   const best = sizes.map((s) => {
-    const rows = per.map((p) => ({ ...p.rows.find((r) => r.size_usd === s), pool: p.pool })).filter((r) => r.status === 'ok');
+    const all = per.map((p) => ({ ...p.rows.find((r) => r.size_usd === s), pool: p.pool }));
+    const rows = all.filter((r) => r.status === 'ok');
     const complete = rows.filter((r) => r.cost_complete);
-    const pick = (list) => list.slice().sort((a, b) => rCmp(ratio(a.cost_pct), ratio(b.cost_pct)) || (a.pool < b.pool ? -1 : 1))[0] || null;
-    return { size_usd: s, best: pick(complete) || pick(rows) };
+    const b = cheapest(complete) || cheapest(rows);
+    const est = b ? null : cheapest(all.filter((r) => r.estimate).map((r) => ({ ...r.estimate, pool: r.pool, why: r.words })));
+    return { size_usd: s, best: b, ...(est ? { estimate: est } : {}) };
   });
   return { version: EXIT_VERSION, tax_bps: taxBps, pools: per, best, excluded: pools.filter((p) => p.counted !== true).map((p) => ({ pool: p.pool, reason: p.excluded })) };
+}
+// The cheapest row of a list, ties to the lower pool address; null when empty.
+function cheapest(list) {
+  return list.slice().sort((a, b) => rCmp(ratio(a.cost_pct), ratio(b.cost_pct)) || (a.pool < b.pool ? -1 : 1))[0] || null;
+}
+
+// The reading at one size with each mapped quote asset that has no usable
+// stored value taken at its setting (D1 correction, 2026-11-10). Such a pool's
+// row is not a reading, but its estimate is a floor on the cost D1 would
+// read: D1 converts at the lower of the setting and the stored value, and the
+// cost only rises as the quote asset's value falls. Picked as exitLadder
+// picks, over the readings and those estimates together, this is the reading
+// the setting alone gives (Option A's). `estimated` says it rests on an
+// estimate; null when no pool prices the size. The verdict (CG-10) reads it;
+// the guard (fittedExit) never does: an estimate opens nothing.
+function unconvertedBound(exits, size) {
+  const pools = Array.isArray(exits && exits.pools) ? exits.pools : [];
+  const all = [];
+  for (const p of pools) {
+    const r = Array.isArray(p.rows) ? p.rows.find((x) => x.size_usd === size) : null;
+    if (r && r.status === 'ok') all.push({ ...r, pool: p.pool, estimated: false });
+    else if (r && r.estimate) all.push({ ...r.estimate, pool: p.pool, estimated: true, why: p.quote && p.quote.words ? p.quote.words : null });
+  }
+  return cheapest(all.filter((r) => r.cost_complete)) || cheapest(all);
 }
 
 // Price freshness (audit round 6). CG-14 values a sale at the observation's
@@ -421,23 +526,30 @@ function fittedExit(observation, { notionalUsd, priceUsd, networkFeeUsd, limitPc
   const quotePriceUsd = storedPrice(observation);
   const fresh = priceFreshness(observation, priceStaleMinutes);
   if (!fresh.ok && (quotePriceUsd !== null || fresh.state === 'no_limit')) return { ...base, ok: false, cost_pct: null, price_check: fresh, words: `The observation's stored price cannot value this sale: ${fresh.words}, so the exit at the fitted notional $${size} is not proven within ${limitPct}%.` };
-  const ladder = exitLadder(observation, { sizes: [notionalUsd], priceUsd, networkFeeUsd, limitPct, sellBase, quotePriceUsd });
+  const ladder = exitLadder(observation, { sizes: [notionalUsd], priceUsd, networkFeeUsd, limitPct, sellBase, quotePriceUsd, priceStaleMinutes });
   const b = ladder.best[0].best;
-  // Pools that price the sale but carry no price of their own are not
-  // measured. An order that does not pass says so, so the wait is explained.
+  // Pools that price the sale but carry no price of their own, or whose
+  // mapped quote asset has no usable stored value (D1), are not measured. An
+  // order that does not pass says so, so the wait is explained.
   const unpriced = ladder.pools.filter((p) => p.rows[0] && p.rows[0].no_pool_price === true).length;
-  const unmeasured = !unpriced ? '' : unpriced === 1 ? ' One pool\'s own price at the observation\'s block is not on record, so that pool is not measured until the next observation records it.'
-    : ` ${unpriced} pools' own prices at the observation's block are not on record, so those pools are not measured until the next observation records them.`;
-  const seen = unpriced ? { no_pool_price: unpriced } : {};
+  const unconverted = ladder.pools.filter((p) => p.rows[0] && p.rows[0].no_quote_price === true);
+  const unmeasured = (!unpriced ? '' : unpriced === 1 ? ' One pool\'s own price at the observation\'s block is not on record, so that pool is not measured until the next observation records it.'
+    : ` ${unpriced} pools' own prices at the observation's block are not on record, so those pools are not measured until the next observation records them.`)
+    + (!unconverted.length ? '' : unconverted.length === 1 ? ` One pool's quote asset has no usable stored dollar value at the observation (${unconverted[0].quote.words}), so that pool is not measured until an observation records a fresh one.`
+      : ` ${unconverted.length} pools' quote assets have no usable stored dollar value at the observation, so those pools are not measured until an observation records a fresh one.`);
+  const seen = { ...(unpriced ? { no_pool_price: unpriced } : {}), ...(unconverted.length ? { no_quote_price: unconverted.length, quote_states: unconverted.map((p) => ({ pool: p.pool, state: p.quote.state })) } : {}) };
   const why = quotePriceUsd === null && Array.isArray(observation && observation.pools) && observation.pools.some((p) => p.counted === true && VALUED_AT_OBSERVATION.has(p.mechanism)) ? ' (the observation has no stored price, so the sale cannot be valued at it, nor a quote tied to a token quantity)' : '';
   if (!b) return { ...base, ok: false, cost_pct: null, ...seen, words: `No verified pool prices a sale of $${size} on chain${why}, so the exit at the fitted notional is not proven within ${limitPct}%.${unmeasured}` };
   // The basis, said when it is the observation's or the pool's (the stricter ones).
   const at = b.value_basis === 'observation' ? `, measured against the ${quantity} tokens at the observation price $${quotePriceUsd} ($${b.value_usd}),`
     : b.value_basis === 'pool' ? `, measured against the ${quantity} tokens at the pool's own price ($${b.value_usd}),` : '';
-  const got = { ...base, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, value_usd: b.value_usd, value_basis: b.value_basis, price_check: fresh, ...seen };
-  if (!b.cost_complete) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at} is at least ${b.cost_pct_3}% (${b.missing_costs.join(', ').replace(/_/g, ' ')} unknown): not proven within ${limitPct}%.${unmeasured}` };
-  if (rCmp(ratio(b.cost_pct), lim) > 0) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at} is ${b.cost_pct_3}%, over the ${limitPct}% limit.${unmeasured}` };
-  return { ...got, ok: true, words: `The exit cost at the fitted notional $${size}${at} is ${b.cost_pct_3}%, within ${limitPct}%.` };
+  // A mapped quote asset converted at its stored value (the lower one) is said.
+  const conv = b.quote_basis === 'stored' ? `${at ? '' : ','} with the quote asset at its stored $${b.quote_stored_usd},` : '';
+  const at2 = at && conv ? `${at.slice(0, -1)}${conv}` : at || conv;
+  const got = { ...base, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, value_usd: b.value_usd, value_basis: b.value_basis, price_check: fresh, ...(b.quote_basis ? { quote_usd: b.quote_usd, quote_basis: b.quote_basis } : {}), ...seen };
+  if (!b.cost_complete) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at2} is at least ${b.cost_pct_3}% (${b.missing_costs.join(', ').replace(/_/g, ' ')} unknown): not proven within ${limitPct}%.${unmeasured}` };
+  if (rCmp(ratio(b.cost_pct), lim) > 0) return { ...got, ok: false, words: `The exit cost at the fitted notional $${size}${at2} is ${b.cost_pct_3}%, over the ${limitPct}% limit.${unmeasured}` };
+  return { ...got, ok: true, words: `The exit cost at the fitted notional $${size}${at2} is ${b.cost_pct_3}%, within ${limitPct}%.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -568,7 +680,25 @@ function verdict({ subjects = [], vendor = null, exits = null, valueCapture: vc 
   }
   if (exits && Array.isArray(exits.best)) {
     const ref = exits.best.find((b) => b.size_usd === P.exit_size_usd);
-    if (ref && ref.best && ref.best.cost_complete && rCmp(ratio(ref.best.cost_pct), ratio(P.exit_cost_limit_pct)) > 0) add('CG-10', 'block', subjects.find((s) => s.role === 'exit_chain') ? subjects.find((s) => s.role === 'exit_chain').chain_id : null, `The complete on-chain exit cost at $${P.exit_size_usd} is ${ref.best.cost_pct_3}%, over the ${P.exit_cost_limit_pct}% limit.`);
+    const exitChain = subjects.find((s) => s.role === 'exit_chain') ? subjects.find((s) => s.role === 'exit_chain').chain_id : null;
+    const lim = ratio(P.exit_cost_limit_pct);
+    // D1 correction (2026-11-10): the size is judged on its reading with any
+    // quote asset that has no usable stored value taken at its setting
+    // (unconvertedBound), which is the reading the setting alone gives. Such
+    // a figure is a floor on D1's cost, so missing evidence never removes a
+    // block the setting alone imposes; and it is an estimate, so it never
+    // proves a pass: within the limit it holds until an observation records a
+    // fresh value. With every quote asset converted (or none mapped) this is
+    // the size's own `best`, as before. Incomplete, it proves nothing either way.
+    const bound = Array.isArray(exits.pools) ? unconvertedBound(exits, P.exit_size_usd) : ref && ref.best ? { ...ref.best, estimated: false } : null;
+    if (bound && bound.cost_complete) {
+      const over = rCmp(ratio(bound.cost_pct), lim) > 0;
+      const why = bound.why ? ` (${bound.why})` : '';
+      if (over && !bound.estimated) add('CG-10', 'block', exitChain, `The complete on-chain exit cost at $${P.exit_size_usd} is ${bound.cost_pct_3}%, over the ${P.exit_cost_limit_pct}% limit.`);
+      else if (over) add('CG-10', 'block', exitChain, `The complete on-chain exit cost at $${P.exit_size_usd} is at least ${bound.cost_pct_3}% with the quote asset at its configured value, over the ${P.exit_cost_limit_pct}% limit; its stored dollar value at the observation is not usable${why}.`);
+      // A complete reading within the limit proves the size on its own.
+      else if (bound.estimated && !(ref && ref.best && ref.best.cost_complete && rCmp(ratio(ref.best.cost_pct), lim) <= 0)) add('CG-10', 'hold', exitChain, `The on-chain exit cost at $${P.exit_size_usd} is not measured: the quote asset's stored dollar value at the observation is not usable${why}. At its configured value it would be ${bound.cost_pct_3}%, an estimate and not a decision, so the exit is not proven within the ${P.exit_cost_limit_pct}% limit until an observation records a fresh value.`);
+    }
   }
   for (const w of vendor && Array.isArray(vendor.severe) ? vendor.severe : []) add('CG-11', 'block', null, `GoPlus severe flag: ${w}.`);
   if (vc && Array.isArray(vc.classes)) for (const c of vc.classes.filter((x) => ['diluted', 'tax_entangled', 'no_holder_flow'].includes(x))) add('CG-46', 'review', null, `Value capture: ${c.replace(/_/g, ' ')}.`);
@@ -591,5 +721,5 @@ const tierOf = (v) => (v && TIER_RANK[v.tier] !== undefined ? v.tier : 'none');
 
 module.exports = {
   GATE_VERSION, ATTESTATION_VERSION, VALUE_CAPTURE_VERSION, EXIT_VERSION, EXIT_LEGACY_VERSION, JSON_VERSION, PACKET_V2, MODES, PARAMS_DEFAULT, TIER_RANK, CAP_RULE,
-  canonicalJson, hashOf, ratio, fixed, tokensFor, baseUnits, tokensText, lotStep, quoteRecord, quoteInput, quotedQuantities, poolPrice, cpOut, exitAt, depthToLimit, legacyExit, exitLadder, utcMs, priceFreshness, PRICE_GAP_CAP_MINUTES, fittedExit, valueCapture, verdict, tierOf,
+  canonicalJson, hashOf, ratio, fixed, tokensFor, baseUnits, tokensText, lotStep, quoteRecord, quoteInput, quotedQuantities, poolPrice, QUOTE_PRICE_IDS, QUOTE_PRICE_SOURCE, quoteMapping, quoteValue, cpOut, exitAt, depthToLimit, legacyExit, exitLadder, unconvertedBound, utcMs, priceFreshness, PRICE_GAP_CAP_MINUTES, fittedExit, valueCapture, verdict, tierOf,
 };

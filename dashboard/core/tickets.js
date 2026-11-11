@@ -946,7 +946,10 @@ function contractAttestation(ws, project, packet, sizing, now, base) {
   const exitObs = forVerdict.find((v) => v.role === 'exit_chain' && v.observation);
   const feeCeil = exitObs && cfg.network_fee_ceiling_usd && typeof cfg.network_fee_ceiling_usd === 'object' ? cfg.network_fee_ceiling_usd[exitObs.chain_id] : null;
   const price = packet.market && isNum(packet.market.price_usd) ? packet.market.price_usd : null;
-  const ladder = exitObs && price !== null ? G.exitLadder(exitObs.observation, { sizes: sizing.exit_sizes_usd.includes(sizing.exit_size_usd) ? sizing.exit_sizes_usd : [...sizing.exit_sizes_usd, sizing.exit_size_usd].sort((a, b) => a - b), priceUsd: String(price), networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: sizing.max_exit_cost_pct }) : null;
+  // The desk's price freshness limit, as the guard reads it: a mapped quote
+  // asset's stored value is held to it in these rows too (D1).
+  const frl = ws.settings && ws.settings.freshness && typeof ws.settings.freshness === 'object' ? ws.settings.freshness.price_stale_minutes : undefined;
+  const ladder = exitObs && price !== null ? G.exitLadder(exitObs.observation, { sizes: sizing.exit_sizes_usd.includes(sizing.exit_size_usd) ? sizing.exit_sizes_usd : [...sizing.exit_sizes_usd, sizing.exit_size_usd].sort((a, b) => a - b), priceUsd: String(price), networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: sizing.max_exit_cost_pct, priceStaleMinutes: frl }) : null;
   const vc = G.valueCapture(valueInputs(ws, project, packet, exitObs ? exitObs.observation : null, status, pid));
   let vendor = null;
   try {
@@ -961,7 +964,7 @@ function contractAttestation(ws, project, packet, sizing, now, base) {
     subjects: rows,
     not_observed: notObserved,
     identity_key: identityKeyOf(rows),
-    exits: ladder ? { version: ladder.version, tax_bps: ladder.tax_bps, best: ladder.best.map((b) => ({ size_usd: b.size_usd, ...(b.best ? { pool: b.best.pool, cost_pct: b.best.cost_pct, cost_pct_3: b.best.cost_pct_3, cost_complete: b.best.cost_complete, missing_costs: b.best.missing_costs } : { cost_pct: null }) })), excluded: ladder.excluded, projection: G.EXIT_LEGACY_VERSION, legacy: ladder.best.map((b) => G.legacyExit(b.best, exitObs.observation.block.timestamp)), note: 'The desk\'s own on-chain readings; under sizing@4 they are not in `exits`.' } : null,
+    exits: ladder ? { version: ladder.version, tax_bps: ladder.tax_bps, best: ladder.best.map((b) => ({ size_usd: b.size_usd, ...(b.best ? { pool: b.best.pool, cost_pct: b.best.cost_pct, cost_pct_3: b.best.cost_pct_3, cost_complete: b.best.cost_complete, missing_costs: b.best.missing_costs, ...(b.best.quote_basis ? { quote_usd: b.best.quote_usd, quote_basis: b.best.quote_basis } : {}) } : { cost_pct: null, ...(b.estimate ? { estimate: b.estimate } : {}) }) })), excluded: ladder.excluded, projection: G.EXIT_LEGACY_VERSION, legacy: ladder.best.map((b) => G.legacyExit(b.best, exitObs.observation.block.timestamp)), note: 'The desk\'s own on-chain readings; under sizing@4 they are not in `exits`.' } : null,
     verdict: { tier: v.tier, findings: v.findings, findings_sha256: v.findings_sha256 },
     words: v.words,
   };
